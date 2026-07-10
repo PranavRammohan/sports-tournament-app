@@ -1,0 +1,13 @@
+# Node backend
+backend/node_modules/
+backend/.env
+
+# Flutter mobile
+mobile/build/
+mobile/.dart_tool/
+mobile/.idea/
+mobile/*.iml
+
+# General
+.DS_Store
+*.log
