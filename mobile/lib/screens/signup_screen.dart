@@ -66,7 +66,7 @@ class _SignupScreenState extends State<SignupScreen> {
       if (!mounted) return;
       // New users should pick which sports they play next.
       // For now, until that screen exists, send them to Home.
-      Navigator.pushReplacementNamed(context, '/home');
+      Navigator.pushReplacementNamed(context, '/select-sports');
     } catch (err) {
       _showAlert(
         'Network error',
