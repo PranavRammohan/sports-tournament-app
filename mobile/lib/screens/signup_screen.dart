@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-const String apiUrl = 'http://localhost:3000/api/auth';
+const String apiUrl = 'http://192.168.0.105:3000/api/auth';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
