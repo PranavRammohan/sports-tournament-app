@@ -8,7 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 // Replace with your machine's local network IP when testing on a real device/emulator
 // (not 'localhost' — the phone/emulator can't resolve that back to your dev machine)
-const String apiUrl = 'http://localhost:3000/api/auth';
+const String apiUrl = 'http://192.168.0.105:3000/api/auth';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
