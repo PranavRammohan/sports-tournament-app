@@ -1,33 +1,41 @@
-// login_screen.dart
-// Place this in lib/screens/login_screen.dart
+// signup_screen.dart
+// Place this in lib/screens/signup_screen.dart
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-// Replace with your machine's local network IP when testing on a real device/emulator
-// (not 'localhost' — the phone/emulator can't resolve that back to your dev machine)
 const String apiUrl = 'http://localhost:3000/api/auth';
 
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+class SignupScreen extends StatefulWidget {
+  const SignupScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  State<SignupScreen> createState() => _SignupScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _SignupScreenState extends State<SignupScreen> {
   final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _loading = false;
 
-  Future<void> _handleLogin() async {
+  Future<void> _handleSignup() async {
     final username = _usernameController.text.trim();
+    final phoneNumber = _phoneController.text.trim();
     final password = _passwordController.text;
 
-    if (username.isEmpty || password.isEmpty) {
-      _showAlert('Missing fields', 'Please enter both username and password.');
+    if (username.isEmpty || phoneNumber.isEmpty || password.isEmpty) {
+      _showAlert('Missing fields', 'Please fill in all fields.');
+      return;
+    }
+    if (password.length < 6) {
+      _showAlert('Weak password', 'Password must be at least 6 characters.');
+      return;
+    }
+    if (!RegExp(r'^\d{10}$').hasMatch(phoneNumber)) {
+      _showAlert('Invalid number', 'Enter a valid 10-digit mobile number.');
       return;
     }
 
@@ -35,15 +43,19 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final response = await http.post(
-        Uri.parse('$apiUrl/login'),
+        Uri.parse('$apiUrl/signup'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'username': username, 'password': password}),
+        body: jsonEncode({
+          'username': username,
+          'phoneNumber': phoneNumber,
+          'password': password,
+        }),
       );
 
       final data = jsonDecode(response.body);
 
-      if (response.statusCode != 200) {
-        _showAlert('Login failed', data['error'] ?? 'Something went wrong.');
+      if (response.statusCode != 201) {
+        _showAlert('Signup failed', data['error'] ?? 'Something went wrong.');
         return;
       }
 
@@ -52,6 +64,8 @@ class _LoginScreenState extends State<LoginScreen> {
       await prefs.setString('user', jsonEncode(data['user']));
 
       if (!mounted) return;
+      // New users should pick which sports they play next.
+      // For now, until that screen exists, send them to Home.
       Navigator.pushReplacementNamed(context, '/home');
     } catch (err) {
       _showAlert(
@@ -91,7 +105,7 @@ class _LoginScreenState extends State<LoginScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const Text(
-                  'Welcome Back',
+                  'Create Account',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
                 ),
@@ -105,6 +119,17 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 16),
                 TextField(
+                  controller: _phoneController,
+                  keyboardType: TextInputType.phone,
+                  maxLength: 10,
+                  decoration: const InputDecoration(
+                    labelText: 'Mobile Number',
+                    border: OutlineInputBorder(),
+                    counterText: '',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
                   controller: _passwordController,
                   obscureText: true,
                   decoration: const InputDecoration(
@@ -114,7 +139,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 24),
                 ElevatedButton(
-                  onPressed: _loading ? null : _handleLogin,
+                  onPressed: _loading ? null : _handleSignup,
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
@@ -127,12 +152,12 @@ class _LoginScreenState extends State<LoginScreen> {
                             strokeWidth: 2,
                           ),
                         )
-                      : const Text('Log In', style: TextStyle(fontSize: 16)),
+                      : const Text('Sign Up', style: TextStyle(fontSize: 16)),
                 ),
                 const SizedBox(height: 16),
                 TextButton(
-                  onPressed: () => Navigator.pushNamed(context, '/signup'),
-                  child: const Text("Don't have an account? Sign up"),
+                  onPressed: () => Navigator.pushNamed(context, '/login'),
+                  child: const Text('Already have an account? Log in'),
                 ),
               ],
             ),
