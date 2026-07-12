@@ -1,23 +1,18 @@
 // authRoutes.js
-// Handles signup and login. Mount this in your main server file like:
-//   const authRoutes = require('./authRoutes');
-//   app.use('/api/auth', authRoutes);
-
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const pool = require('./db'); // your pg Pool instance, see db.js
+const pool = require('./db');
 
-const JWT_SECRET = process.env.JWT_SECRET; // set this in a .env file, never hardcode
+const JWT_SECRET = process.env.JWT_SECRET;
 const SALT_ROUNDS = 10;
 
 // ---------- SIGNUP ----------
 router.post('/signup', async (req, res) => {
-  const { username, phoneNumber, password } = req.body;
+  const { username, phoneNumber, password, location } = req.body;
 
-  // Basic validation
-  if (!username || !phoneNumber || !password) {
+  if (!username || !phoneNumber || !password || !location) {
     return res.status(400).json({ error: 'All fields are required.' });
   }
   if (password.length < 6) {
@@ -28,7 +23,6 @@ router.post('/signup', async (req, res) => {
   }
 
   try {
-    // Check if username or phone number already exists
     const existing = await pool.query(
       'SELECT id FROM users WHERE username = $1 OR phone_number = $2',
       [username, phoneNumber]
@@ -37,19 +31,16 @@ router.post('/signup', async (req, res) => {
       return res.status(409).json({ error: 'Username or mobile number already in use.' });
     }
 
-    // Hash password before storing — never store plain text passwords
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
 
     const result = await pool.query(
-      `INSERT INTO users (username, phone_number, password_hash)
-       VALUES ($1, $2, $3)
-       RETURNING id, username, phone_number, created_at`,
-      [username, phoneNumber, passwordHash]
+      `INSERT INTO users (username, phone_number, password_hash, location)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, username, phone_number, location, created_at`,
+      [username, phoneNumber, passwordHash, location]
     );
 
     const newUser = result.rows[0];
-
-    // Issue a JWT so the user is logged in immediately after signup
     const token = jwt.sign({ userId: newUser.id }, JWT_SECRET, { expiresIn: '7d' });
 
     res.status(201).json({ user: newUser, token });
@@ -72,7 +63,6 @@ router.post('/login', async (req, res) => {
     const user = result.rows[0];
 
     if (!user) {
-      // Deliberately vague error — don't reveal whether username exists (security best practice)
       return res.status(401).json({ error: 'Invalid username or password.' });
     }
 
@@ -88,6 +78,7 @@ router.post('/login', async (req, res) => {
         id: user.id,
         username: user.username,
         phoneNumber: user.phone_number,
+        location: user.location,
       },
       token,
     });

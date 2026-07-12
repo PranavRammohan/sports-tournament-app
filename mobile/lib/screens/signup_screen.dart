@@ -1,12 +1,67 @@
 // signup_screen.dart
-// Place this in lib/screens/signup_screen.dart
-
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-const String apiUrl = 'http://192.168.0.105:3000/api/auth';
+const String apiUrl = 'http://localhost:3000/api/auth';
+
+// Major Bangalore areas for the dropdown.
+const List<String> bangaloreAreas = [
+  'Koramangala',
+  'Indiranagar',
+  'HSR Layout',
+  'BTM Layout',
+  'Jayanagar',
+  'JP Nagar',
+  'Whitefield',
+  'Marathahalli',
+  'Electronic City',
+  'Bellandur',
+  'Sarjapur Road',
+  'Hebbal',
+  'Yelahanka',
+  'Malleshwaram',
+  'Rajajinagar',
+  'Basavanagudi',
+  'Banashankari',
+  'RT Nagar',
+  'Frazer Town',
+  'Ulsoor',
+  'MG Road',
+  'Domlur',
+  'CV Raman Nagar',
+  'Kalyan Nagar',
+  'Banaswadi',
+  'Vijayanagar',
+  'Rajarajeshwari Nagar',
+  'Kengeri',
+  'Yeshwanthpur',
+  'Nagarbhavi',
+  'Hennur',
+  'Bannerghatta Road',
+  'KR Puram',
+  'Mahadevapura',
+  // South Bangalore
+  'Uttarahalli',
+  'Kanakapura Road',
+  'Konanakunte',
+  'Anjanapura',
+  'Padmanabhanagar',
+  'Girinagar',
+  'Kumaraswamy Layout',
+  'Vasanthapura',
+  'Chikkalasandra',
+  'Hulimavu',
+  'Bommanahalli',
+  'Begur',
+  'Arekere',
+  'Gottigere',
+  'Silk Board',
+  'Madiwala',
+  'Bilekahalli',
+  'Kudlu',
+];
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -19,6 +74,7 @@ class _SignupScreenState extends State<SignupScreen> {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+  String? _selectedArea;
   bool _loading = false;
 
   Future<void> _handleSignup() async {
@@ -28,6 +84,10 @@ class _SignupScreenState extends State<SignupScreen> {
 
     if (username.isEmpty || phoneNumber.isEmpty || password.isEmpty) {
       _showAlert('Missing fields', 'Please fill in all fields.');
+      return;
+    }
+    if (_selectedArea == null) {
+      _showAlert('Missing area', 'Please select your area in Bangalore.');
       return;
     }
     if (password.length < 6) {
@@ -49,6 +109,7 @@ class _SignupScreenState extends State<SignupScreen> {
           'username': username,
           'phoneNumber': phoneNumber,
           'password': password,
+          'location': _selectedArea,
         }),
       );
 
@@ -64,8 +125,6 @@ class _SignupScreenState extends State<SignupScreen> {
       await prefs.setString('user', jsonEncode(data['user']));
 
       if (!mounted) return;
-      // New users should pick which sports they play next.
-      // For now, until that screen exists, send them to Home.
       Navigator.pushReplacementNamed(context, '/select-sports');
     } catch (err) {
       _showAlert(
@@ -99,7 +158,7 @@ class _SignupScreenState extends State<SignupScreen> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24.0),
-          child: Center(
+          child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -136,6 +195,37 @@ class _SignupScreenState extends State<SignupScreen> {
                     labelText: 'Password',
                     border: OutlineInputBorder(),
                   ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  enabled: false,
+                  decoration: InputDecoration(
+                    labelText: 'City',
+                    border: const OutlineInputBorder(),
+                    hintText: 'Bangalore',
+                    filled: true,
+                    fillColor: Colors.grey.shade200,
+                  ),
+                  controller: TextEditingController(text: 'Bangalore'),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedArea,
+                  decoration: const InputDecoration(
+                    labelText: 'Area',
+                    border: OutlineInputBorder(),
+                  ),
+                  isExpanded: true,
+                  hint: const Text('Select your area'),
+                  items: bangaloreAreas
+                      .map(
+                        (area) =>
+                            DropdownMenuItem(value: area, child: Text(area)),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    setState(() => _selectedArea = value);
+                  },
                 ),
                 const SizedBox(height: 24),
                 ElevatedButton(
