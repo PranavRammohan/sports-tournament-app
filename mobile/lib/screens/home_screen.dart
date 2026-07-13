@@ -1,8 +1,27 @@
 // home_screen.dart
 import 'package:flutter/material.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Show a brief welcome message after the screen renders, then it disappears on its own.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Login successful! 🎉'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -12,8 +31,6 @@ class HomeScreen extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Text('Login successful! 🎉', style: TextStyle(fontSize: 20)),
-            const SizedBox(height: 20),
             ElevatedButton(
               onPressed: () => Navigator.pushNamed(context, '/profile'),
               child: const Text('View Profile'),

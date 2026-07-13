@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'create_league_screen.dart';
+import 'league_detail_screen.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
@@ -40,7 +41,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
         setState(() => _leagues = data['leagues']);
       }
     } catch (err) {
-      // silently fail for now, could show a snackbar
+      // silently fail for now
     } finally {
       setState(() => _loading = false);
     }
@@ -110,6 +111,16 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                               onPressed: () => _joinLeague(league['id']),
                               child: const Text('Join'),
                             ),
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => LeagueDetailScreen(
+                                    leagueId: league['id'],
+                                  ),
+                                ),
+                              );
+                            },
                           ),
                         );
                       },

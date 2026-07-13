@@ -1,7 +1,7 @@
 // ratingEngine.js
 const MIN_RATING = 1.0;
 const MAX_RATING = 16.5;
-const K_FACTOR = 0.5;
+const K_FACTOR = 0.65; // controls how many points swing per match
 
 function clamp(value) {
   return Math.min(MAX_RATING, Math.max(MIN_RATING, value));
