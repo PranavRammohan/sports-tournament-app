@@ -4,7 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-const String apiUrl = 'http://192.168.0.105:3000/api';
+const String apiUrl = 'http://localhost:3000/api';
+
+const List<String> skillLevels = [
+  'Beginner',
+  'Intermediate',
+  'Advanced',
+  'Expert',
+];
 
 class SelectSportsScreen extends StatefulWidget {
   const SelectSportsScreen({super.key});
@@ -17,14 +24,17 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
   final List<String> _availableSports = ['Badminton', 'Tennis', 'Table Tennis'];
 
   final Set<String> _selectedSports = {};
+  final Map<String, String> _skillLevels = {};
   bool _loading = false;
 
   void _toggleSport(String sport) {
     setState(() {
       if (_selectedSports.contains(sport)) {
         _selectedSports.remove(sport);
+        _skillLevels.remove(sport);
       } else {
         _selectedSports.add(sport);
+        _skillLevels[sport] = 'Intermediate';
       }
     });
   }
@@ -46,9 +56,12 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
         return;
       }
 
-      final sportKeys = _selectedSports
-          .map((s) => s.toLowerCase().replaceAll(' ', '_'))
-          .toList();
+      final sportsPayload = _selectedSports.map((sport) {
+        return {
+          'sport': sport.toLowerCase().replaceAll(' ', '_'),
+          'level': _skillLevels[sport]!.toLowerCase(),
+        };
+      }).toList();
 
       final response = await http.post(
         Uri.parse('$apiUrl/sports/select'),
@@ -56,7 +69,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
-        body: jsonEncode({'sports': sportKeys}),
+        body: jsonEncode({'sports': sportsPayload}),
       );
 
       final data = jsonDecode(response.body);
@@ -114,11 +127,11 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
               ),
               const SizedBox(height: 8),
               const Text(
-                'You can pick more than one. Your rating starts at 1000 in each.',
+                'Pick your honest skill level so you get matched fairly from the start.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 14, color: Colors.grey),
               ),
-              const SizedBox(height: 32),
+              const SizedBox(height: 24),
               Expanded(
                 child: ListView.builder(
                   itemCount: _availableSports.length,
@@ -137,14 +150,41 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
                           width: isSelected ? 2 : 1,
                         ),
                       ),
-                      child: CheckboxListTile(
-                        title: Text(
-                          sport,
-                          style: const TextStyle(fontSize: 16),
-                        ),
-                        value: isSelected,
-                        onChanged: (_) => _toggleSport(sport),
-                        controlAffinity: ListTileControlAffinity.leading,
+                      child: Column(
+                        children: [
+                          CheckboxListTile(
+                            title: Text(
+                              sport,
+                              style: const TextStyle(fontSize: 16),
+                            ),
+                            value: isSelected,
+                            onChanged: (_) => _toggleSport(sport),
+                            controlAffinity: ListTileControlAffinity.leading,
+                          ),
+                          if (isSelected)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                              child: DropdownButtonFormField<String>(
+                                initialValue: _skillLevels[sport],
+                                decoration: const InputDecoration(
+                                  labelText: 'Skill level',
+                                  border: OutlineInputBorder(),
+                                  isDense: true,
+                                ),
+                                items: skillLevels
+                                    .map(
+                                      (level) => DropdownMenuItem(
+                                        value: level,
+                                        child: Text(level),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (value) {
+                                  setState(() => _skillLevels[sport] = value!);
+                                },
+                              ),
+                            ),
+                        ],
                       ),
                     );
                   },

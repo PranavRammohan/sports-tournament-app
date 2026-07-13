@@ -18,6 +18,11 @@ class HomeScreen extends StatelessWidget {
               onPressed: () => Navigator.pushNamed(context, '/profile'),
               child: const Text('View Profile'),
             ),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              onPressed: () => Navigator.pushNamed(context, '/leagues'),
+              child: const Text('Browse Leagues'),
+            ),
           ],
         ),
       ),

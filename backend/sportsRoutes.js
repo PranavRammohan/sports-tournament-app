@@ -3,9 +3,17 @@ const express = require('express');
 const router = express.Router();
 const pool = require('./db');
 
-const STARTING_RATING = 1000;
+const STARTING_RATINGS = {
+  beginner: 2.5,
+  intermediate: 5.0,
+  advanced: 8.5,
+  expert: 12.0,
+};
 
-// ---------- SELECT SPORTS ----------
+function getStartingRating(level) {
+  return STARTING_RATINGS[level] ?? STARTING_RATINGS.intermediate;
+}
+
 router.post('/select', async (req, res) => {
   const userId = req.userId;
   const { sports } = req.body;
@@ -14,15 +22,23 @@ router.post('/select', async (req, res) => {
     return res.status(400).json({ error: 'Select at least one sport.' });
   }
 
+  const validLevels = ['beginner', 'intermediate', 'advanced', 'expert'];
+  for (const entry of sports) {
+    if (!entry.sport || !validLevels.includes(entry.level)) {
+      return res.status(400).json({ error: 'Each sport needs a valid skill level.' });
+    }
+  }
+
   try {
-    const insertPromises = sports.map((sport) =>
-      pool.query(
+    const insertPromises = sports.map((entry) => {
+      const startingRating = getStartingRating(entry.level);
+      return pool.query(
         `INSERT INTO user_sports (user_id, sport, rating)
          VALUES ($1, $2, $3)
          ON CONFLICT (user_id, sport) DO NOTHING`,
-        [userId, sport, STARTING_RATING]
-      )
-    );
+        [userId, entry.sport, startingRating]
+      );
+    });
     await Promise.all(insertPromises);
 
     const result = await pool.query(
@@ -37,7 +53,6 @@ router.post('/select', async (req, res) => {
   }
 });
 
-// ---------- GET MY SPORTS ----------
 router.get('/mine', async (req, res) => {
   const userId = req.userId;
 

@@ -4,6 +4,7 @@ import 'screens/signup_screen.dart';
 import 'screens/select_sports_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/browse_leagues_screen.dart';
 
 void main() {
   runApp(
@@ -15,6 +16,7 @@ void main() {
         '/select-sports': (context) => const SelectSportsScreen(),
         '/home': (context) => const HomeScreen(),
         '/profile': (context) => const ProfileScreen(),
+        '/leagues': (context) => const BrowseLeaguesScreen(),
       },
       debugShowCheckedModeBanner: false,
     ),
