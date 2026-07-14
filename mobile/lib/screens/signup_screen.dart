@@ -6,7 +6,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const String apiUrl = 'http://localhost:3000/api/auth';
 
-// Major Bangalore areas for the dropdown.
 const List<String> bangaloreAreas = [
   'Koramangala',
   'Indiranagar',
@@ -42,7 +41,6 @@ const List<String> bangaloreAreas = [
   'Bannerghatta Road',
   'KR Puram',
   'Mahadevapura',
-  // South Bangalore
   'Uttarahalli',
   'Kanakapura Road',
   'Konanakunte',
@@ -75,6 +73,7 @@ class _SignupScreenState extends State<SignupScreen> {
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   String? _selectedArea;
+  String? _selectedGender;
   bool _loading = false;
 
   Future<void> _handleSignup() async {
@@ -88,6 +87,10 @@ class _SignupScreenState extends State<SignupScreen> {
     }
     if (_selectedArea == null) {
       _showAlert('Missing area', 'Please select your area in Bangalore.');
+      return;
+    }
+    if (_selectedGender == null) {
+      _showAlert('Missing gender', 'Please select your gender.');
       return;
     }
     if (password.length < 6) {
@@ -110,6 +113,7 @@ class _SignupScreenState extends State<SignupScreen> {
           'phoneNumber': phoneNumber,
           'password': password,
           'location': _selectedArea,
+          'gender': _selectedGender,
         }),
       );
 
@@ -197,12 +201,40 @@ class _SignupScreenState extends State<SignupScreen> {
                   ),
                 ),
                 const SizedBox(height: 16),
+                // Gender selector
+                const Text(
+                  'Gender',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: RadioListTile<String>(
+                        title: const Text('Male'),
+                        value: 'M',
+                        groupValue: _selectedGender,
+                        contentPadding: EdgeInsets.zero,
+                        onChanged: (v) => setState(() => _selectedGender = v),
+                      ),
+                    ),
+                    Expanded(
+                      child: RadioListTile<String>(
+                        title: const Text('Female'),
+                        value: 'F',
+                        groupValue: _selectedGender,
+                        contentPadding: EdgeInsets.zero,
+                        onChanged: (v) => setState(() => _selectedGender = v),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // City fixed to Bangalore
                 TextField(
                   enabled: false,
                   decoration: InputDecoration(
                     labelText: 'City',
                     border: const OutlineInputBorder(),
-                    hintText: 'Bangalore',
                     filled: true,
                     fillColor: Colors.grey.shade200,
                   ),

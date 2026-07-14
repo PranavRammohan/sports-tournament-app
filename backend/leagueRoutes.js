@@ -3,20 +3,27 @@ const express = require('express');
 const router = express.Router();
 const pool = require('./db');
 
+// ---------- CREATE LEAGUE ----------
 router.post('/create', async (req, res) => {
   const userId = req.userId;
-  const { sport, area, seasonStart, seasonEnd } = req.body;
+  const { sport, area, seasonStart, seasonEnd, format, genderCategory } = req.body;
 
-  if (!sport || !area || !seasonStart || !seasonEnd) {
+  if (!sport || !area || !seasonStart || !seasonEnd || !format || !genderCategory) {
     return res.status(400).json({ error: 'All fields are required.' });
+  }
+  if (!['singles', 'doubles'].includes(format)) {
+    return res.status(400).json({ error: 'Format must be singles or doubles.' });
+  }
+  if (!['mens', 'womens'].includes(genderCategory)) {
+    return res.status(400).json({ error: 'Gender category must be mens or womens.' });
   }
 
   try {
     const result = await pool.query(
-      `INSERT INTO leagues (sport, area, season_start, season_end, created_by)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, sport, area, season_start, season_end`,
-      [sport, area, seasonStart, seasonEnd, userId]
+      `INSERT INTO leagues (sport, area, season_start, season_end, created_by, format, gender_category)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, sport, area, season_start, season_end, format, gender_category`,
+      [sport, area, seasonStart, seasonEnd, userId, format, genderCategory]
     );
 
     const league = result.rows[0];
@@ -33,12 +40,13 @@ router.post('/create', async (req, res) => {
   }
 });
 
+// ---------- BROWSE LEAGUES ----------
 router.get('/', async (req, res) => {
-  const { sport, area } = req.query;
+  const { sport, area, format, genderCategory } = req.query;
 
   try {
     let query = `
-      SELECT l.id, l.sport, l.area, l.season_start, l.season_end,
+      SELECT l.id, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
              COUNT(lm.id) AS member_count
       FROM leagues l
       LEFT JOIN league_members lm ON lm.league_id = l.id
@@ -54,6 +62,14 @@ router.get('/', async (req, res) => {
       params.push(area);
       query += ` AND l.area = $${params.length}`;
     }
+    if (format) {
+      params.push(format);
+      query += ` AND l.format = $${params.length}`;
+    }
+    if (genderCategory) {
+      params.push(genderCategory);
+      query += ` AND l.gender_category = $${params.length}`;
+    }
 
     query += ` GROUP BY l.id ORDER BY l.season_start ASC`;
 
@@ -65,6 +81,7 @@ router.get('/', async (req, res) => {
   }
 });
 
+// ---------- JOIN LEAGUE ----------
 router.post('/:id/join', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.id;
@@ -95,6 +112,7 @@ router.post('/:id/join', async (req, res) => {
   }
 });
 
+// ---------- LEAGUE DETAIL + LEADERBOARD ----------
 router.get('/:id', async (req, res) => {
   const leagueId = req.params.id;
 
@@ -104,17 +122,20 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'League not found.' });
     }
 
+    const leagueData = league.rows[0];
+
+    // Leaderboard uses the rating that matches this league's sport AND format
     const leaderboard = await pool.query(
-      `SELECT u.id, u.username, us.rating, us.matches_played, us.wins, us.losses
+      `SELECT u.id, u.username, u.gender, us.rating, us.matches_played, us.wins, us.losses
        FROM league_members lm
        JOIN users u ON u.id = lm.user_id
-       JOIN user_sports us ON us.user_id = u.id AND us.sport = $1
-       WHERE lm.league_id = $2
+       JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+       WHERE lm.league_id = $3
        ORDER BY us.rating DESC`,
-      [league.rows[0].sport, leagueId]
+      [leagueData.sport, leagueData.format, leagueId]
     );
 
-    res.status(200).json({ league: league.rows[0], leaderboard: leaderboard.rows });
+    res.status(200).json({ league: leagueData, leaderboard: leaderboard.rows });
   } catch (err) {
     console.error('League detail error:', err);
     res.status(500).json({ error: 'Something went wrong fetching league details.' });

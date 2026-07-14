@@ -8,11 +8,10 @@ const pool = require('./db');
 const JWT_SECRET = process.env.JWT_SECRET;
 const SALT_ROUNDS = 10;
 
-// ---------- SIGNUP ----------
 router.post('/signup', async (req, res) => {
-  const { username, phoneNumber, password, location } = req.body;
+  const { username, phoneNumber, password, location, gender } = req.body;
 
-  if (!username || !phoneNumber || !password || !location) {
+  if (!username || !phoneNumber || !password || !location || !gender) {
     return res.status(400).json({ error: 'All fields are required.' });
   }
   if (password.length < 6) {
@@ -20,6 +19,9 @@ router.post('/signup', async (req, res) => {
   }
   if (!/^\d{10}$/.test(phoneNumber)) {
     return res.status(400).json({ error: 'Enter a valid 10-digit mobile number.' });
+  }
+  if (!['M', 'F'].includes(gender)) {
+    return res.status(400).json({ error: 'Gender must be M or F.' });
   }
 
   try {
@@ -34,10 +36,10 @@ router.post('/signup', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
 
     const result = await pool.query(
-      `INSERT INTO users (username, phone_number, password_hash, location)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, username, phone_number, location, created_at`,
-      [username, phoneNumber, passwordHash, location]
+      `INSERT INTO users (username, phone_number, password_hash, location, gender)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, username, phone_number, location, gender, created_at`,
+      [username, phoneNumber, passwordHash, location, gender]
     );
 
     const newUser = result.rows[0];
@@ -50,7 +52,6 @@ router.post('/signup', async (req, res) => {
   }
 });
 
-// ---------- LOGIN ----------
 router.post('/login', async (req, res) => {
   const { username, password } = req.body;
 
@@ -79,6 +80,7 @@ router.post('/login', async (req, res) => {
         username: user.username,
         phoneNumber: user.phone_number,
         location: user.location,
+        gender: user.gender,
       },
       token,
     });

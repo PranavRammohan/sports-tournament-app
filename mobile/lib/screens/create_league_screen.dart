@@ -6,9 +6,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
-const List<String> sportsList = ['Badminton', 'Tennis', 'Table Tennis'];
+const List<String> sportsList = [
+  'Badminton',
+  'Tennis',
+  'Table Tennis',
+  'Pickleball',
+];
 
-// Same Bangalore area list as signup
 const List<String> bangaloreAreas = [
   'Koramangala',
   'Indiranagar',
@@ -74,6 +78,8 @@ class CreateLeagueScreen extends StatefulWidget {
 class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   String? _selectedSport;
   String? _selectedArea;
+  String? _selectedFormat;
+  String? _selectedGenderCategory;
   DateTime? _startDate;
   DateTime? _endDate;
   bool _loading = false;
@@ -99,6 +105,8 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   Future<void> _handleCreate() async {
     if (_selectedSport == null ||
         _selectedArea == null ||
+        _selectedFormat == null ||
+        _selectedGenderCategory == null ||
         _startDate == null ||
         _endDate == null) {
       _showAlert('Missing info', 'Please fill in all fields.');
@@ -126,6 +134,10 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
           'area': _selectedArea,
           'seasonStart': _startDate!.toIso8601String().split('T')[0],
           'seasonEnd': _endDate!.toIso8601String().split('T')[0],
+          'format': _selectedFormat!.toLowerCase(),
+          'genderCategory': _selectedGenderCategory == "Men's"
+              ? 'mens'
+              : 'womens',
         }),
       );
 
@@ -140,7 +152,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
       }
 
       if (!mounted) return;
-      Navigator.pop(context, true); // signal success back to previous screen
+      Navigator.pop(context, true);
     } catch (err) {
       _showAlert('Network error', 'Could not reach the server.');
     } finally {
@@ -171,7 +183,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Create League')),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -186,6 +198,32 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                   .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                   .toList(),
               onChanged: (v) => setState(() => _selectedSport = v),
+            ),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              initialValue: _selectedFormat,
+              decoration: const InputDecoration(
+                labelText: 'Format',
+                border: OutlineInputBorder(),
+              ),
+              items: const [
+                DropdownMenuItem(value: 'Singles', child: Text('Singles')),
+                DropdownMenuItem(value: 'Doubles', child: Text('Doubles')),
+              ],
+              onChanged: (v) => setState(() => _selectedFormat = v),
+            ),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              initialValue: _selectedGenderCategory,
+              decoration: const InputDecoration(
+                labelText: 'Category',
+                border: OutlineInputBorder(),
+              ),
+              items: const [
+                DropdownMenuItem(value: "Men's", child: Text("Men's")),
+                DropdownMenuItem(value: "Women's", child: Text("Women's")),
+              ],
+              onChanged: (v) => setState(() => _selectedGenderCategory = v),
             ),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(

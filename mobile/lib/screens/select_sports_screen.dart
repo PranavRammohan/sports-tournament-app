@@ -6,6 +6,34 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
+// Matches backend STARTING_RATINGS exactly, so the dropdown can show the real number.
+const Map<String, Map<String, num>> startingRatings = {
+  'Badminton': {
+    'Beginner': 1500,
+    'Intermediate': 3000,
+    'Advanced': 5000,
+    'Expert': 7000,
+  },
+  'Tennis': {
+    'Beginner': 2.5,
+    'Intermediate': 5.0,
+    'Advanced': 8.5,
+    'Expert': 12.0,
+  },
+  'Table Tennis': {
+    'Beginner': 800,
+    'Intermediate': 1200,
+    'Advanced': 1600,
+    'Expert': 2000,
+  },
+  'Pickleball': {
+    'Beginner': 2.5,
+    'Intermediate': 3.5,
+    'Advanced': 5.0,
+    'Expert': 6.5,
+  },
+};
+
 const List<String> skillLevels = [
   'Beginner',
   'Intermediate',
@@ -21,7 +49,12 @@ class SelectSportsScreen extends StatefulWidget {
 }
 
 class _SelectSportsScreenState extends State<SelectSportsScreen> {
-  final List<String> _availableSports = ['Badminton', 'Tennis', 'Table Tennis'];
+  final List<String> _availableSports = [
+    'Badminton',
+    'Tennis',
+    'Table Tennis',
+    'Pickleball',
+  ];
 
   final Set<String> _selectedSports = {};
   final Map<String, String> _skillLevels = {};
@@ -37,6 +70,11 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
         _skillLevels[sport] = 'Intermediate';
       }
     });
+  }
+
+  String _levelLabel(String sport, String level) {
+    final rating = startingRatings[sport]?[level];
+    return '$level (starts at $rating)';
   }
 
   Future<void> _handleContinue() async {
@@ -175,7 +213,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
                                     .map(
                                       (level) => DropdownMenuItem(
                                         value: level,
-                                        child: Text(level),
+                                        child: Text(_levelLabel(sport, level)),
                                       ),
                                     )
                                     .toList(),

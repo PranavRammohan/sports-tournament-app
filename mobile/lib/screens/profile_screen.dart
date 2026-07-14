@@ -73,15 +73,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   String _formatSportName(String sport) {
-    // "table_tennis" -> "Table Tennis"
     return sport
         .split('_')
         .map((word) => word[0].toUpperCase() + word.substring(1))
         .join(' ');
   }
 
+  // Groups the flat list of {sport, format, rating, ...} rows into
+  // one entry per sport, each holding its singles and doubles data together.
+  Map<String, Map<String, dynamic>> _groupSportsByName() {
+    final Map<String, Map<String, dynamic>> grouped = {};
+    for (final row in _sports) {
+      final sport = row['sport'];
+      grouped.putIfAbsent(sport, () => {});
+      grouped[sport]![row['format']] = row;
+    }
+    return grouped;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final groupedSports = _groupSportsByName();
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Profile'),
@@ -120,24 +133,46 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 6),
                   Center(
-                    child: Text(
-                      _user?['location'] ?? '',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey.shade600,
-                      ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.location_on,
+                          size: 16,
+                          color: Colors.grey.shade600,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _user?['location'] ?? '',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 4),
                   Center(
-                    child: Text(
-                      _user?['phoneNumber'] ?? '',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey.shade600,
-                      ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.phone,
+                          size: 16,
+                          color: Colors.grey.shade600,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _user?['phoneNumber'] ?? '',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(height: 32),
@@ -146,43 +181,78 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 12),
-                  if (_sports.isEmpty)
+                  if (groupedSports.isEmpty)
                     const Text('No sports selected yet.')
                   else
-                    ..._sports.map(
-                      (s) => Card(
-                        margin: const EdgeInsets.only(bottom: 10),
-                        child: ListTile(
-                          title: Text(
-                            _formatSportName(s['sport']),
-                            style: const TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                          subtitle: Text(
-                            '${s['matches_played']} matches · ${s['wins']}W ${s['losses']}L',
-                          ),
-                          trailing: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
+                    ...groupedSports.entries.map((entry) {
+                      final sport = entry.key;
+                      final formats = entry.value;
+                      final isTableTennis = sport == 'table_tennis';
+                      final singles = formats['singles'];
+                      final doubles = formats['doubles'];
+
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        child: Padding(
+                          padding: const EdgeInsets.all(14),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                '${s['rating']}',
+                                _formatSportName(sport),
                                 style: const TextStyle(
-                                  fontSize: 18,
+                                  fontSize: 17,
                                   fontWeight: FontWeight.bold,
-                                  color: Colors.blue,
                                 ),
                               ),
-                              const Text(
-                                'rating',
-                                style: TextStyle(fontSize: 11),
-                              ),
+                              const SizedBox(height: 10),
+                              if (isTableTennis && singles != null)
+                                _ratingRow('Rating', singles)
+                              else ...[
+                                if (singles != null)
+                                  _ratingRow('Singles', singles),
+                                if (singles != null && doubles != null)
+                                  const SizedBox(height: 8),
+                                if (doubles != null)
+                                  _ratingRow('Doubles', doubles),
+                              ],
                             ],
                           ),
                         ),
-                      ),
-                    ),
+                      );
+                    }),
                 ],
               ),
             ),
+    );
+  }
+
+  Widget _ratingRow(String label, Map<String, dynamic> data) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+            ),
+            Text(
+              '${data['matches_played']} matches · ${data['wins']}W ${data['losses']}L',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            ),
+          ],
+        ),
+        Text(
+          '${data['rating']}',
+          style: const TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: Colors.blue,
+          ),
+        ),
+      ],
     );
   }
 }
