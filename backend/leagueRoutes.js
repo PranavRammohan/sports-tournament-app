@@ -81,6 +81,29 @@ router.get('/', async (req, res) => {
   }
 });
 
+// ---------- MY LEAGUES ----------
+router.get('/mine', async (req, res) => {
+  const userId = req.userId;
+
+  try {
+    const result = await pool.query(
+      `SELECT l.id, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
+              COUNT(lm2.id) AS member_count
+       FROM league_members lm
+       JOIN leagues l ON l.id = lm.league_id
+       LEFT JOIN league_members lm2 ON lm2.league_id = l.id
+       WHERE lm.user_id = $1
+       GROUP BY l.id
+       ORDER BY l.season_start ASC`,
+      [userId]
+    );
+    res.status(200).json({ leagues: result.rows });
+  } catch (err) {
+    console.error('My leagues error:', err);
+    res.status(500).json({ error: 'Something went wrong fetching your leagues.' });
+  }
+});
+
 // ---------- JOIN LEAGUE ----------
 router.post('/:id/join', async (req, res) => {
   const userId = req.userId;
@@ -124,7 +147,6 @@ router.get('/:id', async (req, res) => {
 
     const leagueData = league.rows[0];
 
-    // Leaderboard uses the rating that matches this league's sport AND format
     const leaderboard = await pool.query(
       `SELECT u.id, u.username, u.gender, us.rating, us.matches_played, us.wins, us.losses
        FROM league_members lm
@@ -139,6 +161,33 @@ router.get('/:id', async (req, res) => {
   } catch (err) {
     console.error('League detail error:', err);
     res.status(500).json({ error: 'Something went wrong fetching league details.' });
+  }
+});
+
+// ---------- MATCH HISTORY FOR A LEAGUE ----------
+router.get('/:id/matches', async (req, res) => {
+  const leagueId = req.params.id;
+
+  try {
+    const result = await pool.query(
+      `SELECT m.id, m.player1_id, m.player2_id, m.player1_partner_id, m.player2_partner_id,
+              m.player1_units, m.player2_units, m.set_scores, m.winner_id,
+              m.status, m.created_at,
+              p1.username as player1_username, p2.username as player2_username,
+              pp1.username as player1_partner_username, pp2.username as player2_partner_username
+       FROM matches m
+       JOIN users p1 ON p1.id = m.player1_id
+       JOIN users p2 ON p2.id = m.player2_id
+       LEFT JOIN users pp1 ON pp1.id = m.player1_partner_id
+       LEFT JOIN users pp2 ON pp2.id = m.player2_partner_id
+       WHERE m.league_id = $1 AND m.status = 'confirmed'
+       ORDER BY m.created_at DESC`,
+      [leagueId]
+    );
+    res.status(200).json({ matches: result.rows });
+  } catch (err) {
+    console.error('Match history error:', err);
+    res.status(500).json({ error: 'Something went wrong fetching match history.' });
   }
 });
 

@@ -19,6 +19,7 @@ class LeagueDetailScreen extends StatefulWidget {
 class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   Map<String, dynamic>? _league;
   List<dynamic> _leaderboard = [];
+  List<dynamic> _matchHistory = [];
   bool _loading = true;
   String? _error;
 
@@ -54,6 +55,15 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         _league = data['league'];
         _leaderboard = data['leaderboard'];
       });
+
+      final historyResponse = await http.get(
+        Uri.parse('$apiUrl/leagues/${widget.leagueId}/matches'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      final historyData = jsonDecode(historyResponse.body);
+      if (historyResponse.statusCode == 200) {
+        setState(() => _matchHistory = historyData['matches']);
+      }
     } catch (err) {
       setState(() => _error = 'Could not reach the server.');
     } finally {
@@ -65,6 +75,16 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       .split('_')
       .map((w) => w[0].toUpperCase() + w.substring(1))
       .join(' ');
+
+  String _formatSetScores(dynamic rawSetScores) {
+    try {
+      final List sets = jsonDecode(rawSetScores);
+      if (sets.isEmpty) return 'No score breakdown available.';
+      return sets.map((s) => '${s['me']}-${s['opponent']}').join(', ');
+    } catch (err) {
+      return 'Score unavailable.';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -168,6 +188,75 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                               fontWeight: FontWeight.bold,
                               color: Colors.blue,
                             ),
+                          ),
+                        ),
+                      );
+                    }),
+                  const SizedBox(height: 24),
+                  const Text(
+                    'Match History',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  if (_matchHistory.isEmpty)
+                    const Text('No matches played yet.')
+                  else
+                    ..._matchHistory.map((m) {
+                      final isDoubles = m['player1_partner_username'] != null;
+                      final team1Name = isDoubles
+                          ? '${m['player1_username']} & ${m['player1_partner_username']}'
+                          : m['player1_username'];
+                      final team2Name = isDoubles
+                          ? '${m['player2_username']} & ${m['player2_partner_username']}'
+                          : m['player2_username'];
+
+                      final winnerId = m['winner_id'];
+                      final team1Won = winnerId == m['player1_id'];
+                      final team2Won = winnerId == m['player2_id'];
+
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              RichText(
+                                text: TextSpan(
+                                  style: DefaultTextStyle.of(context).style,
+                                  children: [
+                                    TextSpan(
+                                      text: team1Name,
+                                      style: TextStyle(
+                                        fontWeight: team1Won
+                                            ? FontWeight.bold
+                                            : FontWeight.normal,
+                                        color: team1Won
+                                            ? Colors.green.shade700
+                                            : null,
+                                      ),
+                                    ),
+                                    const TextSpan(text: '  vs  '),
+                                    TextSpan(
+                                      text: team2Name,
+                                      style: TextStyle(
+                                        fontWeight: team2Won
+                                            ? FontWeight.bold
+                                            : FontWeight.normal,
+                                        color: team2Won
+                                            ? Colors.green.shade700
+                                            : null,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _formatSetScores(m['set_scores']),
+                                style: TextStyle(color: Colors.grey.shade700),
+                              ),
+                            ],
                           ),
                         ),
                       );

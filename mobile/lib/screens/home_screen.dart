@@ -36,6 +36,11 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 12),
             ElevatedButton(
+              onPressed: () => Navigator.pushNamed(context, '/my-leagues'),
+              child: const Text('My Leagues'),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton(
               onPressed: () => Navigator.pushNamed(context, '/leagues'),
               child: const Text('Browse Leagues'),
             ),

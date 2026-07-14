@@ -6,6 +6,7 @@ import 'screens/home_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/browse_leagues_screen.dart';
 import 'screens/pending_matches_screen.dart';
+import 'screens/my_leagues_screen.dart';
 
 void main() {
   runApp(
@@ -19,6 +20,7 @@ void main() {
         '/profile': (context) => const ProfileScreen(),
         '/leagues': (context) => const BrowseLeaguesScreen(),
         '/pending-matches': (context) => const PendingMatchesScreen(),
+        '/my-leagues': (context) => const MyLeaguesScreen(),
       },
       debugShowCheckedModeBanner: false,
     ),
