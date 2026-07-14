@@ -3,10 +3,10 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../main.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
-// Matches backend STARTING_RATINGS exactly, so the dropdown can show the real number.
 const Map<String, Map<String, num>> startingRatings = {
   'Badminton': {
     'Beginner': 1500,
@@ -40,6 +40,15 @@ const List<String> skillLevels = [
   'Advanced',
   'Expert',
 ];
+
+// Emoji reads more accurately than Flutter's built-in icon set for these sports.
+const Map<String, String> sportEmojis = {
+  'Badminton': '🏸',
+  'Tennis': '🎾',
+  'Table Tennis': '🏓',
+  'Pickleball':
+      '🥒', // closest widely-supported paddle-sport glyph; swap later if a better one appears
+};
 
 class SelectSportsScreen extends StatefulWidget {
   const SelectSportsScreen({super.key});
@@ -136,6 +145,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(title),
         content: Text(message),
         actions: [
@@ -151,102 +161,132 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(title: const Text('Choose Your Sports')),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const SizedBox(height: 16),
-              const Text(
-                'Which sports do you play?',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              const Text(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+              child: Text(
                 'Pick your honest skill level so you get matched fairly from the start.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 14, color: Colors.grey),
+                style: Theme.of(context).textTheme.bodyMedium,
               ),
-              const SizedBox(height: 24),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: _availableSports.length,
-                  itemBuilder: (context, index) {
-                    final sport = _availableSports[index];
-                    final isSelected = _selectedSports.contains(sport);
-                    return Card(
-                      margin: const EdgeInsets.symmetric(vertical: 6),
-                      color: isSelected ? Colors.blue.shade50 : null,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        side: BorderSide(
-                          color: isSelected
-                              ? Colors.blue
-                              : Colors.grey.shade300,
-                          width: isSelected ? 2 : 1,
-                        ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 8,
+                ),
+                itemCount: _availableSports.length,
+                itemBuilder: (context, index) {
+                  final sport = _availableSports[index];
+                  final isSelected = _selectedSports.contains(sport);
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: isSelected
+                            ? AppColors.primary
+                            : Colors.grey.shade200,
+                        width: isSelected ? 2 : 1,
                       ),
-                      child: Column(
-                        children: [
-                          CheckboxListTile(
-                            title: Text(
-                              sport,
-                              style: const TextStyle(fontSize: 16),
-                            ),
-                            value: isSelected,
-                            onChanged: (_) => _toggleSport(sport),
-                            controlAffinity: ListTileControlAffinity.leading,
-                          ),
-                          if (isSelected)
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                              child: DropdownButtonFormField<String>(
-                                initialValue: _skillLevels[sport],
-                                decoration: const InputDecoration(
-                                  labelText: 'Skill level',
-                                  border: OutlineInputBorder(),
-                                  isDense: true,
+                    ),
+                    child: Column(
+                      children: [
+                        InkWell(
+                          borderRadius: BorderRadius.circular(14),
+                          onTap: () => _toggleSport(sport),
+                          child: Padding(
+                            padding: const EdgeInsets.all(14),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 44,
+                                  height: 44,
+                                  decoration: BoxDecoration(
+                                    color: isSelected
+                                        ? AppColors.primary.withValues(
+                                            alpha: 0.12,
+                                          )
+                                        : Colors.grey.shade100,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      sportEmojis[sport] ?? '🏅',
+                                      style: const TextStyle(fontSize: 22),
+                                    ),
+                                  ),
                                 ),
-                                items: skillLevels
-                                    .map(
-                                      (level) => DropdownMenuItem(
-                                        value: level,
-                                        child: Text(_levelLabel(sport, level)),
-                                      ),
-                                    )
-                                    .toList(),
-                                onChanged: (value) {
-                                  setState(() => _skillLevels[sport] = value!);
-                                },
-                              ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Text(
+                                    sport,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleMedium,
+                                  ),
+                                ),
+                                Icon(
+                                  isSelected
+                                      ? Icons.check_circle
+                                      : Icons.circle_outlined,
+                                  color: isSelected
+                                      ? AppColors.primary
+                                      : Colors.grey.shade400,
+                                ),
+                              ],
                             ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
+                          ),
+                        ),
+                        if (isSelected)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                            child: DropdownButtonFormField<String>(
+                              initialValue: _skillLevels[sport],
+                              decoration: const InputDecoration(
+                                labelText: 'Skill level',
+                                isDense: true,
+                              ),
+                              items: skillLevels
+                                  .map(
+                                    (level) => DropdownMenuItem(
+                                      value: level,
+                                      child: Text(_levelLabel(sport, level)),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) {
+                                setState(() => _skillLevels[sport] = value!);
+                              },
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                },
               ),
-              const SizedBox(height: 16),
-              ElevatedButton(
+            ),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: ElevatedButton(
                 onPressed: _loading ? null : _handleContinue,
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
                 child: _loading
                     ? const SizedBox(
-                        height: 20,
-                        width: 20,
+                        height: 22,
+                        width: 22,
                         child: CircularProgressIndicator(
                           color: Colors.white,
-                          strokeWidth: 2,
+                          strokeWidth: 2.5,
                         ),
                       )
-                    : const Text('Continue', style: TextStyle(fontSize: 16)),
+                    : const Text('Continue'),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

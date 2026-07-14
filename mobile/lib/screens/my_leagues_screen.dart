@@ -3,9 +3,17 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../main.dart';
 import 'league_detail_screen.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
+
+const Map<String, String> sportEmojis = {
+  'badminton': '🏸',
+  'tennis': '🎾',
+  'table_tennis': '🏓',
+  'pickleball': '🥒',
+};
 
 class MyLeaguesScreen extends StatefulWidget {
   const MyLeaguesScreen({super.key});
@@ -40,7 +48,7 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
         setState(() => _leagues = data['leagues']);
       }
     } catch (err) {
-      // fail silently, pull-to-refresh available
+      // fail silently
     } finally {
       setState(() => _loading = false);
     }
@@ -60,23 +68,34 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
           : RefreshIndicator(
               onRefresh: _loadLeagues,
               child: _leagues.isEmpty
-                  ? const Center(
-                      child: Text("You haven't joined any leagues yet."),
+                  ? ListView(
+                      children: [
+                        SizedBox(
+                          height: MediaQuery.of(context).size.height * 0.6,
+                          child: Center(
+                            child: Text(
+                              "You haven't joined any leagues yet.",
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                          ),
+                        ),
+                      ],
                     )
                   : ListView.builder(
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.all(20),
                       itemCount: _leagues.length,
                       itemBuilder: (context, index) {
                         final league = _leagues[index];
-                        return Card(
+                        return Container(
                           margin: const EdgeInsets.only(bottom: 12),
-                          child: ListTile(
-                            title: Text(
-                              '${_formatSport(league['sport'])} · ${league['area']}',
-                            ),
-                            subtitle: Text(
-                              '${league['season_start']} to ${league['season_end']} · ${league['member_count']} players',
-                            ),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: Colors.grey.shade200),
+                          ),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(14),
                             onTap: () {
                               Navigator.push(
                                 context,
@@ -87,6 +106,55 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
                                 ),
                               );
                             },
+                            child: Padding(
+                              padding: const EdgeInsets.all(14),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 44,
+                                    height: 44,
+                                    decoration: BoxDecoration(
+                                      color: AppColors.accent.withValues(
+                                        alpha: 0.12,
+                                      ),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        sportEmojis[league['sport']] ?? '🏅',
+                                        style: const TextStyle(fontSize: 20),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 14),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          '${_formatSport(league['sport'])} · ${league['area']}',
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.titleMedium,
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          '${league['season_start']} – ${league['season_end']} · ${league['member_count']} players',
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.bodyMedium,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Icon(
+                                    Icons.chevron_right,
+                                    color: Colors.grey.shade400,
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         );
                       },

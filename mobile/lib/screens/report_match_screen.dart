@@ -8,7 +8,7 @@ const String apiUrl = 'http://localhost:3000/api';
 
 class ReportMatchScreen extends StatefulWidget {
   final int leagueId;
-  final String format; // 'singles' or 'doubles'
+  final String format;
   final String sport;
   final List<dynamic> members;
 
@@ -143,6 +143,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(title),
         content: Text(message),
         actions: [
@@ -162,19 +163,18 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Report Match')),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24.0),
+        padding: const EdgeInsets.all(20.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (isDoubles) ...[
-              const Text(
+              Text(
                 'Your Partner',
-                style: TextStyle(fontWeight: FontWeight.w600),
+                style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 8),
               DropdownButtonFormField<int>(
                 initialValue: _partnerId,
-                decoration: const InputDecoration(border: OutlineInputBorder()),
                 items: widget.members
                     .map<DropdownMenuItem<int>>(
                       (m) => DropdownMenuItem(
@@ -187,14 +187,10 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
               ),
               const SizedBox(height: 20),
             ],
-            const Text(
-              'Opponent',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
+            Text('Opponent', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             DropdownButtonFormField<int>(
               initialValue: _opponentId,
-              decoration: const InputDecoration(border: OutlineInputBorder()),
               items: widget.members
                   .map<DropdownMenuItem<int>>(
                     (m) => DropdownMenuItem(
@@ -207,14 +203,13 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
             ),
             if (isDoubles) ...[
               const SizedBox(height: 20),
-              const Text(
+              Text(
                 "Opponent's Partner",
-                style: TextStyle(fontWeight: FontWeight.w600),
+                style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 8),
               DropdownButtonFormField<int>(
                 initialValue: _opponentPartnerId,
-                decoration: const InputDecoration(border: OutlineInputBorder()),
                 items: widget.members
                     .map<DropdownMenuItem<int>>(
                       (m) => DropdownMenuItem(
@@ -229,7 +224,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
             const SizedBox(height: 24),
             Text(
               '$_unitLabel Scores',
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+              style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
             ..._sets.asMap().entries.map((entry) {
@@ -245,7 +240,6 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
                           labelText: '$_unitLabel ${index + 1} — You',
-                          border: const OutlineInputBorder(),
                           isDense: true,
                         ),
                       ),
@@ -258,9 +252,8 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                       child: TextField(
                         controller: set.opponentScore,
                         keyboardType: TextInputType.number,
-                        decoration: InputDecoration(
+                        decoration: const InputDecoration(
                           labelText: 'Opponent',
-                          border: const OutlineInputBorder(),
                           isDense: true,
                         ),
                       ),
@@ -287,9 +280,12 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
               onPressed: _loading ? null : _handleSubmit,
               child: _loading
                   ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      height: 22,
+                      width: 22,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2.5,
+                      ),
                     )
                   : const Text('Submit Result'),
             ),

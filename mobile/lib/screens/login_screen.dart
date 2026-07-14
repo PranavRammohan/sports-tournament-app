@@ -1,14 +1,11 @@
 // login_screen.dart
-// Place this in lib/screens/login_screen.dart
-
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../main.dart';
 
-// Replace with your machine's local network IP when testing on a real device/emulator
-// (not 'localhost' — the phone/emulator can't resolve that back to your dev machine)
-const String apiUrl = 'http://192.168.0.105:3000/api/auth';
+const String apiUrl = 'http://localhost:3000/api/auth';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -21,6 +18,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _loading = false;
+  bool _obscurePassword = true;
 
   Future<void> _handleLogin() async {
     final username = _usernameController.text.trim();
@@ -67,6 +65,7 @@ class _LoginScreenState extends State<LoginScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(title),
         content: Text(message),
         actions: [
@@ -83,51 +82,77 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Center(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(28.0),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    color: AppColors.primary,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Icon(
+                    Icons.sports_tennis,
+                    color: Colors.white,
+                    size: 36,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text(
                   'Welcome Back',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+                  style: Theme.of(context).textTheme.headlineMedium,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Log in to keep climbing the ladder.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 32),
                 TextField(
                   controller: _usernameController,
                   decoration: const InputDecoration(
                     labelText: 'Username',
-                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.person_outline),
                   ),
                 ),
                 const SizedBox(height: 16),
                 TextField(
                   controller: _passwordController,
-                  obscureText: true,
-                  decoration: const InputDecoration(
+                  obscureText: _obscurePassword,
+                  decoration: InputDecoration(
                     labelText: 'Password',
-                    border: OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscurePassword
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                      ),
+                      onPressed: () =>
+                          setState(() => _obscurePassword = !_obscurePassword),
+                    ),
                   ),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 28),
                 ElevatedButton(
                   onPressed: _loading ? null : _handleLogin,
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
                   child: _loading
                       ? const SizedBox(
-                          height: 20,
-                          width: 20,
+                          height: 22,
+                          width: 22,
                           child: CircularProgressIndicator(
                             color: Colors.white,
-                            strokeWidth: 2,
+                            strokeWidth: 2.5,
                           ),
                         )
-                      : const Text('Log In', style: TextStyle(fontSize: 16)),
+                      : const Text('Log In'),
                 ),
                 const SizedBox(height: 16),
                 TextButton(

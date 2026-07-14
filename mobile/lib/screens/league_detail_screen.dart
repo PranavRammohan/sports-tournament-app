@@ -3,9 +3,17 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../main.dart';
 import 'report_match_screen.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
+
+const Map<String, String> sportEmojis = {
+  'badminton': '🏸',
+  'tennis': '🎾',
+  'table_tennis': '🏓',
+  'pickleball': '🥒',
+};
 
 class LeagueDetailScreen extends StatefulWidget {
   final int leagueId;
@@ -103,34 +111,52 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           : RefreshIndicator(
               onRefresh: _loadLeague,
               child: ListView(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(20),
                 children: [
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Season: ${_league!['season_start']} to ${_league!['season_end']}',
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Colors.grey,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${_leaderboard.length} players · ${_league!['format']} · ${_league!['gender_category']}',
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Colors.grey,
-                            ),
-                          ),
-                        ],
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [AppColors.primary, AppColors.primaryDark],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
                       ),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      children: [
+                        Text(
+                          sportEmojis[_league!['sport']] ?? '🏅',
+                          style: const TextStyle(fontSize: 36),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${_league!['season_start']} to ${_league!['season_end']}',
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '${_leaderboard.length} players · ${_league!['format']} · ${_league!['gender_category'] == 'mens' ? "Men's" : "Women's"}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 16),
                   ElevatedButton.icon(
                     onPressed: () async {
                       final reported = await Navigator.push(
@@ -148,31 +174,57 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                     },
                     icon: const Icon(Icons.sports_score),
                     label: const Text('Report a Match'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.accent,
+                    ),
                   ),
-                  const SizedBox(height: 20),
-                  const Text(
+                  const SizedBox(height: 24),
+                  Text(
                     'Leaderboard',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 12),
                   if (_leaderboard.isEmpty)
-                    const Text('No members yet.')
+                    Text(
+                      'No members yet.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    )
                   else
                     ..._leaderboard.asMap().entries.map((entry) {
                       final rank = entry.key + 1;
                       final player = entry.value;
-                      return Card(
+                      final rankColor = rank == 1
+                          ? const Color(0xFFFFC107)
+                          : rank == 2
+                          ? const Color(0xFFB0BEC5)
+                          : rank == 3
+                          ? const Color(0xFFCD7F32)
+                          : AppColors.primary.withValues(alpha: 0.15);
+                      final rankTextColor = rank <= 3
+                          ? Colors.white
+                          : AppColors.primary;
+
+                      return Container(
                         margin: const EdgeInsets.only(bottom: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.grey.shade200),
+                        ),
                         child: ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 6,
+                          ),
                           leading: CircleAvatar(
-                            backgroundColor: rank == 1
-                                ? Colors.amber
-                                : rank == 2
-                                ? Colors.grey.shade400
-                                : rank == 3
-                                ? Colors.brown.shade300
-                                : Colors.blue.shade100,
-                            child: Text('$rank'),
+                            backgroundColor: rankColor,
+                            child: Text(
+                              '$rank',
+                              style: TextStyle(
+                                color: rankTextColor,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ),
                           title: Text(
                             player['username'],
@@ -186,20 +238,23 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                             style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
-                              color: Colors.blue,
+                              color: AppColors.primary,
                             ),
                           ),
                         ),
                       );
                     }),
                   const SizedBox(height: 24),
-                  const Text(
+                  Text(
                     'Match History',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 12),
                   if (_matchHistory.isEmpty)
-                    const Text('No matches played yet.')
+                    Text(
+                      'No matches played yet.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    )
                   else
                     ..._matchHistory.map((m) {
                       final isDoubles = m['player1_partner_username'] != null;
@@ -214,50 +269,62 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                       final team1Won = winnerId == m['player1_id'];
                       final team2Won = winnerId == m['player2_id'];
 
-                      return Card(
+                      return Container(
                         margin: const EdgeInsets.only(bottom: 8),
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              RichText(
-                                text: TextSpan(
-                                  style: DefaultTextStyle.of(context).style,
-                                  children: [
-                                    TextSpan(
-                                      text: team1Name,
-                                      style: TextStyle(
-                                        fontWeight: team1Won
-                                            ? FontWeight.bold
-                                            : FontWeight.normal,
-                                        color: team1Won
-                                            ? Colors.green.shade700
-                                            : null,
-                                      ),
-                                    ),
-                                    const TextSpan(text: '  vs  '),
-                                    TextSpan(
-                                      text: team2Name,
-                                      style: TextStyle(
-                                        fontWeight: team2Won
-                                            ? FontWeight.bold
-                                            : FontWeight.normal,
-                                        color: team2Won
-                                            ? Colors.green.shade700
-                                            : null,
-                                      ),
-                                    ),
-                                  ],
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.grey.shade200),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Wrap(
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                Text(
+                                  team1Name,
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: team1Won
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                    color: team1Won
+                                        ? AppColors.success
+                                        : AppColors.textDark,
+                                  ),
                                 ),
+                                Text(
+                                  '  vs  ',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                ),
+                                Text(
+                                  team2Name,
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: team2Won
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                    color: team2Won
+                                        ? AppColors.success
+                                        : AppColors.textDark,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              _formatSetScores(m['set_scores']),
+                              style: TextStyle(
+                                color: Colors.grey.shade600,
+                                fontSize: 13,
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                _formatSetScores(m['set_scores']),
-                                style: TextStyle(color: Colors.grey.shade700),
-                              ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       );
                     }),

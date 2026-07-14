@@ -3,8 +3,16 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../main.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
+
+const Map<String, String> sportEmojis = {
+  'badminton': '🏸',
+  'tennis': '🎾',
+  'table_tennis': '🏓',
+  'pickleball': '🥒',
+};
 
 class PendingMatchesScreen extends StatefulWidget {
   const PendingMatchesScreen({super.key});
@@ -39,7 +47,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
         setState(() => _matches = data['matches']);
       }
     } catch (err) {
-      // fail silently, pull-to-refresh available
+      // fail silently
     } finally {
       setState(() => _loading = false);
     }
@@ -60,19 +68,30 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
       if (!mounted) return;
       if (response.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Match confirmed! Ratings updated.')),
+          const SnackBar(
+            content: Text('Match confirmed! Ratings updated.'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppColors.success,
+          ),
         );
         _loadMatches();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(data['error'] ?? 'Could not confirm.')),
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not confirm.'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppColors.danger,
+          ),
         );
       }
     } catch (err) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Network error.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -106,11 +125,21 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
           : RefreshIndicator(
               onRefresh: _loadMatches,
               child: _matches.isEmpty
-                  ? const Center(
-                      child: Text('Nothing waiting on you right now.'),
+                  ? ListView(
+                      children: [
+                        SizedBox(
+                          height: MediaQuery.of(context).size.height * 0.6,
+                          child: Center(
+                            child: Text(
+                              'Nothing waiting on you right now.',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                          ),
+                        ),
+                      ],
                     )
                   : ListView.builder(
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.all(20),
                       itemCount: _matches.length,
                       itemBuilder: (context, index) {
                         final m = _matches[index];
@@ -126,37 +155,59 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                         final reportedByPlayer1 =
                             m['reported_by'] == m['player1_id'];
 
-                        return Card(
+                        return Container(
                           margin: const EdgeInsets.only(bottom: 12),
-                          child: Padding(
-                            padding: const EdgeInsets.all(14),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _formatSport(m['sport']),
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Text('$team1  vs  $team2'),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _formatSetScores(
-                                    m['set_scores'],
-                                    reportedByPlayer1,
-                                  ),
-                                  style: TextStyle(color: Colors.grey.shade700),
-                                ),
-                                const SizedBox(height: 12),
-                                ElevatedButton(
-                                  onPressed: () => _confirmMatch(m['id']),
-                                  child: const Text('Confirm Result'),
-                                ),
-                              ],
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: AppColors.accent.withValues(alpha: 0.3),
                             ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Text(
+                                    sportEmojis[m['sport']] ?? '🏅',
+                                    style: const TextStyle(fontSize: 20),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    _formatSport(m['sport']),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              Text(
+                                '$team1  vs  $team2',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _formatSetScores(
+                                  m['set_scores'],
+                                  reportedByPlayer1,
+                                ),
+                                style: TextStyle(
+                                  color: Colors.grey.shade600,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              const SizedBox(height: 14),
+                              ElevatedButton(
+                                onPressed: () => _confirmMatch(m['id']),
+                                child: const Text('Confirm Result'),
+                              ),
+                            ],
                           ),
                         );
                       },
