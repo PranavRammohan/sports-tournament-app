@@ -43,8 +43,10 @@ router.post('/create', async (req, res) => {
 });
 
 // ---------- BROWSE LEAGUES ----------
+// Only shows leagues for sports the logged-in user has actually selected.
 router.get('/', async (req, res) => {
-  const { sport, area, format, genderCategory } = req.query;
+  const userId = req.userId;
+  const { area, format, genderCategory } = req.query;
 
   try {
     let query = `
@@ -52,14 +54,13 @@ router.get('/', async (req, res) => {
              COUNT(lm.id) AS member_count
       FROM leagues l
       LEFT JOIN league_members lm ON lm.league_id = l.id
-      WHERE 1=1
+      WHERE EXISTS (
+        SELECT 1 FROM user_sports us
+        WHERE us.user_id = $1 AND us.sport = l.sport
+      )
     `;
-    const params = [];
+    const params = [userId];
 
-    if (sport) {
-      params.push(sport);
-      query += ` AND l.sport = $${params.length}`;
-    }
     if (area) {
       params.push(area);
       query += ` AND l.area = $${params.length}`;
@@ -115,6 +116,16 @@ router.post('/:id/join', async (req, res) => {
     const league = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (league.rows.length === 0) {
       return res.status(404).json({ error: 'League not found.' });
+    }
+
+    // Also enforce this at join time — a user shouldn't be able to join a
+    // league for a sport they never selected, even if they somehow reach it.
+    const hasSport = await pool.query(
+      'SELECT id FROM user_sports WHERE user_id = $1 AND sport = $2 LIMIT 1',
+      [userId, league.rows[0].sport]
+    );
+    if (hasSport.rows.length === 0) {
+      return res.status(403).json({ error: 'You need to add this sport to your profile before joining.' });
     }
 
     const existing = await pool.query(
@@ -345,8 +356,6 @@ router.delete('/:id', async (req, res) => {
       return res.status(403).json({ error: 'Only the league host can delete this league.' });
     }
 
-    // ON DELETE CASCADE on league_members, scheduled_matches, and matches
-    // handles cleaning up everything tied to this league automatically.
     await pool.query('DELETE FROM leagues WHERE id = $1', [leagueId]);
 
     res.status(200).json({ message: 'League deleted.' });
