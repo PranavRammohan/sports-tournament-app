@@ -307,6 +307,7 @@ router.get('/:id/schedule', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT sm.id, sm.tier_number,
+              sm.player1_id, sm.player1_partner_id, sm.player2_id, sm.player2_partner_id,
               p1.username as player1_username, pp1.username as player1_partner_username,
               p2.username as player2_username, pp2.username as player2_partner_username,
               m.id as match_id, m.status as match_status, m.set_scores, m.winner_id,
@@ -325,6 +326,33 @@ router.get('/:id/schedule', async (req, res) => {
   } catch (err) {
     console.error('Get schedule error:', err);
     res.status(500).json({ error: 'Something went wrong fetching the schedule.' });
+  }
+});
+
+// ---------- DELETE LEAGUE (host only) ----------
+router.delete('/:id', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can delete this league.' });
+    }
+
+    // ON DELETE CASCADE on league_members, scheduled_matches, and matches
+    // handles cleaning up everything tied to this league automatically.
+    await pool.query('DELETE FROM leagues WHERE id = $1', [leagueId]);
+
+    res.status(200).json({ message: 'League deleted.' });
+  } catch (err) {
+    console.error('Delete league error:', err);
+    res.status(500).json({ error: 'Something went wrong deleting the league.' });
   }
 });
 

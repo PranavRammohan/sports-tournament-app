@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../main.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
@@ -30,13 +31,107 @@ class _SetScore {
 }
 
 class _ReportMatchScreenState extends State<ReportMatchScreen> {
+  bool _loadingFixtures = true;
+  bool _scheduleExists = false;
+  List<dynamic> _myPendingFixtures = [];
+  int? _currentUserId;
+
+  // Selected fixture (schedule mode) OR manually picked opponent (free mode)
+  Map<String, dynamic>? _selectedFixture;
   int? _opponentId;
   int? _partnerId;
   int? _opponentPartnerId;
+
   final List<_SetScore> _sets = [_SetScore()];
-  bool _loading = false;
+  bool _submitting = false;
 
   String get _unitLabel => widget.sport == 'tennis' ? 'Set' : 'Game';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFixtures();
+  }
+
+  Future<void> _loadFixtures() async {
+    setState(() => _loadingFixtures = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final userJson = prefs.getString('user');
+      if (userJson != null) {
+        _currentUserId = jsonDecode(userJson)['id'];
+      }
+
+      final response = await http.get(
+        Uri.parse('$apiUrl/leagues/${widget.leagueId}/schedule'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200) {
+        final List allFixtures = data['schedule'];
+        setState(() => _scheduleExists = allFixtures.isNotEmpty);
+
+        final myFixtures = allFixtures.where((f) {
+          final involved = [
+            f['player1_id'],
+            f['player1_partner_id'],
+            f['player2_id'],
+            f['player2_partner_id'],
+          ];
+          final notCompleted = f['match_status'] != 'confirmed';
+          return involved.contains(_currentUserId) && notCompleted;
+        }).toList();
+
+        setState(() => _myPendingFixtures = myFixtures);
+      }
+    } catch (err) {
+      // fall back to free mode silently
+    } finally {
+      setState(() => _loadingFixtures = false);
+    }
+  }
+
+  void _selectFixture(Map<String, dynamic> fixture) {
+    final iAmTeam1 =
+        fixture['player1_id'] == _currentUserId ||
+        fixture['player1_partner_id'] == _currentUserId;
+
+    setState(() {
+      _selectedFixture = fixture;
+      if (iAmTeam1) {
+        _opponentId = fixture['player2_id'];
+        _opponentPartnerId = fixture['player2_partner_id'];
+        _partnerId = fixture['player1_partner_id'] == _currentUserId
+            ? fixture['player1_id']
+            : fixture['player1_partner_id'];
+      } else {
+        _opponentId = fixture['player1_id'];
+        _opponentPartnerId = fixture['player1_partner_id'];
+        _partnerId = fixture['player2_partner_id'] == _currentUserId
+            ? fixture['player2_id']
+            : fixture['player2_partner_id'];
+      }
+    });
+  }
+
+  String _fixtureOpponentLabel(Map<String, dynamic> fixture) {
+    final iAmTeam1 =
+        fixture['player1_id'] == _currentUserId ||
+        fixture['player1_partner_id'] == _currentUserId;
+    if (iAmTeam1) {
+      final isDoubles = fixture['player2_partner_username'] != null;
+      return isDoubles
+          ? '${fixture['player2_username']} & ${fixture['player2_partner_username']}'
+          : fixture['player2_username'];
+    } else {
+      final isDoubles = fixture['player1_partner_username'] != null;
+      return isDoubles
+          ? '${fixture['player1_username']} & ${fixture['player1_partner_username']}'
+          : fixture['player1_username'];
+    }
+  }
 
   void _addSet() {
     setState(() => _sets.add(_SetScore()));
@@ -96,7 +191,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
 
     final iWon = setsWonByMe > setsWonByOpponent;
 
-    setState(() => _loading = true);
+    setState(() => _submitting = true);
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -135,7 +230,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
     } catch (err) {
       _showAlert('Network error', 'Could not reach the server.');
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) setState(() => _submitting = false);
     }
   }
 
@@ -158,6 +253,30 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_loadingFixtures) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Report Match')),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    // Schedule exists but this player has no pending fixtures left.
+    if (_scheduleExists && _myPendingFixtures.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Report Match')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              "You don't have any pending scheduled matches left to report.",
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
+        ),
+      );
+    }
+
     final isDoubles = widget.format == 'doubles';
 
     return Scaffold(
@@ -167,49 +286,101 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (isDoubles) ...[
+            if (_scheduleExists) ...[
               Text(
-                'Your Partner',
+                'Select your scheduled match',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<int>(
-                initialValue: _partnerId,
-                items: widget.members
-                    .map<DropdownMenuItem<int>>(
-                      (m) => DropdownMenuItem(
-                        value: m['id'],
-                        child: Text(m['username']),
+              const SizedBox(height: 10),
+              ..._myPendingFixtures.map((fixture) {
+                final selected =
+                    _selectedFixture != null &&
+                    _selectedFixture!['id'] == fixture['id'];
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () => _selectFixture(fixture),
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? AppColors.primary.withValues(alpha: 0.08)
+                            : Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: selected
+                              ? AppColors.primary
+                              : Colors.grey.shade300,
+                          width: selected ? 2 : 1,
+                        ),
                       ),
-                    )
-                    .toList(),
-                onChanged: (v) => setState(() => _partnerId = v),
-              ),
-              const SizedBox(height: 20),
-            ],
-            Text('Opponent', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<int>(
-              initialValue: _opponentId,
-              items: widget.members
-                  .map<DropdownMenuItem<int>>(
-                    (m) => DropdownMenuItem(
-                      value: m['id'],
-                      child: Text(m['username']),
+                      child: Row(
+                        children: [
+                          Icon(
+                            selected
+                                ? Icons.check_circle
+                                : Icons.circle_outlined,
+                            color: selected
+                                ? AppColors.primary
+                                : Colors.grey.shade400,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'vs ${_fixtureOpponentLabel(fixture)}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.background,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'Tier ${fixture['tier_number']}',
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  )
-                  .toList(),
-              onChanged: (v) => setState(() => _opponentId = v),
-            ),
-            if (isDoubles) ...[
-              const SizedBox(height: 20),
-              Text(
-                "Opponent's Partner",
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
+                  ),
+                );
+              }),
+              const SizedBox(height: 24),
+            ] else ...[
+              // No schedule generated for this league — fall back to free opponent selection.
+              if (isDoubles) ...[
+                Text(
+                  'Your Partner',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<int>(
+                  initialValue: _partnerId,
+                  items: widget.members
+                      .map<DropdownMenuItem<int>>(
+                        (m) => DropdownMenuItem(
+                          value: m['id'],
+                          child: Text(m['username']),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) => setState(() => _partnerId = v),
+                ),
+                const SizedBox(height: 20),
+              ],
+              Text('Opponent', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
               DropdownButtonFormField<int>(
-                initialValue: _opponentPartnerId,
+                initialValue: _opponentId,
                 items: widget.members
                     .map<DropdownMenuItem<int>>(
                       (m) => DropdownMenuItem(
@@ -218,10 +389,30 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                       ),
                     )
                     .toList(),
-                onChanged: (v) => setState(() => _opponentPartnerId = v),
+                onChanged: (v) => setState(() => _opponentId = v),
               ),
+              if (isDoubles) ...[
+                const SizedBox(height: 20),
+                Text(
+                  "Opponent's Partner",
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<int>(
+                  initialValue: _opponentPartnerId,
+                  items: widget.members
+                      .map<DropdownMenuItem<int>>(
+                        (m) => DropdownMenuItem(
+                          value: m['id'],
+                          child: Text(m['username']),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) => setState(() => _opponentPartnerId = v),
+                ),
+              ],
+              const SizedBox(height: 24),
             ],
-            const SizedBox(height: 24),
             Text(
               '$_unitLabel Scores',
               style: Theme.of(context).textTheme.titleMedium,
@@ -277,8 +468,8 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
             ),
             const SizedBox(height: 24),
             ElevatedButton(
-              onPressed: _loading ? null : _handleSubmit,
-              child: _loading
+              onPressed: _submitting ? null : _handleSubmit,
+              child: _submitting
                   ? const SizedBox(
                       height: 22,
                       width: 22,

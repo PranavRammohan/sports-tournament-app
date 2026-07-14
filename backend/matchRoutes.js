@@ -101,6 +101,29 @@ router.post('/report', async (req, res) => {
       [opponentId, opponentPartnerId]
     );
 
+    // If this league has a generated schedule at all, only allow reporting
+    // matches that correspond to one of its fixtures.
+    const scheduleExists = await pool.query(
+      'SELECT id FROM scheduled_matches WHERE league_id = $1 LIMIT 1',
+      [leagueId]
+    );
+    if (scheduleExists.rows.length > 0 && scheduledMatchId === null) {
+      return res.status(400).json({
+        error: 'This matchup isn\'t part of the generated schedule. Report matches against your scheduled opponents only.',
+      });
+    }
+
+    // If this fixture already has a confirmed result, don't allow reporting it again.
+    if (scheduledMatchId !== null) {
+      const alreadyConfirmed = await pool.query(
+        `SELECT id FROM matches WHERE scheduled_match_id = $1 AND status = 'confirmed' LIMIT 1`,
+        [scheduledMatchId]
+      );
+      if (alreadyConfirmed.rows.length > 0) {
+        return res.status(409).json({ error: 'This scheduled match has already been completed.' });
+      }
+    }
+
     const result = await pool.query(
       `INSERT INTO matches
         (league_id, player1_id, player1_partner_id, player2_id, player2_partner_id,

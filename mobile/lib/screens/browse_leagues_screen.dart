@@ -139,8 +139,8 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                           ),
                           child: InkWell(
                             borderRadius: BorderRadius.circular(14),
-                            onTap: () {
-                              Navigator.push(
+                            onTap: () async {
+                              final result = await Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (context) => LeagueDetailScreen(
@@ -148,6 +148,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                   ),
                                 ),
                               );
+                              if (result == 'deleted') _loadLeagues();
                             },
                             child: Padding(
                               padding: const EdgeInsets.all(14),

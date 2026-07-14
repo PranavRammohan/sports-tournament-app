@@ -96,8 +96,8 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
                           ),
                           child: InkWell(
                             borderRadius: BorderRadius.circular(14),
-                            onTap: () {
-                              Navigator.push(
+                            onTap: () async {
+                              final result = await Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (context) => LeagueDetailScreen(
@@ -105,6 +105,7 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
                                   ),
                                 ),
                               );
+                              if (result == 'deleted') _loadLeagues();
                             },
                             child: Padding(
                               padding: const EdgeInsets.all(14),

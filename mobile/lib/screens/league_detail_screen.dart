@@ -31,6 +31,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   List<dynamic> _matchHistory = [];
   int? _currentUserId;
   bool _loading = true;
+  bool _deleting = false;
   String? _error;
 
   @override
@@ -86,6 +87,71 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     }
   }
 
+  Future<void> _confirmDelete() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Delete this league?'),
+        content: const Text(
+          'This will permanently delete the league, its schedule, and all match history. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: AppColors.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() => _deleting = true);
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+
+      final response = await http.delete(
+        Uri.parse('$apiUrl/leagues/${widget.leagueId}'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        Navigator.pop(context, 'deleted');
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not delete league.'),
+            backgroundColor: AppColors.danger,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Network error.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
+
   String _formatSport(String sport) => sport
       .split('_')
       .map((w) => w[0].toUpperCase() + w.substring(1))
@@ -103,6 +169,8 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isHost = _league != null && _league!['created_by'] == _currentUserId;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -110,6 +178,23 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               ? '${_formatSport(_league!['sport'])} · ${_league!['area']}'
               : 'League',
         ),
+        actions: [
+          if (isHost)
+            IconButton(
+              icon: _deleting
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : const Icon(Icons.delete_outline),
+              onPressed: _deleting ? null : _confirmDelete,
+              tooltip: 'Delete league',
+            ),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -193,7 +278,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                         MaterialPageRoute(
                           builder: (context) => ScheduleScreen(
                             leagueId: widget.leagueId,
-                            isHost: _league!['created_by'] == _currentUserId,
+                            isHost: isHost,
                           ),
                         ),
                       );
