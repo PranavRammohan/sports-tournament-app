@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'report_match_screen.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
@@ -99,7 +100,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            '${_leaderboard.length} players',
+                            '${_leaderboard.length} players · ${_league!['format']} · ${_league!['gender_category']}',
                             style: const TextStyle(
                               fontSize: 14,
                               color: Colors.grey,
@@ -108,6 +109,25 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                         ],
                       ),
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      final reported = await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => ReportMatchScreen(
+                            leagueId: widget.leagueId,
+                            format: _league!['format'],
+                            sport: _league!['sport'],
+                            members: _leaderboard,
+                          ),
+                        ),
+                      );
+                      if (reported == true) _loadLeague();
+                    },
+                    icon: const Icon(Icons.sports_score),
+                    label: const Text('Report a Match'),
                   ),
                   const SizedBox(height: 20),
                   const Text(

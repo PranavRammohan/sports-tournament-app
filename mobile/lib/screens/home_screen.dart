@@ -12,7 +12,6 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    // Show a brief welcome message after the screen renders, then it disappears on its own.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -39,6 +38,11 @@ class _HomeScreenState extends State<HomeScreen> {
             ElevatedButton(
               onPressed: () => Navigator.pushNamed(context, '/leagues'),
               child: const Text('Browse Leagues'),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              onPressed: () => Navigator.pushNamed(context, '/pending-matches'),
+              child: const Text('Pending Confirmations'),
             ),
           ],
         ),
