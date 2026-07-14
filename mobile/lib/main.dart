@@ -7,6 +7,7 @@ import 'screens/profile_screen.dart';
 import 'screens/browse_leagues_screen.dart';
 import 'screens/pending_matches_screen.dart';
 import 'screens/my_leagues_screen.dart';
+import 'screens/match_history_screen.dart';
 
 // App-wide color palette — reuse these constants across screens
 // wherever you need a color that isn't already covered by the theme.
@@ -35,6 +36,7 @@ void main() {
         '/leagues': (context) => const BrowseLeaguesScreen(),
         '/pending-matches': (context) => const PendingMatchesScreen(),
         '/my-leagues': (context) => const MyLeaguesScreen(),
+        '/match-history': (context) => const MatchHistoryScreen(),
       },
       debugShowCheckedModeBanner: false,
     ),
@@ -51,8 +53,6 @@ ThemeData _buildTheme() {
       secondary: AppColors.accent,
       surface: Colors.white,
     ),
-
-    // App bar
     appBarTheme: const AppBarTheme(
       backgroundColor: AppColors.primary,
       foregroundColor: Colors.white,
@@ -64,8 +64,6 @@ ThemeData _buildTheme() {
         color: Colors.white,
       ),
     ),
-
-    // Buttons
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
         backgroundColor: AppColors.primary,
@@ -82,8 +80,6 @@ ThemeData _buildTheme() {
         textStyle: const TextStyle(fontWeight: FontWeight.w600),
       ),
     ),
-
-    // Inputs
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: Colors.white,
@@ -101,8 +97,6 @@ ThemeData _buildTheme() {
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
     ),
-
-    // Cards
     cardTheme: CardThemeData(
       color: Colors.white,
       elevation: 1,
@@ -110,8 +104,6 @@ ThemeData _buildTheme() {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       margin: EdgeInsets.zero,
     ),
-
-    // Typography
     textTheme: const TextTheme(
       headlineMedium: TextStyle(
         fontSize: 26,
@@ -130,8 +122,6 @@ ThemeData _buildTheme() {
       ),
       bodyMedium: TextStyle(fontSize: 14, color: AppColors.textGrey),
     ),
-
-    // Floating action button
     floatingActionButtonTheme: const FloatingActionButtonThemeData(
       backgroundColor: AppColors.accent,
       foregroundColor: Colors.white,

@@ -101,8 +101,6 @@ router.post('/report', async (req, res) => {
       [opponentId, opponentPartnerId]
     );
 
-    // If this league has a generated schedule at all, only allow reporting
-    // matches that correspond to one of its fixtures.
     const scheduleExists = await pool.query(
       'SELECT id FROM scheduled_matches WHERE league_id = $1 LIMIT 1',
       [leagueId]
@@ -113,7 +111,6 @@ router.post('/report', async (req, res) => {
       });
     }
 
-    // If this fixture already has a confirmed result, don't allow reporting it again.
     if (scheduledMatchId !== null) {
       const alreadyConfirmed = await pool.query(
         `SELECT id FROM matches WHERE scheduled_match_id = $1 AND status = 'confirmed' LIMIT 1`,
@@ -181,6 +178,37 @@ router.get('/pending', async (req, res) => {
   }
 });
 
+// ---------- MY FULL MATCH HISTORY (across all leagues) ----------
+router.get('/history', async (req, res) => {
+  const userId = req.userId;
+
+  try {
+    const result = await pool.query(
+      `SELECT m.id, m.player1_id, m.player2_id, m.player1_partner_id, m.player2_partner_id,
+              m.player1_units, m.player2_units, m.set_scores, m.winner_id, m.created_at,
+              m.player1_rating_change, m.player2_rating_change,
+              m.player1_partner_rating_change, m.player2_partner_rating_change,
+              l.sport, l.format as league_format, l.area,
+              p1.username as player1_username, p2.username as player2_username,
+              pp1.username as player1_partner_username, pp2.username as player2_partner_username
+       FROM matches m
+       JOIN leagues l ON l.id = m.league_id
+       JOIN users p1 ON p1.id = m.player1_id
+       JOIN users p2 ON p2.id = m.player2_id
+       LEFT JOIN users pp1 ON pp1.id = m.player1_partner_id
+       LEFT JOIN users pp2 ON pp2.id = m.player2_partner_id
+       WHERE m.status = 'confirmed'
+         AND (m.player1_id = $1 OR m.player2_id = $1 OR m.player1_partner_id = $1 OR m.player2_partner_id = $1)
+       ORDER BY m.created_at DESC`,
+      [userId]
+    );
+    res.status(200).json({ matches: result.rows });
+  } catch (err) {
+    console.error('Match history error:', err);
+    res.status(500).json({ error: 'Something went wrong fetching match history.' });
+  }
+});
+
 // ---------- CONFIRM A MATCH ----------
 router.post('/:id/confirm', async (req, res) => {
   const userId = req.userId;
@@ -226,18 +254,31 @@ router.post('/:id/confirm', async (req, res) => {
     const change1 = newRating1 - team1Rating;
     const change2 = newRating2 - team2Rating;
 
+    let player1RatingChange = null;
+    let player2RatingChange = null;
+    let player1PartnerRatingChange = null;
+    let player2PartnerRatingChange = null;
+
     const applyChange = async (playerId, individualRating, change, won) => {
-      if (individualRating == null) return;
+      if (individualRating == null) return null;
       const updated = Math.round((individualRating + change) * 10) / 10;
+      const actualChange = Math.round((updated - individualRating) * 100) / 100;
       await updateRating(playerId, sport, format, updated, won);
+      return actualChange;
     };
 
-    await applyChange(match.player1_id, rating1a, change1, team1Won);
-    await applyChange(match.player2_id, rating2a, change2, !team1Won);
-    await applyChange(match.player1_partner_id, rating1b, change1, team1Won);
-    await applyChange(match.player2_partner_id, rating2b, change2, !team1Won);
+    player1RatingChange = await applyChange(match.player1_id, rating1a, change1, team1Won);
+    player2RatingChange = await applyChange(match.player2_id, rating2a, change2, !team1Won);
+    player1PartnerRatingChange = await applyChange(match.player1_partner_id, rating1b, change1, team1Won);
+    player2PartnerRatingChange = await applyChange(match.player2_partner_id, rating2b, change2, !team1Won);
 
-    await pool.query(`UPDATE matches SET status = 'confirmed' WHERE id = $1`, [matchId]);
+    await pool.query(
+      `UPDATE matches SET status = 'confirmed',
+        player1_rating_change = $1, player2_rating_change = $2,
+        player1_partner_rating_change = $3, player2_partner_rating_change = $4
+       WHERE id = $5`,
+      [player1RatingChange, player2RatingChange, player1PartnerRatingChange, player2PartnerRatingChange, matchId]
+    );
 
     res.status(200).json({ message: 'Match confirmed and ratings updated.' });
   } catch (err) {
