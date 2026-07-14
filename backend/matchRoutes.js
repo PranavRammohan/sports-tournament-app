@@ -13,7 +13,6 @@ async function getRating(userId, sport, format) {
   return parseFloat(result.rows[0].rating);
 }
 
-// Keeps table_tennis singles+doubles rating in sync since it's one shared number
 async function updateRating(userId, sport, format, newRating, won) {
   if (sport === 'table_tennis') {
     await pool.query(
@@ -30,6 +29,36 @@ async function updateRating(userId, sport, format, newRating, won) {
       [newRating, won ? 1 : 0, won ? 0 : 1, userId, sport, format]
     );
   }
+}
+
+async function findMatchingFixture(leagueId, team1Ids, team2Ids) {
+  const result = await pool.query(
+    'SELECT id, player1_id, player1_partner_id, player2_id, player2_partner_id FROM scheduled_matches WHERE league_id = $1',
+    [leagueId]
+  );
+
+  const sortedTeam1 = [...team1Ids].filter(Boolean).sort((a, b) => a - b);
+  const sortedTeam2 = [...team2Ids].filter(Boolean).sort((a, b) => a - b);
+
+  for (const fixture of result.rows) {
+    const fixtureTeamA = [fixture.player1_id, fixture.player1_partner_id]
+      .filter(Boolean)
+      .sort((a, b) => a - b);
+    const fixtureTeamB = [fixture.player2_id, fixture.player2_partner_id]
+      .filter(Boolean)
+      .sort((a, b) => a - b);
+
+    const sameSet = (a, b) => a.length === b.length && a.every((val, i) => val === b[i]);
+
+    const straightMatch = sameSet(sortedTeam1, fixtureTeamA) && sameSet(sortedTeam2, fixtureTeamB);
+    const swappedMatch = sameSet(sortedTeam1, fixtureTeamB) && sameSet(sortedTeam2, fixtureTeamA);
+
+    if (straightMatch || swappedMatch) {
+      return fixture.id;
+    }
+  }
+
+  return null;
 }
 
 // ---------- REPORT A MATCH ----------
@@ -66,11 +95,17 @@ router.post('/report', async (req, res) => {
 
     const winnerId = iWon ? userId : opponentId;
 
+    const scheduledMatchId = await findMatchingFixture(
+      leagueId,
+      [userId, partnerId],
+      [opponentId, opponentPartnerId]
+    );
+
     const result = await pool.query(
       `INSERT INTO matches
         (league_id, player1_id, player1_partner_id, player2_id, player2_partner_id,
-         player1_units, player2_units, winner_id, reported_by, status, format, set_scores)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11)
+         player1_units, player2_units, winner_id, reported_by, status, format, set_scores, scheduled_match_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11, $12)
        RETURNING *`,
       [
         leagueId,
@@ -84,6 +119,7 @@ router.post('/report', async (req, res) => {
         userId,
         league.format,
         JSON.stringify(setScores || []),
+        scheduledMatchId,
       ]
     );
 

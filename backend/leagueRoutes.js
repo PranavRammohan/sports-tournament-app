@@ -3,6 +3,8 @@ const express = require('express');
 const router = express.Router();
 const pool = require('./db');
 
+const TIER_SIZE = 4;
+
 // ---------- CREATE LEAGUE ----------
 router.post('/create', async (req, res) => {
   const userId = req.userId;
@@ -22,7 +24,7 @@ router.post('/create', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO leagues (sport, area, season_start, season_end, created_by, format, gender_category)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, sport, area, season_start, season_end, format, gender_category`,
+       RETURNING id, sport, area, season_start, season_end, format, gender_category, created_by`,
       [sport, area, seasonStart, seasonEnd, userId, format, genderCategory]
     );
 
@@ -188,6 +190,141 @@ router.get('/:id/matches', async (req, res) => {
   } catch (err) {
     console.error('Match history error:', err);
     res.status(500).json({ error: 'Something went wrong fetching match history.' });
+  }
+});
+
+// ---------- GENERATE SCHEDULE (host only, once) ----------
+router.post('/:id/generate-schedule', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can generate the schedule.' });
+    }
+
+    const existing = await pool.query(
+      'SELECT id FROM scheduled_matches WHERE league_id = $1 LIMIT 1',
+      [leagueId]
+    );
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'Schedule has already been generated for this league.' });
+    }
+
+    const membersResult = await pool.query(
+      `SELECT u.id, us.rating
+       FROM league_members lm
+       JOIN users u ON u.id = lm.user_id
+       JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+       WHERE lm.league_id = $3
+       ORDER BY us.rating DESC`,
+      [league.sport, league.format, leagueId]
+    );
+    const members = membersResult.rows;
+
+    if (members.length < (league.format === 'doubles' ? 4 : 2)) {
+      return res.status(400).json({
+        error: league.format === 'doubles'
+          ? 'Need at least 4 players to generate a doubles schedule.'
+          : 'Need at least 2 players to generate a schedule.',
+      });
+    }
+
+    const tiers = [];
+    for (let i = 0; i < members.length; i += TIER_SIZE) {
+      tiers.push(members.slice(i, i + TIER_SIZE));
+    }
+
+    const scheduledMatches = [];
+
+    tiers.forEach((tier, tierIndex) => {
+      const tierNumber = tierIndex + 1;
+
+      if (league.format === 'singles') {
+        for (let i = 0; i < tier.length; i++) {
+          for (let j = i + 1; j < tier.length; j++) {
+            scheduledMatches.push({
+              tierNumber,
+              player1Id: tier[i].id,
+              player1PartnerId: null,
+              player2Id: tier[j].id,
+              player2PartnerId: null,
+            });
+          }
+        }
+      } else {
+        if (tier.length < 4) return;
+
+        const teams = [];
+        let lo = 0;
+        let hi = tier.length - 1;
+        while (lo < hi) {
+          teams.push([tier[lo], tier[hi]]);
+          lo++;
+          hi--;
+        }
+
+        for (let i = 0; i < teams.length; i++) {
+          for (let j = i + 1; j < teams.length; j++) {
+            scheduledMatches.push({
+              tierNumber,
+              player1Id: teams[i][0].id,
+              player1PartnerId: teams[i][1].id,
+              player2Id: teams[j][0].id,
+              player2PartnerId: teams[j][1].id,
+            });
+          }
+        }
+      }
+    });
+
+    for (const m of scheduledMatches) {
+      await pool.query(
+        `INSERT INTO scheduled_matches
+          (league_id, tier_number, player1_id, player1_partner_id, player2_id, player2_partner_id)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [leagueId, m.tierNumber, m.player1Id, m.player1PartnerId, m.player2Id, m.player2PartnerId]
+      );
+    }
+
+    res.status(201).json({ message: 'Schedule generated.', matchCount: scheduledMatches.length });
+  } catch (err) {
+    console.error('Generate schedule error:', err);
+    res.status(500).json({ error: 'Something went wrong generating the schedule.' });
+  }
+});
+
+// ---------- GET SCHEDULE (with completion status) ----------
+router.get('/:id/schedule', async (req, res) => {
+  const leagueId = req.params.id;
+
+  try {
+    const result = await pool.query(
+      `SELECT sm.id, sm.tier_number,
+              p1.username as player1_username, pp1.username as player1_partner_username,
+              p2.username as player2_username, pp2.username as player2_partner_username,
+              m.id as match_id, m.status as match_status, m.set_scores, m.winner_id,
+              m.player1_id as reported_player1_id, m.player2_id as reported_player2_id
+       FROM scheduled_matches sm
+       LEFT JOIN matches m ON m.scheduled_match_id = sm.id AND m.status = 'confirmed'
+       JOIN users p1 ON p1.id = sm.player1_id
+       JOIN users p2 ON p2.id = sm.player2_id
+       LEFT JOIN users pp1 ON pp1.id = sm.player1_partner_id
+       LEFT JOIN users pp2 ON pp2.id = sm.player2_partner_id
+       WHERE sm.league_id = $1
+       ORDER BY sm.tier_number ASC, sm.id ASC`,
+      [leagueId]
+    );
+    res.status(200).json({ schedule: result.rows });
+  } catch (err) {
+    console.error('Get schedule error:', err);
+    res.status(500).json({ error: 'Something went wrong fetching the schedule.' });
   }
 });
 

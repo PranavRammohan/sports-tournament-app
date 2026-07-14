@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import 'report_match_screen.dart';
+import 'schedule_screen.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
@@ -28,6 +29,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   Map<String, dynamic>? _league;
   List<dynamic> _leaderboard = [];
   List<dynamic> _matchHistory = [];
+  int? _currentUserId;
   bool _loading = true;
   String? _error;
 
@@ -46,6 +48,11 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
+      final userJson = prefs.getString('user');
+      if (userJson != null) {
+        final userData = jsonDecode(userJson);
+        _currentUserId = userData['id'];
+      }
 
       final response = await http.get(
         Uri.parse('$apiUrl/leagues/${widget.leagueId}'),
@@ -177,6 +184,22 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.accent,
                     ),
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => ScheduleScreen(
+                            leagueId: widget.leagueId,
+                            isHost: _league!['created_by'] == _currentUserId,
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.calendar_today),
+                    label: const Text('View Schedule'),
                   ),
                   const SizedBox(height: 24),
                   Text(
