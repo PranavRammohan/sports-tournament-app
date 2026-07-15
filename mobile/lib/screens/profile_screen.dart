@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import 'match_history_screen.dart';
+import 'add_sport_screen.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
@@ -94,6 +95,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final groupedSports = _groupSportsByName();
+    final existingSportKeys = groupedSports.keys.toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -171,9 +173,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                   const SizedBox(height: 22),
-                  Text(
-                    'Your Sports',
-                    style: Theme.of(context).textTheme.titleLarge,
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Your Sports',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      TextButton.icon(
+                        onPressed: () async {
+                          final added = await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => AddSportScreen(
+                                existingSports: existingSportKeys,
+                              ),
+                            ),
+                          );
+                          if (added == true) _loadProfile();
+                        },
+                        icon: const Icon(Icons.add, size: 18),
+                        label: const Text('Add Sport'),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 10),
                   if (groupedSports.isEmpty)
