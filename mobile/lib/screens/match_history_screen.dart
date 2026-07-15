@@ -7,13 +7,6 @@ import '../main.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
-const Map<String, String> sportEmojis = {
-  'badminton': '🏸',
-  'tennis': '🎾',
-  'table_tennis': '🏓',
-  'pickleball': '🥒',
-};
-
 class MatchHistoryScreen extends StatefulWidget {
   const MatchHistoryScreen({super.key});
 
@@ -52,7 +45,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
         setState(() => _matches = data['matches']);
       }
     } catch (err) {
-      // fail silently, pull-to-refresh available
+      // fail silently
     } finally {
       setState(() => _loading = false);
     }
@@ -63,9 +56,9 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
       .map((w) => w[0].toUpperCase() + w.substring(1))
       .join(' ');
 
-  String _formatSetScores(dynamic rawSetScores) {
+  String _formatSetScores(dynamic raw) {
     try {
-      final List sets = jsonDecode(rawSetScores);
+      final List sets = jsonDecode(raw);
       if (sets.isEmpty) return '';
       return sets.map((s) => '${s['me']}-${s['opponent']}').join(', ');
     } catch (err) {
@@ -73,8 +66,6 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
     }
   }
 
-  // Postgres NUMERIC columns can come back as strings in JSON (e.g. "0.10")
-  // instead of actual numbers — this safely converts either case.
   double? _toDouble(dynamic value) {
     if (value == null) return null;
     if (value is num) return value.toDouble();
@@ -94,7 +85,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                   ? ListView(
                       children: [
                         SizedBox(
-                          height: MediaQuery.of(context).size.height * 0.6,
+                          height: MediaQuery.of(context).size.height * 0.5,
                           child: Center(
                             child: Text(
                               "You haven't played any confirmed matches yet.",
@@ -105,9 +96,10 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                         ),
                       ],
                     )
-                  : ListView.builder(
-                      padding: const EdgeInsets.all(20),
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(16),
                       itemCount: _matches.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 6),
                       itemBuilder: (context, index) {
                         final m = _matches[index];
 
@@ -152,85 +144,60 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                             : AppColors.danger;
 
                         return Container(
-                          margin: const EdgeInsets.only(bottom: 12),
-                          padding: const EdgeInsets.all(14),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 9,
+                          ),
                           decoration: BoxDecoration(
                             color: Colors.white,
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(
-                              color: iWon
-                                  ? AppColors.success.withValues(alpha: 0.3)
-                                  : AppColors.danger.withValues(alpha: 0.3),
-                            ),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.grey.shade200),
                           ),
                           child: Row(
                             children: [
                               Container(
-                                width: 44,
-                                height: 44,
+                                width: 4,
+                                height: 30,
                                 decoration: BoxDecoration(
-                                  color:
-                                      (iWon
-                                              ? AppColors.success
-                                              : AppColors.danger)
-                                          .withValues(alpha: 0.12),
-                                  borderRadius: BorderRadius.circular(10),
+                                  color: iWon
+                                      ? AppColors.success
+                                      : AppColors.danger,
+                                  borderRadius: BorderRadius.circular(2),
                                 ),
-                                child: Center(
-                                  child: Text(
-                                    sportEmojis[m['sport']] ?? '🏅',
-                                    style: const TextStyle(fontSize: 20),
+                              ),
+                              const SizedBox(width: 10),
+                              SizedBox(
+                                width: 34,
+                                child: Text(
+                                  iWon ? 'WIN' : 'LOSS',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: iWon
+                                        ? AppColors.success
+                                        : AppColors.danger,
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 14),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Row(
-                                      children: [
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 2,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: iWon
-                                                ? AppColors.success
-                                                : AppColors.danger,
-                                            borderRadius: BorderRadius.circular(
-                                              6,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            iWon ? 'WIN' : 'LOSS',
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: Text(
-                                            'vs $opponentLabel',
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                      ],
+                                    Text(
+                                      'vs $opponentLabel',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
                                     ),
-                                    const SizedBox(height: 4),
                                     Text(
                                       '${_formatSport(m['sport'])} · ${m['area']} · ${_formatSetScores(m['set_scores'])}',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.grey.shade600,
+                                      style: const TextStyle(
+                                        fontSize: 10,
+                                        color: AppColors.textGrey,
                                       ),
+                                      overflow: TextOverflow.ellipsis,
                                     ),
                                   ],
                                 ),
@@ -239,7 +206,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                                 Text(
                                   changeText,
                                   style: TextStyle(
-                                    fontSize: 16,
+                                    fontSize: 14,
                                     fontWeight: FontWeight.bold,
                                     color: changeColor,
                                   ),

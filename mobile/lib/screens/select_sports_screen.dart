@@ -41,15 +41,6 @@ const List<String> skillLevels = [
   'Expert',
 ];
 
-// Emoji reads more accurately than Flutter's built-in icon set for these sports.
-const Map<String, String> sportEmojis = {
-  'Badminton': '🏸',
-  'Tennis': '🎾',
-  'Table Tennis': '🏓',
-  'Pickleball':
-      '🥒', // closest widely-supported paddle-sport glyph; swap later if a better one appears
-};
-
 class SelectSportsScreen extends StatefulWidget {
   const SelectSportsScreen({super.key});
 
@@ -145,7 +136,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         title: Text(title),
         content: Text(message),
         actions: [
@@ -166,118 +157,106 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
               child: Text(
                 'Pick your honest skill level so you get matched fairly from the start.',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
             ),
             Expanded(
-              child: ListView.builder(
+              child: GridView.builder(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 20,
                   vertical: 8,
+                ),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  childAspectRatio: 1.3,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
                 ),
                 itemCount: _availableSports.length,
                 itemBuilder: (context, index) {
                   final sport = _availableSports[index];
                   final isSelected = _selectedSports.contains(sport);
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: () => _toggleSport(sport),
+                    child: Container(
+                      decoration: BoxDecoration(
                         color: isSelected
-                            ? AppColors.primary
-                            : Colors.grey.shade200,
-                        width: isSelected ? 2 : 1,
-                      ),
-                    ),
-                    child: Column(
-                      children: [
-                        InkWell(
-                          borderRadius: BorderRadius.circular(14),
-                          onTap: () => _toggleSport(sport),
-                          child: Padding(
-                            padding: const EdgeInsets.all(14),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 44,
-                                  height: 44,
-                                  decoration: BoxDecoration(
-                                    color: isSelected
-                                        ? AppColors.primary.withValues(
-                                            alpha: 0.12,
-                                          )
-                                        : Colors.grey.shade100,
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      sportEmojis[sport] ?? '🏅',
-                                      style: const TextStyle(fontSize: 22),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: Text(
-                                    sport,
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.titleMedium,
-                                  ),
-                                ),
-                                Icon(
-                                  isSelected
-                                      ? Icons.check_circle
-                                      : Icons.circle_outlined,
-                                  color: isSelected
-                                      ? AppColors.primary
-                                      : Colors.grey.shade400,
-                                ),
-                              ],
-                            ),
-                          ),
+                            ? AppColors.primary.withValues(alpha: 0.06)
+                            : Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: isSelected
+                              ? AppColors.primary
+                              : Colors.grey.shade200,
+                          width: isSelected ? 1.5 : 1,
                         ),
-                        if (isSelected)
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-                            child: DropdownButtonFormField<String>(
-                              initialValue: _skillLevels[sport],
-                              decoration: const InputDecoration(
-                                labelText: 'Skill level',
-                                isDense: true,
-                              ),
-                              items: skillLevels
-                                  .map(
-                                    (level) => DropdownMenuItem(
-                                      value: level,
-                                      child: Text(_levelLabel(sport, level)),
-                                    ),
-                                  )
-                                  .toList(),
-                              onChanged: (value) {
-                                setState(() => _skillLevels[sport] = value!);
-                              },
-                            ),
+                      ),
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            isSelected
+                                ? Icons.check_circle
+                                : Icons.circle_outlined,
+                            color: isSelected
+                                ? AppColors.primary
+                                : Colors.grey.shade400,
+                            size: 22,
                           ),
-                      ],
+                          const SizedBox(height: 8),
+                          Text(
+                            sport,
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                        ],
+                      ),
                     ),
                   );
                 },
               ),
             ),
+            if (_selectedSports.isNotEmpty)
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  children: _selectedSports.map((sport) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _skillLevels[sport],
+                        decoration: InputDecoration(
+                          labelText: '$sport level',
+                          isDense: true,
+                        ),
+                        items: skillLevels
+                            .map(
+                              (level) => DropdownMenuItem(
+                                value: level,
+                                child: Text(_levelLabel(sport, level)),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) =>
+                            setState(() => _skillLevels[sport] = value!),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.all(20),
               child: ElevatedButton(
                 onPressed: _loading ? null : _handleContinue,
                 child: _loading
                     ? const SizedBox(
-                        height: 22,
-                        width: 22,
+                        height: 20,
+                        width: 20,
                         child: CircularProgressIndicator(
                           color: Colors.white,
                           strokeWidth: 2.5,

@@ -1,6 +1,11 @@
 // home_screen.dart
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+
+const String apiUrl = 'http://localhost:3000/api';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -10,128 +15,133 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  String _username = '';
+  int _leagueCount = 0;
+  int _matchesPlayed = 0;
+  int _wins = 0;
+  bool _loading = true;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Login successful! 🎉'),
-          duration: Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-        ),
+    _loadStats();
+  }
+
+  Future<void> _loadStats() async {
+    setState(() => _loading = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final userJson = prefs.getString('user');
+      if (userJson != null) {
+        _username = jsonDecode(userJson)['username'] ?? '';
+      }
+
+      final leaguesRes = await http.get(
+        Uri.parse('$apiUrl/leagues/mine'),
+        headers: {'Authorization': 'Bearer $token'},
       );
-    });
+      final leaguesData = jsonDecode(leaguesRes.body);
+      if (leaguesRes.statusCode == 200) {
+        _leagueCount = (leaguesData['leagues'] as List).length;
+      }
+
+      final sportsRes = await http.get(
+        Uri.parse('$apiUrl/sports/mine'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      final sportsData = jsonDecode(sportsRes.body);
+      if (sportsRes.statusCode == 200) {
+        final Map<String, dynamic> seenSports = {};
+        for (final row in sportsData['sports']) {
+          seenSports[row['sport']] = row;
+        }
+        _matchesPlayed = seenSports.values.fold<int>(
+          0,
+          (sum, r) => sum + (r['matches_played'] as int),
+        );
+        _wins = seenSports.values.fold<int>(
+          0,
+          (sum, r) => sum + (r['wins'] as int),
+        );
+      }
+    } catch (err) {
+      // fail silently
+    } finally {
+      setState(() => _loading = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final winRate = _matchesPlayed == 0
+        ? 0
+        : ((_wins / _matchesPlayed) * 100).round();
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Sports League')),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            Text(
-              'Welcome back 👋',
-              style: Theme.of(context).textTheme.headlineMedium,
+      appBar: AppBar(title: const Text('RallyX')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _loadStats,
+              child: ListView(
+                padding: const EdgeInsets.all(20),
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      'Welcome back, $_username',
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(child: _statCard('Leagues', '$_leagueCount')),
+                      const SizedBox(width: 10),
+                      Expanded(child: _statCard('Matches', '$_matchesPlayed')),
+                      const SizedBox(width: 10),
+                      Expanded(child: _statCard('Win rate', '$winRate%')),
+                    ],
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              'What would you like to do?',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 24),
-            _DashboardTile(
-              icon: Icons.person_outline,
-              iconColor: AppColors.primary,
-              title: 'Profile',
-              subtitle: 'View your info and ratings',
-              onTap: () => Navigator.pushNamed(context, '/profile'),
-            ),
-            const SizedBox(height: 14),
-            _DashboardTile(
-              icon: Icons.groups_outlined,
-              iconColor: AppColors.accent,
-              title: 'My Leagues',
-              subtitle: 'Leagues you\'ve joined',
-              onTap: () => Navigator.pushNamed(context, '/my-leagues'),
-            ),
-            const SizedBox(height: 14),
-            _DashboardTile(
-              icon: Icons.explore_outlined,
-              iconColor: AppColors.success,
-              title: 'Browse Leagues',
-              subtitle: 'Find and join new leagues',
-              onTap: () => Navigator.pushNamed(context, '/leagues'),
-            ),
-            const SizedBox(height: 14),
-            _DashboardTile(
-              icon: Icons.pending_actions_outlined,
-              iconColor: AppColors.danger,
-              title: 'Pending Confirmations',
-              subtitle: 'Matches waiting on you',
-              onTap: () => Navigator.pushNamed(context, '/pending-matches'),
-            ),
-          ],
-        ),
-      ),
     );
   }
-}
 
-class _DashboardTile extends StatelessWidget {
-  final IconData icon;
-  final Color iconColor;
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-
-  const _DashboardTile({
-    required this.icon,
-    required this.iconColor,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: iconColor.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: iconColor, size: 26),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ],
-                ),
-              ),
-              Icon(Icons.chevron_right, color: Colors.grey.shade400),
-            ],
+  Widget _statCard(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textDark,
+            ),
           ),
-        ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          ),
+        ],
       ),
     );
   }

@@ -146,7 +146,7 @@ class _SignupScreenState extends State<SignupScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         title: Text(title),
         content: Text(message),
         actions: [
@@ -180,7 +180,7 @@ class _SignupScreenState extends State<SignupScreen> {
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
-              const SizedBox(height: 28),
+              const SizedBox(height: 26),
               TextField(
                 controller: _usernameController,
                 decoration: const InputDecoration(
@@ -188,7 +188,7 @@ class _SignupScreenState extends State<SignupScreen> {
                   prefixIcon: Icon(Icons.person_outline),
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
               TextField(
                 controller: _phoneController,
                 keyboardType: TextInputType.phone,
@@ -199,7 +199,7 @@ class _SignupScreenState extends State<SignupScreen> {
                   counterText: '',
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               TextField(
                 controller: _passwordController,
                 obscureText: _obscurePassword,
@@ -217,21 +217,21 @@ class _SignupScreenState extends State<SignupScreen> {
                   ),
                 ),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 18),
               Text('Gender', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 4),
               Row(
                 children: [
                   Expanded(
-                    child: _GenderChip(
+                    child: _SelectChip(
                       label: 'Male',
                       selected: _selectedGender == 'M',
                       onTap: () => setState(() => _selectedGender = 'M'),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
                   Expanded(
-                    child: _GenderChip(
+                    child: _SelectChip(
                       label: 'Female',
                       selected: _selectedGender == 'F',
                       onTap: () => setState(() => _selectedGender = 'F'),
@@ -239,7 +239,7 @@ class _SignupScreenState extends State<SignupScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 18),
               TextField(
                 enabled: false,
                 decoration: InputDecoration(
@@ -249,7 +249,7 @@ class _SignupScreenState extends State<SignupScreen> {
                 ),
                 controller: TextEditingController(text: 'Bangalore'),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
               DropdownButtonFormField<String>(
                 initialValue: _selectedArea,
                 decoration: const InputDecoration(
@@ -266,13 +266,13 @@ class _SignupScreenState extends State<SignupScreen> {
                     .toList(),
                 onChanged: (value) => setState(() => _selectedArea = value),
               ),
-              const SizedBox(height: 28),
+              const SizedBox(height: 24),
               ElevatedButton(
                 onPressed: _loading ? null : _handleSignup,
                 child: _loading
                     ? const SizedBox(
-                        height: 22,
-                        width: 22,
+                        height: 20,
+                        width: 20,
                         child: CircularProgressIndicator(
                           color: Colors.white,
                           strokeWidth: 2.5,
@@ -280,7 +280,7 @@ class _SignupScreenState extends State<SignupScreen> {
                       )
                     : const Text('Sign Up'),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
               TextButton(
                 onPressed: () => Navigator.pushNamed(context, '/login'),
                 child: const Text('Already have an account? Log in'),
@@ -293,12 +293,12 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 }
 
-class _GenderChip extends StatelessWidget {
+class _SelectChip extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
 
-  const _GenderChip({
+  const _SelectChip({
     required this.label,
     required this.selected,
     required this.onTap,
@@ -307,19 +307,19 @@ class _GenderChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(8),
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14),
+        padding: const EdgeInsets.symmetric(vertical: 13),
         decoration: BoxDecoration(
           color: selected
-              ? AppColors.primary.withValues(alpha: 0.1)
+              ? AppColors.primary.withValues(alpha: 0.08)
               : Colors.white,
           border: Border.all(
             color: selected ? AppColors.primary : Colors.grey.shade300,
-            width: selected ? 2 : 1,
+            width: selected ? 1.5 : 1,
           ),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(8),
         ),
         child: Center(
           child: Text(

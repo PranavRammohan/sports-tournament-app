@@ -7,13 +7,6 @@ import '../main.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
-const Map<String, String> sportEmojis = {
-  'badminton': '🏸',
-  'tennis': '🎾',
-  'table_tennis': '🏓',
-  'pickleball': '🥒',
-};
-
 class PendingMatchesScreen extends StatefulWidget {
   const PendingMatchesScreen({super.key});
 
@@ -70,7 +63,6 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Match confirmed! Ratings updated.'),
-            behavior: SnackBarBehavior.floating,
             backgroundColor: AppColors.success,
           ),
         );
@@ -79,19 +71,15 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(data['error'] ?? 'Could not confirm.'),
-            behavior: SnackBarBehavior.floating,
             backgroundColor: AppColors.danger,
           ),
         );
       }
     } catch (err) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Network error.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
     }
   }
 
@@ -100,10 +88,10 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
       .map((w) => w[0].toUpperCase() + w.substring(1))
       .join(' ');
 
-  String _formatSetScores(dynamic rawSetScores, bool reportedByPlayer1) {
+  String _formatSetScores(dynamic raw, bool reportedByPlayer1) {
     try {
-      final List sets = jsonDecode(rawSetScores);
-      if (sets.isEmpty) return 'No score breakdown available.';
+      final List sets = jsonDecode(raw);
+      if (sets.isEmpty) return '';
       return sets
           .map((s) {
             final mine = s['me'];
@@ -112,7 +100,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
           })
           .join(', ');
     } catch (err) {
-      return 'Score unavailable.';
+      return '';
     }
   }
 
@@ -128,7 +116,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                   ? ListView(
                       children: [
                         SizedBox(
-                          height: MediaQuery.of(context).size.height * 0.6,
+                          height: MediaQuery.of(context).size.height * 0.5,
                           child: Center(
                             child: Text(
                               'Nothing waiting on you right now.',
@@ -138,74 +126,77 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                         ),
                       ],
                     )
-                  : ListView.builder(
-                      padding: const EdgeInsets.all(20),
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(16),
                       itemCount: _matches.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
                       itemBuilder: (context, index) {
                         final m = _matches[index];
                         final isDoubles = m['league_format'] == 'doubles';
-
                         final team1 = isDoubles
                             ? '${m['player1_username']} & ${m['player1_partner_username'] ?? '?'}'
                             : m['player1_username'];
                         final team2 = isDoubles
                             ? '${m['player2_username']} & ${m['player2_partner_username'] ?? '?'}'
                             : m['player2_username'];
-
                         final reportedByPlayer1 =
                             m['reported_by'] == m['player1_id'];
 
                         return Container(
-                          margin: const EdgeInsets.only(bottom: 12),
-                          padding: const EdgeInsets.all(16),
+                          padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
                             color: Colors.white,
-                            borderRadius: BorderRadius.circular(14),
+                            borderRadius: BorderRadius.circular(8),
                             border: Border.all(
-                              color: AppColors.accent.withValues(alpha: 0.3),
+                              color: AppColors.warning.withValues(alpha: 0.4),
                             ),
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          child: Row(
                             children: [
-                              Row(
-                                children: [
-                                  Text(
-                                    sportEmojis[m['sport']] ?? '🏅',
-                                    style: const TextStyle(fontSize: 20),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    _formatSport(m['sport']),
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 15,
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      _formatSport(m['sport']),
+                                      style: const TextStyle(
+                                        fontSize: 10,
+                                        color: AppColors.textGrey,
+                                      ),
                                     ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 10),
-                              Text(
-                                '$team1  vs  $team2',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
+                                    Text(
+                                      '$team1 vs $team2',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                    Text(
+                                      _formatSetScores(
+                                        m['set_scores'],
+                                        reportedByPlayer1,
+                                      ),
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        color: AppColors.textGrey,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                _formatSetScores(
-                                  m['set_scores'],
-                                  reportedByPlayer1,
-                                ),
-                                style: TextStyle(
-                                  color: Colors.grey.shade600,
-                                  fontSize: 13,
-                                ),
-                              ),
-                              const SizedBox(height: 14),
+                              const SizedBox(width: 10),
                               ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 10,
+                                  ),
+                                ),
                                 onPressed: () => _confirmMatch(m['id']),
-                                child: const Text('Confirm Result'),
+                                child: const Text(
+                                  'Confirm',
+                                  style: TextStyle(fontSize: 13),
+                                ),
                               ),
                             ],
                           ),

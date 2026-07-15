@@ -5,15 +5,9 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import 'league_detail_screen.dart';
+import 'browse_leagues_screen.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
-
-const Map<String, String> sportEmojis = {
-  'badminton': '🏸',
-  'tennis': '🎾',
-  'table_tennis': '🏓',
-  'pickleball': '🥒',
-};
 
 class MyLeaguesScreen extends StatefulWidget {
   const MyLeaguesScreen({super.key});
@@ -62,7 +56,22 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('My Leagues')),
+      appBar: AppBar(
+        title: const Text('My Leagues'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: 'Browse leagues',
+            onPressed: () async {
+              final result = await Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const BrowseLeaguesScreen()),
+              );
+              if (result == true) _loadLeagues();
+            },
+          ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
@@ -71,31 +80,66 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
                   ? ListView(
                       children: [
                         SizedBox(
-                          height: MediaQuery.of(context).size.height * 0.6,
+                          height: MediaQuery.of(context).size.height * 0.5,
                           child: Center(
-                            child: Text(
-                              "You haven't joined any leagues yet.",
-                              textAlign: TextAlign.center,
-                              style: Theme.of(context).textTheme.bodyMedium,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  "You haven't joined any leagues yet.",
+                                  textAlign: TextAlign.center,
+                                  style: Theme.of(context).textTheme.bodyMedium,
+                                ),
+                                const SizedBox(height: 12),
+                                TextButton.icon(
+                                  onPressed: () async {
+                                    final result = await Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            const BrowseLeaguesScreen(),
+                                      ),
+                                    );
+                                    if (result == true) _loadLeagues();
+                                  },
+                                  icon: const Icon(Icons.search),
+                                  label: const Text('Browse leagues'),
+                                ),
+                              ],
                             ),
                           ),
                         ),
                       ],
                     )
-                  : ListView.builder(
-                      padding: const EdgeInsets.all(20),
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(16),
                       itemCount: _leagues.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
                       itemBuilder: (context, index) {
                         final league = _leagues[index];
                         return Container(
-                          margin: const EdgeInsets.only(bottom: 12),
                           decoration: BoxDecoration(
                             color: Colors.white,
-                            borderRadius: BorderRadius.circular(14),
+                            borderRadius: BorderRadius.circular(8),
                             border: Border.all(color: Colors.grey.shade200),
                           ),
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(14),
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 2,
+                            ),
+                            title: Text(
+                              '${_formatSport(league['sport'])} · ${league['area']}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
+                            ),
+                            subtitle: Text(
+                              '${league['season_start']} – ${league['season_end']} · ${league['member_count']} players',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                            trailing: const Icon(Icons.chevron_right, size: 20),
                             onTap: () async {
                               final result = await Navigator.push(
                                 context,
@@ -107,55 +151,6 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
                               );
                               if (result == 'deleted') _loadLeagues();
                             },
-                            child: Padding(
-                              padding: const EdgeInsets.all(14),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    width: 44,
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                      color: AppColors.accent.withValues(
-                                        alpha: 0.12,
-                                      ),
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        sportEmojis[league['sport']] ?? '🏅',
-                                        style: const TextStyle(fontSize: 20),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 14),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          '${_formatSport(league['sport'])} · ${league['area']}',
-                                          style: Theme.of(
-                                            context,
-                                          ).textTheme.titleMedium,
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          '${league['season_start']} – ${league['season_end']} · ${league['member_count']} players',
-                                          style: Theme.of(
-                                            context,
-                                          ).textTheme.bodyMedium,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  Icon(
-                                    Icons.chevron_right,
-                                    color: Colors.grey.shade400,
-                                  ),
-                                ],
-                              ),
-                            ),
                           ),
                         );
                       },

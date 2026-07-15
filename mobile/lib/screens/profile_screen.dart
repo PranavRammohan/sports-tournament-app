@@ -4,15 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import 'match_history_screen.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
-
-const Map<String, String> sportEmojis = {
-  'badminton': '🏸',
-  'tennis': '🎾',
-  'table_tennis': '🏓',
-  'pickleball': '🥒',
-};
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -107,7 +101,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.history),
-            onPressed: () => Navigator.pushNamed(context, '/match-history'),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const MatchHistoryScreen()),
+            ),
             tooltip: 'Match history',
           ),
           IconButton(
@@ -127,39 +124,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 padding: const EdgeInsets.all(20),
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(24),
+                    padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [AppColors.primary, AppColors.primaryDark],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.circular(18),
+                      color: AppColors.primary,
+                      borderRadius: BorderRadius.circular(10),
                     ),
                     child: Column(
                       children: [
                         CircleAvatar(
-                          radius: 36,
+                          radius: 30,
                           backgroundColor: Colors.white,
                           child: Text(
                             (_user?['username'] ?? '?')[0].toUpperCase(),
                             style: const TextStyle(
-                              fontSize: 30,
+                              fontSize: 24,
                               fontWeight: FontWeight.bold,
                               color: AppColors.primary,
                             ),
                           ),
                         ),
-                        const SizedBox(height: 14),
+                        const SizedBox(height: 12),
                         Text(
                           _user?['username'] ?? '',
                           style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
                             color: Colors.white,
                           ),
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 8),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
@@ -177,12 +170,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 22),
                   Text(
                     'Your Sports',
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 10),
                   if (groupedSports.isEmpty)
                     Text(
                       'No sports selected yet.',
@@ -197,47 +190,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       final doubles = formats['doubles'];
 
                       return Card(
-                        margin: const EdgeInsets.only(bottom: 12),
+                        margin: const EdgeInsets.only(bottom: 10),
                         child: Padding(
-                          padding: const EdgeInsets.all(16),
+                          padding: const EdgeInsets.all(14),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Row(
-                                children: [
-                                  Container(
-                                    width: 36,
-                                    height: 36,
-                                    decoration: BoxDecoration(
-                                      color: AppColors.primary.withValues(
-                                        alpha: 0.1,
-                                      ),
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        sportEmojis[sport] ?? '🏅',
-                                        style: const TextStyle(fontSize: 18),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Text(
-                                    _formatSportName(sport),
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.titleMedium,
-                                  ),
-                                ],
+                              Text(
+                                _formatSportName(sport),
+                                style: Theme.of(context).textTheme.titleMedium,
                               ),
-                              const SizedBox(height: 12),
+                              const SizedBox(height: 10),
                               if (isTableTennis && singles != null)
                                 _ratingRow('Rating', singles)
                               else ...[
                                 if (singles != null)
                                   _ratingRow('Singles', singles),
                                 if (singles != null && doubles != null)
-                                  const SizedBox(height: 10),
+                                  const SizedBox(height: 8),
                                 if (doubles != null)
                                   _ratingRow('Doubles', doubles),
                               ],
@@ -254,10 +224,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _ratingRow(String label, Map<String, dynamic> data) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
         color: AppColors.background,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -269,19 +239,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 label,
                 style: const TextStyle(
                   fontWeight: FontWeight.w600,
-                  fontSize: 14,
+                  fontSize: 13,
                 ),
               ),
               Text(
                 '${data['matches_played']} matches · ${data['wins']}W ${data['losses']}L',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
               ),
             ],
           ),
           Text(
             '${data['rating']}',
             style: const TextStyle(
-              fontSize: 20,
+              fontSize: 17,
               fontWeight: FontWeight.bold,
               color: AppColors.primary,
             ),
@@ -301,19 +271,19 @@ class _InfoChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(6),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: Colors.white),
+          Icon(icon, size: 13, color: Colors.white),
           const SizedBox(width: 4),
           Text(
             label,
-            style: const TextStyle(fontSize: 12, color: Colors.white),
+            style: const TextStyle(fontSize: 11, color: Colors.white),
           ),
         ],
       ),
