@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../widgets/sport_icon.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
@@ -199,6 +200,14 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
+                          sportIcon(sport, size: 28),
+                          const SizedBox(height: 6),
+                          Text(
+                            sport,
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 4),
                           Icon(
                             isSelected
                                 ? Icons.check_circle
@@ -206,13 +215,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
                             color: isSelected
                                 ? AppColors.primary
                                 : Colors.grey.shade400,
-                            size: 22,
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            sport,
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.titleMedium,
+                            size: 18,
                           ),
                         ],
                       ),

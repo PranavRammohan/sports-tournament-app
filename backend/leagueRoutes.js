@@ -43,7 +43,6 @@ router.post('/create', async (req, res) => {
 });
 
 // ---------- BROWSE LEAGUES ----------
-// Only shows leagues for sports the logged-in user has actually selected.
 router.get('/', async (req, res) => {
   const userId = req.userId;
   const { area, format, genderCategory } = req.query;
@@ -118,8 +117,6 @@ router.post('/:id/join', async (req, res) => {
       return res.status(404).json({ error: 'League not found.' });
     }
 
-    // Also enforce this at join time — a user shouldn't be able to join a
-    // league for a sport they never selected, even if they somehow reach it.
     const hasSport = await pool.query(
       'SELECT id FROM user_sports WHERE user_id = $1 AND sport = $2 LIMIT 1',
       [userId, league.rows[0].sport]
@@ -311,7 +308,7 @@ router.post('/:id/generate-schedule', async (req, res) => {
   }
 });
 
-// ---------- GET SCHEDULE (with completion status) ----------
+// ---------- GET SCHEDULE (with completion status + contact info) ----------
 router.get('/:id/schedule', async (req, res) => {
   const leagueId = req.params.id;
 
@@ -319,8 +316,10 @@ router.get('/:id/schedule', async (req, res) => {
     const result = await pool.query(
       `SELECT sm.id, sm.tier_number,
               sm.player1_id, sm.player1_partner_id, sm.player2_id, sm.player2_partner_id,
-              p1.username as player1_username, pp1.username as player1_partner_username,
-              p2.username as player2_username, pp2.username as player2_partner_username,
+              p1.username as player1_username, p1.phone_number as player1_phone,
+              pp1.username as player1_partner_username, pp1.phone_number as player1_partner_phone,
+              p2.username as player2_username, p2.phone_number as player2_phone,
+              pp2.username as player2_partner_username, pp2.phone_number as player2_partner_phone,
               m.id as match_id, m.status as match_status, m.set_scores, m.winner_id,
               m.player1_id as reported_player1_id, m.player2_id as reported_player2_id
        FROM scheduled_matches sm

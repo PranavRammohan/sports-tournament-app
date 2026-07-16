@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../widgets/sport_icon.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
@@ -153,6 +154,8 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                           ),
                           child: Row(
                             children: [
+                              sportIcon(m['sport'], size: 20),
+                              const SizedBox(width: 10),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,

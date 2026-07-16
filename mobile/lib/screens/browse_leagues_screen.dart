@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../widgets/sport_icon.dart';
 import 'create_league_screen.dart';
 import 'league_detail_screen.dart';
 
@@ -153,6 +154,8 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                 padding: const EdgeInsets.all(12),
                                 child: Row(
                                   children: [
+                                    sportIcon(league['sport'], size: 24),
+                                    const SizedBox(width: 12),
                                     Expanded(
                                       child: Column(
                                         crossAxisAlignment:

@@ -157,8 +157,10 @@ router.get('/pending', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT m.*, l.sport, l.format as league_format,
-              p1.username as player1_username, p2.username as player2_username,
-              pp1.username as player1_partner_username, pp2.username as player2_partner_username
+              p1.username as player1_username, p1.phone_number as player1_phone,
+              p2.username as player2_username, p2.phone_number as player2_phone,
+              pp1.username as player1_partner_username, pp1.phone_number as player1_partner_phone,
+              pp2.username as player2_partner_username, pp2.phone_number as player2_partner_phone
        FROM matches m
        JOIN leagues l ON l.id = m.league_id
        JOIN users p1 ON p1.id = m.player1_id

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../widgets/sport_icon.dart';
 import 'match_history_screen.dart';
 import 'add_sport_screen.dart';
 
@@ -218,9 +219,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                _formatSportName(sport),
-                                style: Theme.of(context).textTheme.titleMedium,
+                              Row(
+                                children: [
+                                  sportIcon(sport, size: 20),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    _formatSportName(sport),
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleMedium,
+                                  ),
+                                ],
                               ),
                               const SizedBox(height: 10),
                               if (isTableTennis && singles != null)

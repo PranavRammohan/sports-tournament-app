@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../widgets/sport_icon.dart';
 import 'report_match_screen.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
@@ -217,8 +218,17 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       length: 3,
       child: Scaffold(
         appBar: AppBar(
-          title: Text(
-            '${_formatSport(_league!['sport'])} · ${_league!['area']}',
+          title: Row(
+            children: [
+              sportIcon(_league!['sport'], size: 18),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  '${_formatSport(_league!['sport'])} · ${_league!['area']}',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
           actions: [
             if (isHost)
@@ -430,6 +440,47 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                       : f['player2_username'];
                   final isCompleted = f['match_status'] == 'confirmed';
 
+                  final involvesMe = [
+                    f['player1_id'],
+                    f['player1_partner_id'],
+                    f['player2_id'],
+                    f['player2_partner_id'],
+                  ].contains(_currentUserId);
+                  final iAmTeam1 =
+                      f['player1_id'] == _currentUserId ||
+                      f['player1_partner_id'] == _currentUserId;
+
+                  final List<Map<String, String>> opponentContacts = [];
+                  if (involvesMe && !isCompleted) {
+                    if (iAmTeam1) {
+                      if (f['player2_phone'] != null) {
+                        opponentContacts.add({
+                          'name': f['player2_username'],
+                          'phone': f['player2_phone'],
+                        });
+                      }
+                      if (f['player2_partner_phone'] != null) {
+                        opponentContacts.add({
+                          'name': f['player2_partner_username'],
+                          'phone': f['player2_partner_phone'],
+                        });
+                      }
+                    } else {
+                      if (f['player1_phone'] != null) {
+                        opponentContacts.add({
+                          'name': f['player1_username'],
+                          'phone': f['player1_phone'],
+                        });
+                      }
+                      if (f['player1_partner_phone'] != null) {
+                        opponentContacts.add({
+                          'name': f['player1_partner_username'],
+                          'phone': f['player1_partner_phone'],
+                        });
+                      }
+                    }
+                  }
+
                   return Container(
                     margin: const EdgeInsets.only(bottom: 6),
                     padding: const EdgeInsets.symmetric(
@@ -445,36 +496,66 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                             : Colors.grey.shade200,
                       ),
                     ),
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: Text(
-                            '$team1 vs $team2',
-                            style: const TextStyle(fontSize: 13),
-                          ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '$team1 vs $team2',
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isCompleted
+                                    ? AppColors.success.withValues(alpha: 0.1)
+                                    : AppColors.warning.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                isCompleted ? 'Done' : 'Pending',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: isCompleted
+                                      ? AppColors.success
+                                      : AppColors.warning,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 7,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isCompleted
-                                ? AppColors.success.withValues(alpha: 0.1)
-                                : AppColors.warning.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            isCompleted ? 'Done' : 'Pending',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                              color: isCompleted
-                                  ? AppColors.success
-                                  : AppColors.warning,
+                        if (opponentContacts.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          ...opponentContacts.map(
+                            (c) => Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.phone,
+                                    size: 12,
+                                    color: AppColors.textGrey,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '${c['name']}: ${c['phone']}',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      color: AppColors.textGrey,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
-                        ),
+                        ],
                       ],
                     ),
                   );

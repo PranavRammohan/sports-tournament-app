@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../widgets/sport_icon.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
@@ -165,7 +166,9 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                                   borderRadius: BorderRadius.circular(2),
                                 ),
                               ),
-                              const SizedBox(width: 10),
+                              const SizedBox(width: 8),
+                              sportIcon(m['sport'], size: 16),
+                              const SizedBox(width: 8),
                               SizedBox(
                                 width: 34,
                                 child: Text(
