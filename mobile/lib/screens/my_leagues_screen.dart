@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../widgets/sport_icon.dart';
 import 'league_detail_screen.dart';
 import 'browse_leagues_screen.dart';
 
@@ -128,6 +129,7 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
                               horizontal: 14,
                               vertical: 2,
                             ),
+                            leading: sportIcon(league['sport'], size: 22),
                             title: Text(
                               '${_formatSport(league['sport'])} · ${league['area']}',
                               style: const TextStyle(
@@ -149,7 +151,8 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
                                   ),
                                 ),
                               );
-                              if (result == 'deleted') _loadLeagues();
+                              if (result == 'deleted' || result == 'left')
+                                _loadLeagues();
                             },
                           ),
                         );

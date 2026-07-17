@@ -26,6 +26,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   int? _currentUserId;
   bool _loading = true;
   bool _deleting = false;
+  bool _leaving = false;
   bool _generating = false;
   String? _error;
 
@@ -185,6 +186,61 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     }
   }
 
+  Future<void> _confirmLeave() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Leave this league?'),
+        content: const Text('You can rejoin later if you change your mind.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Leave',
+              style: TextStyle(color: AppColors.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _leaving = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final response = await http.post(
+        Uri.parse('$apiUrl/leagues/${widget.leagueId}/leave'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      final data = jsonDecode(response.body);
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        Navigator.pop(context, 'left');
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not leave league.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _leaving = false);
+    }
+  }
+
   String _formatSport(String sport) => sport
       .split('_')
       .map((w) => w[0].toUpperCase() + w.substring(1))
@@ -244,6 +300,21 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                       )
                     : const Icon(Icons.delete_outline),
                 onPressed: _deleting ? null : _confirmDelete,
+              )
+            else
+              IconButton(
+                icon: _leaving
+                    ? const SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Icon(Icons.exit_to_app),
+                onPressed: _leaving ? null : _confirmLeave,
+                tooltip: 'Leave league',
               ),
           ],
           bottom: const TabBar(

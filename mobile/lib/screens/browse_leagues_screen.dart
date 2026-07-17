@@ -22,6 +22,9 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
   bool _loading = true;
   bool _didJoinAny = false;
 
+  String? _filterFormat;
+  String? _filterGenderCategory;
+
   @override
   void initState() {
     super.initState();
@@ -34,8 +37,17 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
 
+      final queryParams = <String, String>{};
+      if (_filterFormat != null) queryParams['format'] = _filterFormat!;
+      if (_filterGenderCategory != null)
+        queryParams['genderCategory'] = _filterGenderCategory!;
+
+      final uri = Uri.parse(
+        '$apiUrl/leagues',
+      ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+
       final response = await http.get(
-        Uri.parse('$apiUrl/leagues'),
+        uri,
         headers: {'Authorization': 'Bearer $token'},
       );
 
@@ -106,117 +118,186 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
             onPressed: () => Navigator.pop(context, _didJoinAny),
           ),
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : RefreshIndicator(
-                onRefresh: _loadLeagues,
-                child: _leagues.isEmpty
-                    ? ListView(
-                        children: [
-                          SizedBox(
-                            height: MediaQuery.of(context).size.height * 0.5,
-                            child: Center(
-                              child: Text(
-                                'No leagues yet.\nBe the first to create one!',
-                                textAlign: TextAlign.center,
-                                style: Theme.of(context).textTheme.bodyMedium,
-                              ),
-                            ),
-                          ),
-                        ],
-                      )
-                    : ListView.separated(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: _leagues.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
-                        itemBuilder: (context, index) {
-                          final league = _leagues[index];
-                          return Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.grey.shade200),
-                            ),
-                            child: InkWell(
-                              borderRadius: BorderRadius.circular(8),
-                              onTap: () async {
-                                final result = await Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => LeagueDetailScreen(
-                                      leagueId: league['id'],
+        body: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _filterFormat,
+                      decoration: const InputDecoration(
+                        labelText: 'Format',
+                        isDense: true,
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: null, child: Text('Any')),
+                        DropdownMenuItem(
+                          value: 'singles',
+                          child: Text('Singles'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'doubles',
+                          child: Text('Doubles'),
+                        ),
+                      ],
+                      onChanged: (v) {
+                        setState(() => _filterFormat = v);
+                        _loadLeagues();
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _filterGenderCategory,
+                      decoration: const InputDecoration(
+                        labelText: 'Category',
+                        isDense: true,
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: null, child: Text('Any')),
+                        DropdownMenuItem(value: 'mens', child: Text("Men's")),
+                        DropdownMenuItem(
+                          value: 'womens',
+                          child: Text("Women's"),
+                        ),
+                      ],
+                      onChanged: (v) {
+                        setState(() => _filterGenderCategory = v);
+                        _loadLeagues();
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : RefreshIndicator(
+                      onRefresh: _loadLeagues,
+                      child: _leagues.isEmpty
+                          ? ListView(
+                              children: [
+                                SizedBox(
+                                  height:
+                                      MediaQuery.of(context).size.height * 0.4,
+                                  child: Center(
+                                    child: Text(
+                                      'No leagues match these filters.',
+                                      textAlign: TextAlign.center,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodyMedium,
                                     ),
                                   ),
-                                );
-                                if (result == 'deleted') _loadLeagues();
-                              },
-                              child: Padding(
-                                padding: const EdgeInsets.all(12),
-                                child: Row(
-                                  children: [
-                                    sportIcon(league['sport'], size: 24),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
+                                ),
+                              ],
+                            )
+                          : ListView.separated(
+                              padding: const EdgeInsets.all(16),
+                              itemCount: _leagues.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 8),
+                              itemBuilder: (context, index) {
+                                final league = _leagues[index];
+                                return Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: Colors.grey.shade200,
+                                    ),
+                                  ),
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(8),
+                                    onTap: () async {
+                                      final result = await Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) =>
+                                              LeagueDetailScreen(
+                                                leagueId: league['id'],
+                                              ),
+                                        ),
+                                      );
+                                      if (result == 'deleted' ||
+                                          result == 'left')
+                                        _loadLeagues();
+                                    },
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Row(
                                         children: [
-                                          Text(
-                                            '${_formatSport(league['sport'])} · ${league['area']}',
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 14,
+                                          sportIcon(league['sport'], size: 22),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  '${_formatSport(league['sport'])} · ${league['area']}',
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.w600,
+                                                    fontSize: 14,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 3),
+                                                Text(
+                                                  '${league['season_start']} – ${league['season_end']}',
+                                                  style: const TextStyle(
+                                                    fontSize: 11,
+                                                    color: AppColors.textGrey,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Wrap(
+                                                  spacing: 5,
+                                                  children: [
+                                                    _tag(league['format']),
+                                                    _tag(
+                                                      league['gender_category'] ==
+                                                              'mens'
+                                                          ? "Men's"
+                                                          : "Women's",
+                                                    ),
+                                                    _tag(
+                                                      '${league['member_count']} players',
+                                                    ),
+                                                  ],
+                                                ),
+                                              ],
                                             ),
                                           ),
-                                          const SizedBox(height: 3),
-                                          Text(
-                                            '${league['season_start']} – ${league['season_end']}',
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                              color: AppColors.textGrey,
+                                          ElevatedButton(
+                                            style: ElevatedButton.styleFrom(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 14,
+                                                    vertical: 9,
+                                                  ),
                                             ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Wrap(
-                                            spacing: 5,
-                                            children: [
-                                              _tag(league['format']),
-                                              _tag(
-                                                league['gender_category'] ==
-                                                        'mens'
-                                                    ? "Men's"
-                                                    : "Women's",
-                                              ),
-                                              _tag(
-                                                '${league['member_count']} players',
-                                              ),
-                                            ],
+                                            onPressed: () =>
+                                                _joinLeague(league['id']),
+                                            child: const Text(
+                                              'Join',
+                                              style: TextStyle(fontSize: 13),
+                                            ),
                                           ),
                                         ],
                                       ),
                                     ),
-                                    ElevatedButton(
-                                      style: ElevatedButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 14,
-                                          vertical: 9,
-                                        ),
-                                      ),
-                                      onPressed: () =>
-                                          _joinLeague(league['id']),
-                                      child: const Text(
-                                        'Join',
-                                        style: TextStyle(fontSize: 13),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                                  ),
+                                );
+                              },
                             ),
-                          );
-                        },
-                      ),
-              ),
+                    ),
+            ),
+          ],
+        ),
         floatingActionButton: FloatingActionButton.extended(
           onPressed: () async {
             final created = await Navigator.push(

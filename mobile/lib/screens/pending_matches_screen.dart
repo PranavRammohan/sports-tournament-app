@@ -84,6 +84,68 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     }
   }
 
+  Future<void> _rejectMatch(int matchId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Reject this result?'),
+        content: const Text(
+          'The reporter can submit the correct score again afterward.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Reject',
+              style: TextStyle(color: AppColors.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+
+      final response = await http.post(
+        Uri.parse('$apiUrl/matches/$matchId/reject'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Match rejected.'),
+            backgroundColor: AppColors.warning,
+          ),
+        );
+        _loadMatches();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not reject.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    }
+  }
+
   String _formatSport(String sport) => sport
       .split('_')
       .map((w) => w[0].toUpperCase() + w.substring(1))
@@ -152,54 +214,84 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                               color: AppColors.warning.withValues(alpha: 0.4),
                             ),
                           ),
-                          child: Row(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              sportIcon(m['sport'], size: 20),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      _formatSport(m['sport']),
-                                      style: const TextStyle(
-                                        fontSize: 10,
-                                        color: AppColors.textGrey,
-                                      ),
+                              Row(
+                                children: [
+                                  sportIcon(m['sport'], size: 20),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          _formatSport(m['sport']),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            color: AppColors.textGrey,
+                                          ),
+                                        ),
+                                        Text(
+                                          '$team1 vs $team2',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                        Text(
+                                          _formatSetScores(
+                                            m['set_scores'],
+                                            reportedByPlayer1,
+                                          ),
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: AppColors.textGrey,
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    Text(
-                                      '$team1 vs $team2',
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 13,
-                                      ),
-                                    ),
-                                    Text(
-                                      _formatSetScores(
-                                        m['set_scores'],
-                                        reportedByPlayer1,
-                                      ),
-                                      style: const TextStyle(
-                                        fontSize: 11,
-                                        color: AppColors.textGrey,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
-                                    vertical: 10,
                                   ),
-                                ),
-                                onPressed: () => _confirmMatch(m['id']),
-                                child: const Text(
-                                  'Confirm',
-                                  style: TextStyle(fontSize: 13),
-                                ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: OutlinedButton(
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: AppColors.danger,
+                                        side: const BorderSide(
+                                          color: AppColors.danger,
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 10,
+                                        ),
+                                      ),
+                                      onPressed: () => _rejectMatch(m['id']),
+                                      child: const Text(
+                                        'Reject',
+                                        style: TextStyle(fontSize: 13),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 10,
+                                        ),
+                                      ),
+                                      onPressed: () => _confirmMatch(m['id']),
+                                      child: const Text(
+                                        'Confirm',
+                                        style: TextStyle(fontSize: 13),
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),

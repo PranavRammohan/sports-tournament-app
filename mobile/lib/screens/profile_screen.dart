@@ -7,6 +7,8 @@ import '../main.dart';
 import '../widgets/sport_icon.dart';
 import 'match_history_screen.dart';
 import 'add_sport_screen.dart';
+import 'edit_profile_screen.dart';
+import 'change_password_screen.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
@@ -103,6 +105,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
         title: const Text('Profile'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.password),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ChangePasswordScreen()),
+            ),
+            tooltip: 'Change password',
+          ),
+          IconButton(
             icon: const Icon(Icons.history),
             onPressed: () => Navigator.push(
               context,
@@ -134,6 +144,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     child: Column(
                       children: [
+                        Align(
+                          alignment: Alignment.topRight,
+                          child: InkWell(
+                            onTap: () async {
+                              final updated = await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      EditProfileScreen(currentUser: _user!),
+                                ),
+                              );
+                              if (updated == true) _loadProfile();
+                            },
+                            child: const Padding(
+                              padding: EdgeInsets.only(bottom: 4),
+                              child: Icon(
+                                Icons.edit,
+                                size: 18,
+                                color: Colors.white70,
+                              ),
+                            ),
+                          ),
+                        ),
                         CircleAvatar(
                           radius: 30,
                           backgroundColor: Colors.white,

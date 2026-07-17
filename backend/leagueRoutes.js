@@ -145,6 +145,35 @@ router.post('/:id/join', async (req, res) => {
   }
 });
 
+// ---------- LEAVE LEAGUE ----------
+router.post('/:id/leave', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+
+  try {
+    const league = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (league.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    if (league.rows[0].created_by === userId) {
+      return res.status(400).json({ error: 'As the host, you cannot leave — you can delete the league instead.' });
+    }
+
+    const result = await pool.query(
+      'DELETE FROM league_members WHERE league_id = $1 AND user_id = $2 RETURNING id',
+      [leagueId, userId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "You aren't a member of this league." });
+    }
+
+    res.status(200).json({ message: 'You left the league.' });
+  } catch (err) {
+    console.error('Leave league error:', err);
+    res.status(500).json({ error: 'Something went wrong leaving the league.' });
+  }
+});
+
 // ---------- LEAGUE DETAIL + LEADERBOARD ----------
 router.get('/:id', async (req, res) => {
   const leagueId = req.params.id;

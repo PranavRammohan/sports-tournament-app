@@ -119,6 +119,13 @@ router.post('/report', async (req, res) => {
       if (alreadyConfirmed.rows.length > 0) {
         return res.status(409).json({ error: 'This scheduled match has already been completed.' });
       }
+
+      // If there's an existing pending or rejected report for this same fixture,
+      // clear it out so this new report can take its place.
+      await pool.query(
+        `DELETE FROM matches WHERE scheduled_match_id = $1 AND status IN ('pending', 'rejected')`,
+        [scheduledMatchId]
+      );
     }
 
     const result = await pool.query(
@@ -286,6 +293,39 @@ router.post('/:id/confirm', async (req, res) => {
   } catch (err) {
     console.error('Confirm match error:', err);
     res.status(500).json({ error: 'Something went wrong confirming the match.' });
+  }
+});
+
+// ---------- REJECT A MATCH ----------
+router.post('/:id/reject', async (req, res) => {
+  const userId = req.userId;
+  const matchId = req.params.id;
+
+  try {
+    const matchResult = await pool.query('SELECT * FROM matches WHERE id = $1', [matchId]);
+    if (matchResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Match not found.' });
+    }
+    const match = matchResult.rows[0];
+
+    if (match.status !== 'pending') {
+      return res.status(409).json({ error: 'This match has already been processed.' });
+    }
+
+    const participants = [match.player1_id, match.player1_partner_id, match.player2_id, match.player2_partner_id];
+    if (!participants.includes(userId)) {
+      return res.status(403).json({ error: 'You are not part of this match.' });
+    }
+    if (userId === match.reported_by) {
+      return res.status(400).json({ error: 'You cannot reject your own report.' });
+    }
+
+    await pool.query(`UPDATE matches SET status = 'rejected' WHERE id = $1`, [matchId]);
+
+    res.status(200).json({ message: 'Match report rejected. It can be reported again with the correct score.' });
+  } catch (err) {
+    console.error('Reject match error:', err);
+    res.status(500).json({ error: 'Something went wrong rejecting the match.' });
   }
 });
 
