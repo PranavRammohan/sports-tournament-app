@@ -3,8 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-
-const String apiUrl = 'http://localhost:3000/api';
+import '../config.dart';
 
 const List<String> sportsList = [
   'Badminton',
@@ -124,7 +123,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
       final token = prefs.getString('authToken');
 
       final response = await http.post(
-        Uri.parse('$apiUrl/leagues/create'),
+        Uri.parse('$baseApiUrl/leagues/create'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
@@ -164,6 +163,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         title: Text(title),
         content: Text(message),
         actions: [
@@ -190,10 +190,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
           children: [
             DropdownButtonFormField<String>(
               initialValue: _selectedSport,
-              decoration: const InputDecoration(
-                labelText: 'Sport',
-                border: OutlineInputBorder(),
-              ),
+              decoration: const InputDecoration(labelText: 'Sport'),
               items: sportsList
                   .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                   .toList(),
@@ -202,10 +199,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
               initialValue: _selectedFormat,
-              decoration: const InputDecoration(
-                labelText: 'Format',
-                border: OutlineInputBorder(),
-              ),
+              decoration: const InputDecoration(labelText: 'Format'),
               items: const [
                 DropdownMenuItem(value: 'Singles', child: Text('Singles')),
                 DropdownMenuItem(value: 'Doubles', child: Text('Doubles')),
@@ -215,10 +209,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
               initialValue: _selectedGenderCategory,
-              decoration: const InputDecoration(
-                labelText: 'Category',
-                border: OutlineInputBorder(),
-              ),
+              decoration: const InputDecoration(labelText: 'Category'),
               items: const [
                 DropdownMenuItem(value: "Men's", child: Text("Men's")),
                 DropdownMenuItem(value: "Women's", child: Text("Women's")),
@@ -229,10 +220,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
             DropdownButtonFormField<String>(
               initialValue: _selectedArea,
               isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Area',
-                border: OutlineInputBorder(),
-              ),
+              decoration: const InputDecoration(labelText: 'Area'),
               items: bangaloreAreas
                   .map((a) => DropdownMenuItem(value: a, child: Text(a)))
                   .toList(),

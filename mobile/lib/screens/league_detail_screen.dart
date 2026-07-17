@@ -4,11 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../config.dart';
 import '../widgets/sport_icon.dart';
 import 'report_match_screen.dart';
 import 'playoffs_screen.dart';
-
-const String apiUrl = 'http://localhost:3000/api';
 
 class LeagueDetailScreen extends StatefulWidget {
   final int leagueId;
@@ -52,7 +51,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       }
 
       final leagueRes = await http.get(
-        Uri.parse('$apiUrl/leagues/${widget.leagueId}'),
+        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}'),
         headers: {'Authorization': 'Bearer $token'},
       );
       final leagueData = jsonDecode(leagueRes.body);
@@ -68,7 +67,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       });
 
       final historyRes = await http.get(
-        Uri.parse('$apiUrl/leagues/${widget.leagueId}/matches'),
+        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/matches'),
         headers: {'Authorization': 'Bearer $token'},
       );
       final historyData = jsonDecode(historyRes.body);
@@ -77,7 +76,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       }
 
       final scheduleRes = await http.get(
-        Uri.parse('$apiUrl/leagues/${widget.leagueId}/schedule'),
+        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/schedule'),
         headers: {'Authorization': 'Bearer $token'},
       );
       final scheduleData = jsonDecode(scheduleRes.body);
@@ -98,7 +97,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       final token = prefs.getString('authToken');
 
       final response = await http.post(
-        Uri.parse('$apiUrl/leagues/${widget.leagueId}/generate-schedule'),
+        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/generate-schedule'),
         headers: {'Authorization': 'Bearer $token'},
       );
       final data = jsonDecode(response.body);
@@ -161,7 +160,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
       final response = await http.delete(
-        Uri.parse('$apiUrl/leagues/${widget.leagueId}'),
+        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}'),
         headers: {'Authorization': 'Bearer $token'},
       );
       final data = jsonDecode(response.body);
@@ -216,7 +215,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
       final response = await http.post(
-        Uri.parse('$apiUrl/leagues/${widget.leagueId}/leave'),
+        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/leave'),
         headers: {'Authorization': 'Bearer $token'},
       );
       final data = jsonDecode(response.body);

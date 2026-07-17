@@ -4,13 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../config.dart';
 import '../widgets/sport_icon.dart';
 import 'match_history_screen.dart';
 import 'add_sport_screen.dart';
 import 'edit_profile_screen.dart';
 import 'change_password_screen.dart';
-
-const String apiUrl = 'http://localhost:3000/api';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -50,7 +49,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       setState(() => _user = jsonDecode(userJson));
 
       final response = await http.get(
-        Uri.parse('$apiUrl/sports/mine'),
+        Uri.parse('$baseApiUrl/sports/mine'),
         headers: {'Authorization': 'Bearer $token'},
       );
 

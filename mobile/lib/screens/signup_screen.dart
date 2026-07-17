@@ -4,8 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-
-const String apiUrl = 'http://localhost:3000/api/auth';
+import '../config.dart';
 
 const List<String> bangaloreAreas = [
   'Koramangala',
@@ -108,7 +107,7 @@ class _SignupScreenState extends State<SignupScreen> {
 
     try {
       final response = await http.post(
-        Uri.parse('$apiUrl/signup'),
+        Uri.parse('$baseApiUrl/auth/signup'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'username': username,

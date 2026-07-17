@@ -4,9 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../config.dart';
 import '../widgets/sport_icon.dart';
-
-const String apiUrl = 'http://localhost:3000/api';
 
 class MatchHistoryScreen extends StatefulWidget {
   const MatchHistoryScreen({super.key});
@@ -37,7 +36,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
       }
 
       final response = await http.get(
-        Uri.parse('$apiUrl/matches/history'),
+        Uri.parse('$baseApiUrl/matches/history'),
         headers: {'Authorization': 'Bearer $token'},
       );
 

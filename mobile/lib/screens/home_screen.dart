@@ -4,8 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-
-const String apiUrl = 'http://localhost:3000/api';
+import '../config.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -38,7 +37,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       final leaguesRes = await http.get(
-        Uri.parse('$apiUrl/leagues/mine'),
+        Uri.parse('$baseApiUrl/leagues/mine'),
         headers: {'Authorization': 'Bearer $token'},
       );
       final leaguesData = jsonDecode(leaguesRes.body);
@@ -47,7 +46,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       final sportsRes = await http.get(
-        Uri.parse('$apiUrl/sports/mine'),
+        Uri.parse('$baseApiUrl/sports/mine'),
         headers: {'Authorization': 'Bearer $token'},
       );
       final sportsData = jsonDecode(sportsRes.body);

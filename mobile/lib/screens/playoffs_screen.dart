@@ -4,8 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-
-const String apiUrl = 'http://localhost:3000/api';
+import '../config.dart';
 
 class PlayoffsScreen extends StatefulWidget {
   final int leagueId;
@@ -44,7 +43,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
       }
 
       final response = await http.get(
-        Uri.parse('$apiUrl/playoffs/${widget.leagueId}'),
+        Uri.parse('$baseApiUrl/playoffs/${widget.leagueId}'),
         headers: {'Authorization': 'Bearer $token'},
       );
       final data = jsonDecode(response.body);
@@ -65,7 +64,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
       final token = prefs.getString('authToken');
 
       final response = await http.post(
-        Uri.parse('$apiUrl/playoffs/${widget.leagueId}/generate'),
+        Uri.parse('$baseApiUrl/playoffs/${widget.leagueId}/generate'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
@@ -113,7 +112,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
       final token = prefs.getString('authToken');
 
       final response = await http.post(
-        Uri.parse('$apiUrl/playoffs/match/$matchId/report'),
+        Uri.parse('$baseApiUrl/playoffs/match/$matchId/report'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
@@ -152,7 +151,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
       final response = await http.post(
-        Uri.parse('$apiUrl/playoffs/match/$matchId/confirm'),
+        Uri.parse('$baseApiUrl/playoffs/match/$matchId/confirm'),
         headers: {'Authorization': 'Bearer $token'},
       );
       final data = jsonDecode(response.body);
@@ -187,7 +186,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
       final response = await http.post(
-        Uri.parse('$apiUrl/playoffs/match/$matchId/reject'),
+        Uri.parse('$baseApiUrl/playoffs/match/$matchId/reject'),
         headers: {'Authorization': 'Bearer $token'},
       );
       final data = jsonDecode(response.body);

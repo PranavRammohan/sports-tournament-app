@@ -4,9 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../config.dart';
 import '../widgets/sport_icon.dart';
-
-const String apiUrl = 'http://localhost:3000/api';
 
 const Map<String, Map<String, num>> startingRatings = {
   'Badminton': {
@@ -103,7 +102,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
       }).toList();
 
       final response = await http.post(
-        Uri.parse('$apiUrl/sports/select'),
+        Uri.parse('$baseApiUrl/sports/select'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',

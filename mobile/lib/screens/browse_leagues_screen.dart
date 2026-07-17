@@ -4,11 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../config.dart';
 import '../widgets/sport_icon.dart';
 import 'create_league_screen.dart';
 import 'league_detail_screen.dart';
-
-const String apiUrl = 'http://localhost:3000/api';
 
 class BrowseLeaguesScreen extends StatefulWidget {
   const BrowseLeaguesScreen({super.key});
@@ -43,7 +42,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
         queryParams['genderCategory'] = _filterGenderCategory!;
 
       final uri = Uri.parse(
-        '$apiUrl/leagues',
+        '$baseApiUrl/leagues',
       ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
 
       final response = await http.get(
@@ -68,7 +67,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
       final token = prefs.getString('authToken');
 
       final response = await http.post(
-        Uri.parse('$apiUrl/leagues/$leagueId/join'),
+        Uri.parse('$baseApiUrl/leagues/$leagueId/join'),
         headers: {'Authorization': 'Bearer $token'},
       );
 

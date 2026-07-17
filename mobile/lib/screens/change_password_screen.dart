@@ -3,9 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import '../main.dart';
-
-const String apiUrl = 'http://localhost:3000/api/auth';
+import '../config.dart';
 
 class ChangePasswordScreen extends StatefulWidget {
   const ChangePasswordScreen({super.key});
@@ -48,7 +46,7 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
       final token = prefs.getString('authToken');
 
       final response = await http.patch(
-        Uri.parse('$apiUrl/change-password'),
+        Uri.parse('$baseApiUrl/auth/change-password'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',

@@ -4,8 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-
-const String apiUrl = 'http://localhost:3000/api';
+import '../config.dart';
 
 const Map<String, Map<String, num>> startingRatings = {
   'Badminton': {
@@ -48,8 +47,7 @@ const List<String> allSports = [
 ];
 
 class AddSportScreen extends StatefulWidget {
-  final List<String>
-  existingSports; // already-selected sport keys, e.g. 'table_tennis'
+  final List<String> existingSports;
 
   const AddSportScreen({super.key, required this.existingSports});
 
@@ -106,7 +104,7 @@ class _AddSportScreenState extends State<AddSportScreen> {
       }).toList();
 
       final response = await http.post(
-        Uri.parse('$apiUrl/sports/select'),
+        Uri.parse('$baseApiUrl/sports/select'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',

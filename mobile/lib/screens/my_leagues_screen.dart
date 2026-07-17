@@ -4,11 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../config.dart';
 import '../widgets/sport_icon.dart';
 import 'league_detail_screen.dart';
 import 'browse_leagues_screen.dart';
-
-const String apiUrl = 'http://localhost:3000/api';
 
 class MyLeaguesScreen extends StatefulWidget {
   const MyLeaguesScreen({super.key});
@@ -34,7 +33,7 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
       final token = prefs.getString('authToken');
 
       final response = await http.get(
-        Uri.parse('$apiUrl/leagues/mine'),
+        Uri.parse('$baseApiUrl/leagues/mine'),
         headers: {'Authorization': 'Bearer $token'},
       );
 

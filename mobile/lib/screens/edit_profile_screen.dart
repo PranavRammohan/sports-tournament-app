@@ -4,8 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-
-const String apiUrl = 'http://localhost:3000/api/auth';
+import '../config.dart';
 
 const List<String> bangaloreAreas = [
   'Koramangala',
@@ -114,7 +113,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       final token = prefs.getString('authToken');
 
       final response = await http.patch(
-        Uri.parse('$apiUrl/profile'),
+        Uri.parse('$baseApiUrl/auth/profile'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
@@ -137,8 +136,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         return;
       }
 
-      // Update the locally cached user object so the rest of the app
-      // (Profile header, etc.) reflects the change immediately.
       await prefs.setString('user', jsonEncode(data['user']));
 
       if (!mounted) return;

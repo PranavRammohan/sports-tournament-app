@@ -4,9 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../config.dart';
 import '../widgets/sport_icon.dart';
-
-const String apiUrl = 'http://localhost:3000/api';
 
 class PendingMatchesScreen extends StatefulWidget {
   const PendingMatchesScreen({super.key});
@@ -32,7 +31,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
       final token = prefs.getString('authToken');
 
       final response = await http.get(
-        Uri.parse('$apiUrl/matches/pending'),
+        Uri.parse('$baseApiUrl/matches/pending'),
         headers: {'Authorization': 'Bearer $token'},
       );
 
@@ -53,7 +52,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
       final token = prefs.getString('authToken');
 
       final response = await http.post(
-        Uri.parse('$apiUrl/matches/$matchId/confirm'),
+        Uri.parse('$baseApiUrl/matches/$matchId/confirm'),
         headers: {'Authorization': 'Bearer $token'},
       );
 
@@ -115,7 +114,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
       final token = prefs.getString('authToken');
 
       final response = await http.post(
-        Uri.parse('$apiUrl/matches/$matchId/reject'),
+        Uri.parse('$baseApiUrl/matches/$matchId/reject'),
         headers: {'Authorization': 'Bearer $token'},
       );
 

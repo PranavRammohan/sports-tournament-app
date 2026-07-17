@@ -3,9 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import '../main.dart';
-
-const String apiUrl = 'http://localhost:3000/api';
+import '../config.dart';
 
 class ReportMatchScreen extends StatefulWidget {
   final int leagueId;
@@ -36,7 +34,6 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
   List<dynamic> _myPendingFixtures = [];
   int? _currentUserId;
 
-  // Selected fixture (schedule mode) OR manually picked opponent (free mode)
   Map<String, dynamic>? _selectedFixture;
   int? _opponentId;
   int? _partnerId;
@@ -64,7 +61,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
       }
 
       final response = await http.get(
-        Uri.parse('$apiUrl/leagues/${widget.leagueId}/schedule'),
+        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/schedule'),
         headers: {'Authorization': 'Bearer $token'},
       );
 
@@ -198,7 +195,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
       final token = prefs.getString('authToken');
 
       final response = await http.post(
-        Uri.parse('$apiUrl/matches/report'),
+        Uri.parse('$baseApiUrl/matches/report'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
@@ -238,7 +235,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         title: Text(title),
         content: Text(message),
         actions: [
@@ -260,7 +257,6 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
       );
     }
 
-    // Schedule exists but this player has no pending fixtures left.
     if (_scheduleExists && _myPendingFixtures.isEmpty) {
       return Scaffold(
         appBar: AppBar(title: const Text('Report Match')),
@@ -299,19 +295,17 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                 return Container(
                   margin: const EdgeInsets.only(bottom: 8),
                   child: InkWell(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(8),
                     onTap: () => _selectFixture(fixture),
                     child: Container(
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
                         color: selected
-                            ? AppColors.primary.withValues(alpha: 0.08)
+                            ? Colors.blue.withValues(alpha: 0.06)
                             : Colors.white,
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(8),
                         border: Border.all(
-                          color: selected
-                              ? AppColors.primary
-                              : Colors.grey.shade300,
+                          color: selected ? Colors.blue : Colors.grey.shade300,
                           width: selected ? 2 : 1,
                         ),
                       ),
@@ -322,7 +316,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                                 ? Icons.check_circle
                                 : Icons.circle_outlined,
                             color: selected
-                                ? AppColors.primary
+                                ? Colors.blue
                                 : Colors.grey.shade400,
                           ),
                           const SizedBox(width: 10),
@@ -340,7 +334,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                               vertical: 3,
                             ),
                             decoration: BoxDecoration(
-                              color: AppColors.background,
+                              color: Colors.grey.shade100,
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: Text(
@@ -356,7 +350,6 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
               }),
               const SizedBox(height: 24),
             ] else ...[
-              // No schedule generated for this league — fall back to free opponent selection.
               if (isDoubles) ...[
                 Text(
                   'Your Partner',
