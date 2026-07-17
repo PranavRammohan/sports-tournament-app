@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../widgets/sport_icon.dart';
 import 'report_match_screen.dart';
+import 'playoffs_screen.dart';
 
 const String apiUrl = 'http://localhost:3000/api';
 
@@ -330,7 +331,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         ),
         body: TabBarView(
           children: [
-            _buildLeaderboardTab(),
+            _buildLeaderboardTab(isHost),
             _buildScheduleTab(),
             _buildHistoryTab(),
           ],
@@ -357,7 +358,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
   }
 
-  Widget _buildLeaderboardTab() {
+  Widget _buildLeaderboardTab(bool isHost) {
     return RefreshIndicator(
       onRefresh: _loadAll,
       child: ListView(
@@ -376,6 +377,25 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
             ),
           ),
+          if (_league!['format'] == 'singles')
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => PlayoffsScreen(
+                        leagueId: widget.leagueId,
+                        isHost: isHost,
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.emoji_events_outlined),
+                label: const Text('Playoffs'),
+              ),
+            ),
           if (_leaderboard.isEmpty)
             const Text('No members yet.')
           else

@@ -1,0 +1,244 @@
+// playoffRoutes.js
+const express = require('express');
+const router = express.Router();
+const pool = require('./db');
+
+// Standard single-elimination seeding patterns, so top seeds don't meet early.
+const SEEDING_PATTERNS = {
+  4: [[1, 4], [2, 3]],
+  8: [[1, 8], [4, 5], [2, 7], [3, 6]],
+};
+
+// ---------- GENERATE PLAYOFF BRACKET (host only, once, singles only) ----------
+router.post('/:leagueId/generate', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.leagueId;
+  const { qualifierCount } = req.body;
+
+  if (![4, 8].includes(qualifierCount)) {
+    return res.status(400).json({ error: 'Qualifier count must be 4 or 8.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can start playoffs.' });
+    }
+    if (league.format !== 'singles') {
+      return res.status(400).json({ error: 'Playoffs are currently only supported for singles leagues.' });
+    }
+
+    const existing = await pool.query('SELECT id FROM playoff_matches WHERE league_id = $1 LIMIT 1', [leagueId]);
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'Playoffs have already been started for this league.' });
+    }
+
+    const standingsResult = await pool.query(
+      `SELECT u.id, us.rating
+       FROM league_members lm
+       JOIN users u ON u.id = lm.user_id
+       JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+       WHERE lm.league_id = $3
+       ORDER BY us.rating DESC
+       LIMIT $4`,
+      [league.sport, league.format, leagueId, qualifierCount]
+    );
+    const qualifiers = standingsResult.rows;
+
+    if (qualifiers.length < qualifierCount) {
+      return res.status(400).json({ error: `Need at least ${qualifierCount} players in the leaderboard to start this bracket size.` });
+    }
+
+    const pattern = SEEDING_PATTERNS[qualifierCount];
+    const totalRounds = Math.log2(qualifierCount);
+
+    // Round 1: real players, seeded, status ready
+    for (let i = 0; i < pattern.length; i++) {
+      const [seedA, seedB] = pattern[i];
+      await pool.query(
+        `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, player2_id, status)
+         VALUES ($1, 1, $2, $3, $4, 'ready')`,
+        [leagueId, i + 1, qualifiers[seedA - 1].id, qualifiers[seedB - 1].id]
+      );
+    }
+
+    // Later rounds: empty slots, waiting for previous round winners
+    for (let round = 2; round <= totalRounds; round++) {
+      const matchesInRound = qualifierCount / Math.pow(2, round);
+      for (let pos = 1; pos <= matchesInRound; pos++) {
+        await pool.query(
+          `INSERT INTO playoff_matches (league_id, round_number, position, status)
+           VALUES ($1, $2, $3, 'pending')`,
+          [leagueId, round, pos]
+        );
+      }
+    }
+
+    res.status(201).json({ message: 'Playoff bracket generated.' });
+  } catch (err) {
+    console.error('Generate playoffs error:', err);
+    res.status(500).json({ error: 'Something went wrong generating the bracket.' });
+  }
+});
+
+// ---------- GET BRACKET ----------
+router.get('/:leagueId', async (req, res) => {
+  const leagueId = req.params.leagueId;
+
+  try {
+    const result = await pool.query(
+      `SELECT pm.*, p1.username as player1_username, p2.username as player2_username
+       FROM playoff_matches pm
+       LEFT JOIN users p1 ON p1.id = pm.player1_id
+       LEFT JOIN users p2 ON p2.id = pm.player2_id
+       WHERE pm.league_id = $1
+       ORDER BY pm.round_number ASC, pm.position ASC`,
+      [leagueId]
+    );
+    res.status(200).json({ bracket: result.rows });
+  } catch (err) {
+    console.error('Get bracket error:', err);
+    res.status(500).json({ error: 'Something went wrong fetching the bracket.' });
+  }
+});
+
+// ---------- REPORT A PLAYOFF MATCH RESULT ----------
+router.post('/match/:matchId/report', async (req, res) => {
+  const userId = req.userId;
+  const matchId = req.params.matchId;
+  const { myUnits, opponentUnits, iWon, setScores } = req.body;
+
+  if (myUnits == null || opponentUnits == null || iWon == null) {
+    return res.status(400).json({ error: 'Missing required fields.' });
+  }
+
+  try {
+    const matchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
+    if (matchResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Match not found.' });
+    }
+    const match = matchResult.rows[0];
+
+    if (match.status !== 'ready') {
+      return res.status(409).json({ error: 'This match is not ready to be reported.' });
+    }
+    if (![match.player1_id, match.player2_id].includes(userId)) {
+      return res.status(403).json({ error: 'You are not part of this match.' });
+    }
+
+    const winnerId = iWon ? userId : (userId === match.player1_id ? match.player2_id : match.player1_id);
+    const player1Units = userId === match.player1_id ? myUnits : opponentUnits;
+    const player2Units = userId === match.player1_id ? opponentUnits : myUnits;
+
+    await pool.query(
+      `UPDATE playoff_matches SET status = 'reported', reported_by = $1,
+        player1_units = $2, player2_units = $3, winner_id = $4, set_scores = $5
+       WHERE id = $6`,
+      [userId, player1Units, player2Units, winnerId, JSON.stringify(setScores || []), matchId]
+    );
+
+    res.status(200).json({ message: 'Result reported, waiting for confirmation.' });
+  } catch (err) {
+    console.error('Report playoff match error:', err);
+    res.status(500).json({ error: 'Something went wrong reporting the result.' });
+  }
+});
+
+// ---------- CONFIRM A PLAYOFF MATCH RESULT ----------
+router.post('/match/:matchId/confirm', async (req, res) => {
+  const userId = req.userId;
+  const matchId = req.params.matchId;
+
+  try {
+    const matchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
+    if (matchResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Match not found.' });
+    }
+    const match = matchResult.rows[0];
+
+    if (match.status !== 'reported') {
+      return res.status(409).json({ error: 'This match has no pending report to confirm.' });
+    }
+    if (![match.player1_id, match.player2_id].includes(userId)) {
+      return res.status(403).json({ error: 'You are not part of this match.' });
+    }
+    if (userId === match.reported_by) {
+      return res.status(400).json({ error: 'You cannot confirm your own report.' });
+    }
+
+    await pool.query(`UPDATE playoff_matches SET status = 'confirmed' WHERE id = $1`, [matchId]);
+
+    // Advance the winner into the next round's correct slot, if there is one.
+    const nextRound = match.round_number + 1;
+    const nextPosition = Math.ceil(match.position / 2);
+    const isUpperSlot = match.position % 2 === 1; // odd position -> fills player1 slot next round
+
+    const nextMatchResult = await pool.query(
+      'SELECT * FROM playoff_matches WHERE league_id = $1 AND round_number = $2 AND position = $3',
+      [match.league_id, nextRound, nextPosition]
+    );
+
+    if (nextMatchResult.rows.length > 0) {
+      const nextMatch = nextMatchResult.rows[0];
+      if (isUpperSlot) {
+        await pool.query('UPDATE playoff_matches SET player1_id = $1 WHERE id = $2', [match.winner_id, nextMatch.id]);
+      } else {
+        await pool.query('UPDATE playoff_matches SET player2_id = $1 WHERE id = $2', [match.winner_id, nextMatch.id]);
+      }
+
+      const updatedNextMatch = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [nextMatch.id]);
+      const um = updatedNextMatch.rows[0];
+      if (um.player1_id && um.player2_id) {
+        await pool.query(`UPDATE playoff_matches SET status = 'ready' WHERE id = $1`, [nextMatch.id]);
+      }
+    }
+
+    res.status(200).json({ message: 'Match confirmed.' });
+  } catch (err) {
+    console.error('Confirm playoff match error:', err);
+    res.status(500).json({ error: 'Something went wrong confirming the match.' });
+  }
+});
+
+// ---------- REJECT A PLAYOFF MATCH RESULT ----------
+router.post('/match/:matchId/reject', async (req, res) => {
+  const userId = req.userId;
+  const matchId = req.params.matchId;
+
+  try {
+    const matchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
+    if (matchResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Match not found.' });
+    }
+    const match = matchResult.rows[0];
+
+    if (match.status !== 'reported') {
+      return res.status(409).json({ error: 'This match has no pending report to reject.' });
+    }
+    if (![match.player1_id, match.player2_id].includes(userId)) {
+      return res.status(403).json({ error: 'You are not part of this match.' });
+    }
+    if (userId === match.reported_by) {
+      return res.status(400).json({ error: 'You cannot reject your own report.' });
+    }
+
+    await pool.query(
+      `UPDATE playoff_matches SET status = 'ready', reported_by = NULL, winner_id = NULL,
+        player1_units = NULL, player2_units = NULL, set_scores = NULL
+       WHERE id = $1`,
+      [matchId]
+    );
+
+    res.status(200).json({ message: 'Result rejected. It can be reported again.' });
+  } catch (err) {
+    console.error('Reject playoff match error:', err);
+    res.status(500).json({ error: 'Something went wrong rejecting the match.' });
+  }
+});
+
+module.exports = router;
