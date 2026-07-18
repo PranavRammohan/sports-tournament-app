@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../config.dart';
+import '../utils.dart';
 import '../widgets/sport_icon.dart';
 import 'report_match_screen.dart';
 import 'playoffs_screen.dart';
@@ -418,7 +419,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               border: Border.all(color: Colors.grey.shade200),
             ),
             child: Text(
-              '${_league!['season_start']} to ${_league!['season_end']} · ${_leaderboard.length} players · ${_league!['format']} · ${_league!['gender_category'] == 'mens' ? "Men's" : "Women's"}',
+              '${formatDateOnly(_league!['season_start'])} to ${formatDateOnly(_league!['season_end'])} · ${_leaderboard.length} players · ${_league!['format']} · ${_league!['gender_category'] == 'mens' ? "Men's" : "Women's"}',
               style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
             ),
           ),

@@ -129,7 +129,7 @@ router.patch('/profile', authMiddleware, async (req, res) => {
   }
 });
 
-// ---------- CHANGE PASSWORD ----------
+// ---------- CHANGE PASSWORD (while logged in) ----------
 router.patch('/change-password', authMiddleware, async (req, res) => {
   const userId = req.userId;
   const { currentPassword, newPassword } = req.body;
@@ -159,6 +159,39 @@ router.patch('/change-password', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error('Change password error:', err);
     res.status(500).json({ error: 'Something went wrong changing your password.' });
+  }
+});
+
+// ---------- FORGOT PASSWORD (not logged in — verifies via username + phone) ----------
+router.post('/forgot-password', async (req, res) => {
+  const { username, phoneNumber, newPassword } = req.body;
+
+  if (!username || !phoneNumber || !newPassword) {
+    return res.status(400).json({ error: 'All fields are required.' });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: 'New password must be at least 6 characters.' });
+  }
+
+  try {
+    const result = await pool.query(
+      'SELECT id FROM users WHERE username = $1 AND phone_number = $2',
+      [username, phoneNumber]
+    );
+
+    if (result.rows.length === 0) {
+      // Deliberately vague — don't reveal whether the username or the phone was wrong.
+      return res.status(401).json({ error: 'Username and mobile number do not match any account.' });
+    }
+
+    const userId = result.rows[0].id;
+    const newHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, userId]);
+
+    res.status(200).json({ message: 'Password reset successfully. You can now log in.' });
+  } catch (err) {
+    console.error('Forgot password error:', err);
+    res.status(500).json({ error: 'Something went wrong resetting your password.' });
   }
 });
 

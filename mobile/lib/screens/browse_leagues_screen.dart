@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../config.dart';
+import '../utils.dart';
 import '../widgets/sport_icon.dart';
 import 'create_league_screen.dart';
 import 'league_detail_screen.dart';
@@ -175,7 +176,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                                 ),
                                                 const SizedBox(height: 3),
                                                 Text(
-                                                  '${league['season_start']} – ${league['season_end']}',
+                                                  '${formatDateOnly(league['season_start'])} – ${formatDateOnly(league['season_end'])} · ${league['member_count']} players',
                                                   style: const TextStyle(
                                                     fontSize: 11,
                                                     color: AppColors.textGrey,
@@ -191,9 +192,6 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                                               'mens'
                                                           ? "Men's"
                                                           : "Women's",
-                                                    ),
-                                                    _tag(
-                                                      '${league['member_count']} players',
                                                     ),
                                                   ],
                                                 ),
