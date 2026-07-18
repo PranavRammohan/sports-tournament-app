@@ -119,13 +119,6 @@ router.post('/report', async (req, res) => {
       if (alreadyConfirmed.rows.length > 0) {
         return res.status(409).json({ error: 'This scheduled match has already been completed.' });
       }
-
-      // If there's an existing pending or rejected report for this same fixture,
-      // clear it out so this new report can take its place.
-      await pool.query(
-        `DELETE FROM matches WHERE scheduled_match_id = $1 AND status IN ('pending', 'rejected')`,
-        [scheduledMatchId]
-      );
     }
 
     const result = await pool.query(
@@ -184,6 +177,37 @@ router.get('/pending', async (req, res) => {
   } catch (err) {
     console.error('Get pending matches error:', err);
     res.status(500).json({ error: 'Something went wrong fetching pending matches.' });
+  }
+});
+
+// ---------- UPCOMING SCHEDULED MATCHES (across all leagues) ----------
+router.get('/upcoming', async (req, res) => {
+  const userId = req.userId;
+
+  try {
+    const result = await pool.query(
+      `SELECT sm.id, sm.tier_number,
+              l.id as league_id, l.sport, l.area, l.format,
+              p1.username as player1_username, pp1.username as player1_partner_username,
+              p2.username as player2_username, pp2.username as player2_partner_username,
+              sm.player1_id, sm.player1_partner_id, sm.player2_id, sm.player2_partner_id
+       FROM scheduled_matches sm
+       JOIN leagues l ON l.id = sm.league_id
+       LEFT JOIN matches m ON m.scheduled_match_id = sm.id AND m.status = 'confirmed'
+       JOIN users p1 ON p1.id = sm.player1_id
+       JOIN users p2 ON p2.id = sm.player2_id
+       LEFT JOIN users pp1 ON pp1.id = sm.player1_partner_id
+       LEFT JOIN users pp2 ON pp2.id = sm.player2_partner_id
+       WHERE m.id IS NULL
+         AND (sm.player1_id = $1 OR sm.player1_partner_id = $1 OR sm.player2_id = $1 OR sm.player2_partner_id = $1)
+       ORDER BY l.season_end ASC
+       LIMIT 10`,
+      [userId]
+    );
+    res.status(200).json({ upcoming: result.rows });
+  } catch (err) {
+    console.error('Get upcoming matches error:', err);
+    res.status(500).json({ error: 'Something went wrong fetching upcoming matches.' });
   }
 });
 

@@ -45,9 +45,15 @@ router.post('/create', async (req, res) => {
 // ---------- BROWSE LEAGUES ----------
 router.get('/', async (req, res) => {
   const userId = req.userId;
-  const { area, format, genderCategory } = req.query;
+  const { area, format } = req.query;
 
   try {
+    const userResult = await pool.query('SELECT gender FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    const userGenderCategory = userResult.rows[0].gender === 'M' ? 'mens' : 'womens';
+
     let query = `
       SELECT l.id, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
              COUNT(lm.id) AS member_count
@@ -57,8 +63,9 @@ router.get('/', async (req, res) => {
         SELECT 1 FROM user_sports us
         WHERE us.user_id = $1 AND us.sport = l.sport
       )
+      AND l.gender_category = $2
     `;
-    const params = [userId];
+    const params = [userId, userGenderCategory];
 
     if (area) {
       params.push(area);
@@ -67,10 +74,6 @@ router.get('/', async (req, res) => {
     if (format) {
       params.push(format);
       query += ` AND l.format = $${params.length}`;
-    }
-    if (genderCategory) {
-      params.push(genderCategory);
-      query += ` AND l.gender_category = $${params.length}`;
     }
 
     query += ` GROUP BY l.id ORDER BY l.season_start ASC`;
@@ -116,10 +119,17 @@ router.post('/:id/join', async (req, res) => {
     if (league.rows.length === 0) {
       return res.status(404).json({ error: 'League not found.' });
     }
+    const leagueData = league.rows[0];
+
+    const userResult = await pool.query('SELECT gender FROM users WHERE id = $1', [userId]);
+    const userGenderCategory = userResult.rows[0].gender === 'M' ? 'mens' : 'womens';
+    if (leagueData.gender_category !== userGenderCategory) {
+      return res.status(403).json({ error: 'This league is not in your gender category.' });
+    }
 
     const hasSport = await pool.query(
       'SELECT id FROM user_sports WHERE user_id = $1 AND sport = $2 LIMIT 1',
-      [userId, league.rows[0].sport]
+      [userId, leagueData.sport]
     );
     if (hasSport.rows.length === 0) {
       return res.status(403).json({ error: 'You need to add this sport to your profile before joining.' });
@@ -265,7 +275,8 @@ router.post('/:id/generate-schedule', async (req, res) => {
     );
     const members = membersResult.rows;
 
-    if (members.length < (league.format === 'doubles' ? 4 : 2)) {
+    const minPlayersRequired = league.format === 'doubles' ? 4 : 2;
+    if (members.length < minPlayersRequired) {
       return res.status(400).json({
         error: league.format === 'doubles'
           ? 'Need at least 4 players to generate a doubles schedule.'
@@ -273,9 +284,19 @@ router.post('/:id/generate-schedule', async (req, res) => {
       });
     }
 
+    // Split into tiers of TIER_SIZE, sorted strongest-first.
     const tiers = [];
     for (let i = 0; i < members.length; i += TIER_SIZE) {
       tiers.push(members.slice(i, i + TIER_SIZE));
+    }
+
+    // Fix: if the leftover final tier is too small to generate matches on its own
+    // (e.g. just 1 player left over for singles, or fewer than 4 for doubles),
+    // merge it into the previous tier instead of leaving those players with no matches.
+    const minTierSize = league.format === 'doubles' ? 4 : 2;
+    while (tiers.length > 1 && tiers[tiers.length - 1].length < minTierSize) {
+      const leftover = tiers.pop();
+      tiers[tiers.length - 1] = tiers[tiers.length - 1].concat(leftover);
     }
 
     const scheduledMatches = [];

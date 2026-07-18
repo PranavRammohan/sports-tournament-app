@@ -27,8 +27,13 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   bool _loading = true;
   bool _deleting = false;
   bool _leaving = false;
+  bool _joining = false;
   bool _generating = false;
   String? _error;
+
+  bool get _isMember =>
+      _currentUserId != null &&
+      _leaderboard.any((p) => p['id'] == _currentUserId);
 
   @override
   void initState() {
@@ -87,6 +92,45 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       setState(() => _error = 'Could not reach the server.');
     } finally {
       setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _joinLeague() async {
+    setState(() => _joining = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+
+      final response = await http.post(
+        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/join'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      final data = jsonDecode(response.body);
+
+      if (!mounted) return;
+      if (response.statusCode == 201) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Joined league!'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        await _loadAll();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not join.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _joining = false);
     }
   }
 
@@ -301,7 +345,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                     : const Icon(Icons.delete_outline),
                 onPressed: _deleting ? null : _confirmDelete,
               )
-            else
+            else if (_isMember)
               IconButton(
                 icon: _leaving
                     ? const SizedBox(
@@ -335,24 +379,26 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
             _buildHistoryTab(),
           ],
         ),
-        floatingActionButton: FloatingActionButton.extended(
-          onPressed: () async {
-            final reported = await Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => ReportMatchScreen(
-                  leagueId: widget.leagueId,
-                  format: _league!['format'],
-                  sport: _league!['sport'],
-                  members: _leaderboard,
-                ),
-              ),
-            );
-            if (reported == true) _loadAll();
-          },
-          icon: const Icon(Icons.sports_score),
-          label: const Text('Report'),
-        ),
+        floatingActionButton: _isMember
+            ? FloatingActionButton.extended(
+                onPressed: () async {
+                  final reported = await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => ReportMatchScreen(
+                        leagueId: widget.leagueId,
+                        format: _league!['format'],
+                        sport: _league!['sport'],
+                        members: _leaderboard,
+                      ),
+                    ),
+                  );
+                  if (reported == true) _loadAll();
+                },
+                icon: const Icon(Icons.sports_score),
+                label: const Text('Report'),
+              )
+            : null,
       ),
     );
   }
@@ -376,7 +422,25 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
             ),
           ),
-          if (_league!['format'] == 'singles')
+          if (!_isMember)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: ElevatedButton.icon(
+                onPressed: _joining ? null : _joinLeague,
+                icon: _joining
+                    ? const SizedBox(
+                        height: 16,
+                        width: 16,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Icon(Icons.add),
+                label: const Text('Join League'),
+              ),
+            ),
+          if (_isMember && _league!['format'] == 'singles')
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: OutlinedButton.icon(
@@ -464,6 +528,19 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   }
 
   Widget _buildScheduleTab() {
+    if (!_isMember) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            'Join this league to see the schedule.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ),
+      );
+    }
+
     if (_schedule.isEmpty) {
       return Center(
         child: Padding(

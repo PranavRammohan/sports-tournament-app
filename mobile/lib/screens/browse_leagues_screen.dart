@@ -22,7 +22,6 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
   bool _didJoinAny = false;
 
   String? _filterFormat;
-  String? _filterGenderCategory;
 
   @override
   void initState() {
@@ -38,8 +37,6 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
 
       final queryParams = <String, String>{};
       if (_filterFormat != null) queryParams['format'] = _filterFormat!;
-      if (_filterGenderCategory != null)
-        queryParams['genderCategory'] = _filterGenderCategory!;
 
       final uri = Uri.parse(
         '$baseApiUrl/leagues',
@@ -58,44 +55,6 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
       // fail silently
     } finally {
       setState(() => _loading = false);
-    }
-  }
-
-  Future<void> _joinLeague(int leagueId) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/$leagueId/join'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-
-      final data = jsonDecode(response.body);
-
-      if (!mounted) return;
-      if (response.statusCode == 201) {
-        _didJoinAny = true;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Joined league!'),
-            backgroundColor: AppColors.success,
-          ),
-        );
-        _loadLeagues();
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(data['error'] ?? 'Could not join.'),
-            backgroundColor: AppColors.danger,
-          ),
-        );
-      }
-    } catch (err) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Network error.')));
     }
   }
 
@@ -121,55 +80,21 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _filterFormat,
-                      decoration: const InputDecoration(
-                        labelText: 'Format',
-                        isDense: true,
-                      ),
-                      items: const [
-                        DropdownMenuItem(value: null, child: Text('Any')),
-                        DropdownMenuItem(
-                          value: 'singles',
-                          child: Text('Singles'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'doubles',
-                          child: Text('Doubles'),
-                        ),
-                      ],
-                      onChanged: (v) {
-                        setState(() => _filterFormat = v);
-                        _loadLeagues();
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _filterGenderCategory,
-                      decoration: const InputDecoration(
-                        labelText: 'Category',
-                        isDense: true,
-                      ),
-                      items: const [
-                        DropdownMenuItem(value: null, child: Text('Any')),
-                        DropdownMenuItem(value: 'mens', child: Text("Men's")),
-                        DropdownMenuItem(
-                          value: 'womens',
-                          child: Text("Women's"),
-                        ),
-                      ],
-                      onChanged: (v) {
-                        setState(() => _filterGenderCategory = v);
-                        _loadLeagues();
-                      },
-                    ),
-                  ),
+              child: DropdownButtonFormField<String>(
+                initialValue: _filterFormat,
+                decoration: const InputDecoration(
+                  labelText: 'Format',
+                  isDense: true,
+                ),
+                items: const [
+                  DropdownMenuItem(value: null, child: Text('Any')),
+                  DropdownMenuItem(value: 'singles', child: Text('Singles')),
+                  DropdownMenuItem(value: 'doubles', child: Text('Doubles')),
                 ],
+                onChanged: (v) {
+                  setState(() => _filterFormat = v);
+                  _loadLeagues();
+                },
               ),
             ),
             Expanded(
@@ -223,8 +148,12 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                         ),
                                       );
                                       if (result == 'deleted' ||
-                                          result == 'left')
+                                          result == 'left' ||
+                                          result == 'joined') {
+                                        _didJoinAny =
+                                            _didJoinAny || result == 'joined';
                                         _loadLeagues();
+                                      }
                                     },
                                     child: Padding(
                                       padding: const EdgeInsets.all(12),
@@ -271,20 +200,9 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                               ],
                                             ),
                                           ),
-                                          ElevatedButton(
-                                            style: ElevatedButton.styleFrom(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 14,
-                                                    vertical: 9,
-                                                  ),
-                                            ),
-                                            onPressed: () =>
-                                                _joinLeague(league['id']),
-                                            child: const Text(
-                                              'Join',
-                                              style: TextStyle(fontSize: 13),
-                                            ),
+                                          Icon(
+                                            Icons.chevron_right,
+                                            color: Colors.grey.shade400,
                                           ),
                                         ],
                                       ),

@@ -150,8 +150,11 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
                                   ),
                                 ),
                               );
-                              if (result == 'deleted' || result == 'left')
+                              if (result == 'deleted' ||
+                                  result == 'left' ||
+                                  result == 'joined') {
                                 _loadLeagues();
+                              }
                             },
                           ),
                         );
