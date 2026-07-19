@@ -131,14 +131,14 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
                             ),
                             leading: sportIcon(league['sport'], size: 22),
                             title: Text(
-                              '${_formatSport(league['sport'])} · ${league['area']}',
+                              league['name'],
                               style: const TextStyle(
                                 fontWeight: FontWeight.w600,
                                 fontSize: 14,
                               ),
                             ),
                             subtitle: Text(
-                              '${formatDateOnly(league['season_start'])} – ${formatDateOnly(league['season_end'])} · ${league['member_count']} players',
+                              '${_formatSport(league['sport'])} · ${league['area']} · ${formatDateOnly(league['season_start'])} – ${formatDateOnly(league['season_end'])} · ${league['member_count']} players',
                               style: const TextStyle(fontSize: 12),
                             ),
                             trailing: const Icon(Icons.chevron_right, size: 20),

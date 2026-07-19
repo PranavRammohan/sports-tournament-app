@@ -59,6 +59,44 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
     }
   }
 
+  Future<void> _joinLeague(int leagueId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+
+      final response = await http.post(
+        Uri.parse('$baseApiUrl/leagues/$leagueId/join'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (!mounted) return;
+      if (response.statusCode == 201) {
+        _didJoinAny = true;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Joined league!'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadLeagues();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not join.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    }
+  }
+
   String _formatSport(String sport) => sport
       .split('_')
       .map((w) => w[0].toUpperCase() + w.substring(1))
@@ -168,10 +206,18 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                                   CrossAxisAlignment.start,
                                               children: [
                                                 Text(
-                                                  '${_formatSport(league['sport'])} · ${league['area']}',
+                                                  league['name'],
                                                   style: const TextStyle(
                                                     fontWeight: FontWeight.w600,
                                                     fontSize: 14,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 1),
+                                                Text(
+                                                  '${_formatSport(league['sport'])} · ${league['area']}',
+                                                  style: const TextStyle(
+                                                    fontSize: 11,
+                                                    color: AppColors.textGrey,
                                                   ),
                                                 ),
                                                 const SizedBox(height: 3),

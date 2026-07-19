@@ -366,10 +366,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               sportIcon(_league!['sport'], size: 18),
               const SizedBox(width: 8),
               Flexible(
-                child: Text(
-                  '${_formatSport(_league!['sport'])} · ${_league!['area']}',
-                  overflow: TextOverflow.ellipsis,
-                ),
+                child: Text(_league!['name'], overflow: TextOverflow.ellipsis),
               ),
             ],
           ),
@@ -445,6 +442,15 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
+                  '${_formatSport(_league!['sport'])} · ${_league!['area']}',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textDark,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
                   '${formatDateOnly(_league!['season_start'])} to ${formatDateOnly(_league!['season_end'])} · ${_leaderboard.length} players · ${_league!['format']} · ${_league!['gender_category'] == 'mens' ? "Men's" : "Women's"}',
                   style: const TextStyle(
                     fontSize: 12,
@@ -500,7 +506,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 label: const Text('Playoffs'),
               ),
             ),
-          if (_isMember && isHost && _schedule.isEmpty)
+          if (isHost && _schedule.isEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: ElevatedButton(

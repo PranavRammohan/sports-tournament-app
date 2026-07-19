@@ -9,11 +9,11 @@ const TIER_SIZE = 4;
 router.post('/create', async (req, res) => {
   const userId = req.userId;
   const {
-    sport, area, seasonStart, seasonEnd, format, genderCategory,
-    scheduleType, matchesPerPlayer, hostEntersScores,
+    name, sport, area, seasonStart, seasonEnd, format, genderCategory,
+    scheduleType, matchesPerPlayer, hostEntersScores, hostPlays,
   } = req.body;
 
-  if (!sport || !area || !seasonStart || !seasonEnd || !format || !genderCategory) {
+  if (!name || !sport || !area || !seasonStart || !seasonEnd || !format || !genderCategory) {
     return res.status(400).json({ error: 'All fields are required.' });
   }
   if (!['singles', 'doubles'].includes(format)) {
@@ -29,13 +29,13 @@ router.post('/create', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO leagues (sport, area, season_start, season_end, created_by, format, gender_category,
+      `INSERT INTO leagues (name, sport, area, season_start, season_end, created_by, format, gender_category,
                             schedule_type, matches_per_player, host_enters_scores)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING id, sport, area, season_start, season_end, format, gender_category, created_by,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING id, name, sport, area, season_start, season_end, format, gender_category, created_by,
                  schedule_type, matches_per_player, host_enters_scores`,
       [
-        sport, area, seasonStart, seasonEnd, userId, format, genderCategory,
+        name, sport, area, seasonStart, seasonEnd, userId, format, genderCategory,
         finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null,
         hostEntersScores === true,
       ]
@@ -43,10 +43,12 @@ router.post('/create', async (req, res) => {
 
     const league = result.rows[0];
 
-    await pool.query(
-      `INSERT INTO league_members (league_id, user_id) VALUES ($1, $2)`,
-      [league.id, userId]
-    );
+    if (hostPlays !== false) {
+      await pool.query(
+        `INSERT INTO league_members (league_id, user_id) VALUES ($1, $2)`,
+        [league.id, userId]
+      );
+    }
 
     res.status(201).json({ league });
   } catch (err) {
@@ -68,7 +70,7 @@ router.get('/', async (req, res) => {
     const userGenderCategory = userResult.rows[0].gender === 'M' ? 'mens' : 'womens';
 
     let query = `
-      SELECT l.id, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
+      SELECT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
              l.schedule_type, l.matches_per_player, l.host_enters_scores,
              COUNT(lm.id) AS member_count
       FROM leagues l
@@ -101,19 +103,19 @@ router.get('/', async (req, res) => {
 });
 
 // ---------- MY LEAGUES ----------
+// Includes leagues the user is a member of, AND leagues they created as a pure
+// organizer (not a player) so they can still manage/view leagues they host.
 router.get('/mine', async (req, res) => {
   const userId = req.userId;
 
   try {
     const result = await pool.query(
-      `SELECT l.id, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
+      `SELECT DISTINCT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
               l.schedule_type, l.matches_per_player, l.host_enters_scores,
-              COUNT(lm2.id) AS member_count
-       FROM league_members lm
-       JOIN leagues l ON l.id = lm.league_id
-       LEFT JOIN league_members lm2 ON lm2.league_id = l.id
-       WHERE lm.user_id = $1
-       GROUP BY l.id
+              (SELECT COUNT(*) FROM league_members lm2 WHERE lm2.league_id = l.id) AS member_count
+       FROM leagues l
+       LEFT JOIN league_members lm ON lm.league_id = l.id AND lm.user_id = $1
+       WHERE lm.user_id = $1 OR l.created_by = $1
        ORDER BY l.season_start ASC`,
       [userId]
     );
@@ -296,8 +298,6 @@ router.post('/:id/generate-schedule', async (req, res) => {
   }
 });
 
-// Original tiered round-robin generator (singles: tier-based full round robin;
-// doubles: pairs strongest-with-weakest into teams, then round robins the teams).
 function generateRoundRobinSchedule(members, format) {
   const tiers = [];
   for (let i = 0; i < members.length; i += TIER_SIZE) {
@@ -356,9 +356,6 @@ function generateRoundRobinSchedule(members, format) {
   return scheduledMatches;
 }
 
-// "Matches per player" generator for larger singles leagues (8+ players).
-// Round by round, pairs players closest in rating who haven't played each other yet.
-// Each round becomes its own "tier" number just for grouping/display purposes.
 function generateMatchesPerPlayerSchedule(members, matchesPerPlayer) {
   const scheduledMatches = [];
   const playedPairs = new Set();
@@ -368,7 +365,6 @@ function generateMatchesPerPlayerSchedule(members, matchesPerPlayer) {
   const pairKey = (a, b) => [a, b].sort((x, y) => x - y).join('-');
 
   for (let round = 1; round <= matchesPerPlayer; round++) {
-    // Players still needing a match this round, sorted by rating (closest matchups first)
     let available = members
       .filter((m) => matchCounts[m.id] < round)
       .sort((a, b) => b.rating - a.rating);
@@ -379,7 +375,6 @@ function generateMatchesPerPlayerSchedule(members, matchesPerPlayer) {
       const playerA = available[i];
       if (usedThisRound.has(playerA.id)) continue;
 
-      // Find the closest-rated available opponent not yet used this round and not already played
       let opponent = null;
       for (let j = i + 1; j < available.length; j++) {
         const candidate = available[j];
@@ -389,7 +384,6 @@ function generateMatchesPerPlayerSchedule(members, matchesPerPlayer) {
         break;
       }
 
-      // If everyone close by has already been played, allow a repeat rather than skipping entirely
       if (!opponent) {
         for (let j = i + 1; j < available.length; j++) {
           const candidate = available[j];

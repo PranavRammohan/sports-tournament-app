@@ -75,6 +75,7 @@ class CreateLeagueScreen extends StatefulWidget {
 }
 
 class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
+  final TextEditingController _nameController = TextEditingController();
   String? _selectedSport;
   String? _selectedArea;
   String? _selectedFormat;
@@ -87,6 +88,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   final TextEditingController _matchesPerPlayerController =
       TextEditingController();
   bool _hostEntersScores = false;
+  bool _hostPlays = true;
 
   Future<void> _pickDate({required bool isStart}) async {
     final picked = await showDatePicker(
@@ -107,7 +109,10 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   }
 
   Future<void> _handleCreate() async {
-    if (_selectedSport == null ||
+    final name = _nameController.text.trim();
+
+    if (name.isEmpty ||
+        _selectedSport == null ||
         _selectedArea == null ||
         _selectedFormat == null ||
         _selectedGenderCategory == null ||
@@ -146,6 +151,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
           'Authorization': 'Bearer $token',
         },
         body: jsonEncode({
+          'name': name,
           'sport': _selectedSport!.toLowerCase().replaceAll(' ', '_'),
           'area': _selectedArea,
           'seasonStart': _startDate!.toIso8601String().split('T')[0],
@@ -157,6 +163,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
           'scheduleType': _scheduleType,
           'matchesPerPlayer': matchesPerPlayer,
           'hostEntersScores': _hostEntersScores,
+          'hostPlays': _hostPlays,
         }),
       );
 
@@ -210,6 +217,15 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            TextField(
+              controller: _nameController,
+              decoration: const InputDecoration(
+                labelText: 'League Name',
+                hintText: 'e.g. Koramangala Summer Tennis League',
+                prefixIcon: Icon(Icons.badge_outlined),
+              ),
+            ),
+            const SizedBox(height: 16),
             DropdownButtonFormField<String>(
               initialValue: _selectedSport,
               decoration: const InputDecoration(labelText: 'Sport'),
@@ -317,6 +333,16 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               title: const Text('I will enter all match scores myself'),
               subtitle: const Text(
                 'For academies or organizers running the event — scores you enter are confirmed instantly, no player confirmation needed.',
+                style: TextStyle(fontSize: 12),
+              ),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: !_hostPlays,
+              onChanged: (v) => setState(() => _hostPlays = !v),
+              title: const Text("I'm just organizing, not playing"),
+              subtitle: const Text(
+                "You won't appear on the leaderboard or schedule as a player.",
                 style: TextStyle(fontSize: 12),
               ),
             ),
