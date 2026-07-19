@@ -466,6 +466,39 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                     fontStyle: FontStyle.italic,
                   ),
                 ),
+                if (_league!['is_private'] == true && isHost) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.background,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.grey.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.key_outlined,
+                          size: 16,
+                          color: AppColors.textDark,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Join code: ${_league!['join_code']}',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textDark,
+                            letterSpacing: 1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

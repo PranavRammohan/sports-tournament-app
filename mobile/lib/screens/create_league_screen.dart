@@ -89,6 +89,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
       TextEditingController();
   bool _hostEntersScores = false;
   bool _hostPlays = true;
+  bool _isPrivate = false;
 
   Future<void> _pickDate({required bool isStart}) async {
     final picked = await showDatePicker(
@@ -164,6 +165,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
           'matchesPerPlayer': matchesPerPlayer,
           'hostEntersScores': _hostEntersScores,
           'hostPlays': _hostPlays,
+          'isPrivate': _isPrivate,
         }),
       );
 
@@ -175,6 +177,55 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
           data['error'] ?? 'Please try again.',
         );
         return;
+      }
+
+      if (!mounted) return;
+
+      // If a private league was created, show the join code before leaving the screen.
+      final league = data['league'];
+      if (_isPrivate && league['join_code'] != null) {
+        await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            title: const Text('League created!'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Share this code with the people you want to invite:',
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    league['join_code'],
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 4,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
       }
 
       if (!mounted) return;
@@ -343,6 +394,16 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               title: const Text("I'm just organizing, not playing"),
               subtitle: const Text(
                 "You won't appear on the leaderboard or schedule as a player.",
+                style: TextStyle(fontSize: 12),
+              ),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _isPrivate,
+              onChanged: (v) => setState(() => _isPrivate = v),
+              title: const Text('Make this league private'),
+              subtitle: const Text(
+                "Won't show up in Browse Leagues. Only people with the join code can join.",
                 style: TextStyle(fontSize: 12),
               ),
             ),

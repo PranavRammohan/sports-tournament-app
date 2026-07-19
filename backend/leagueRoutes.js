@@ -5,12 +5,21 @@ const pool = require('./db');
 
 const TIER_SIZE = 4;
 
+function generateJoinCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no O/0/I/1 to avoid confusion
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
+}
+
 // ---------- CREATE LEAGUE ----------
 router.post('/create', async (req, res) => {
   const userId = req.userId;
   const {
     name, sport, area, seasonStart, seasonEnd, format, genderCategory,
-    scheduleType, matchesPerPlayer, hostEntersScores, hostPlays,
+    scheduleType, matchesPerPlayer, hostEntersScores, hostPlays, isPrivate,
   } = req.body;
 
   if (!name || !sport || !area || !seasonStart || !seasonEnd || !format || !genderCategory) {
@@ -28,16 +37,27 @@ router.post('/create', async (req, res) => {
   }
 
   try {
+    let joinCode = null;
+    if (isPrivate === true) {
+      // Keep generating until we find one that isn't already in use.
+      let unique = false;
+      while (!unique) {
+        joinCode = generateJoinCode();
+        const existing = await pool.query('SELECT id FROM leagues WHERE join_code = $1', [joinCode]);
+        if (existing.rows.length === 0) unique = true;
+      }
+    }
+
     const result = await pool.query(
       `INSERT INTO leagues (name, sport, area, season_start, season_end, created_by, format, gender_category,
-                            schedule_type, matches_per_player, host_enters_scores)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                            schedule_type, matches_per_player, host_enters_scores, is_private, join_code)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING id, name, sport, area, season_start, season_end, format, gender_category, created_by,
-                 schedule_type, matches_per_player, host_enters_scores`,
+                 schedule_type, matches_per_player, host_enters_scores, is_private, join_code`,
       [
         name, sport, area, seasonStart, seasonEnd, userId, format, genderCategory,
         finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null,
-        hostEntersScores === true,
+        hostEntersScores === true, isPrivate === true, joinCode,
       ]
     );
 
@@ -57,7 +77,7 @@ router.post('/create', async (req, res) => {
   }
 });
 
-// ---------- BROWSE LEAGUES ----------
+// ---------- BROWSE LEAGUES (public only) ----------
 router.get('/', async (req, res) => {
   const userId = req.userId;
   const { area, format } = req.query;
@@ -71,7 +91,7 @@ router.get('/', async (req, res) => {
 
     let query = `
       SELECT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
-             l.schedule_type, l.matches_per_player, l.host_enters_scores,
+             l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private,
              COUNT(lm.id) AS member_count
       FROM leagues l
       LEFT JOIN league_members lm ON lm.league_id = l.id
@@ -80,6 +100,7 @@ router.get('/', async (req, res) => {
         WHERE us.user_id = $1 AND us.sport = l.sport
       )
       AND l.gender_category = $2
+      AND l.is_private = false
     `;
     const params = [userId, userGenderCategory];
 
@@ -103,15 +124,13 @@ router.get('/', async (req, res) => {
 });
 
 // ---------- MY LEAGUES ----------
-// Includes leagues the user is a member of, AND leagues they created as a pure
-// organizer (not a player) so they can still manage/view leagues they host.
 router.get('/mine', async (req, res) => {
   const userId = req.userId;
 
   try {
     const result = await pool.query(
       `SELECT DISTINCT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
-              l.schedule_type, l.matches_per_player, l.host_enters_scores,
+              l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.join_code,
               (SELECT COUNT(*) FROM league_members lm2 WHERE lm2.league_id = l.id) AS member_count
        FROM leagues l
        LEFT JOIN league_members lm ON lm.league_id = l.id AND lm.user_id = $1
@@ -126,7 +145,7 @@ router.get('/mine', async (req, res) => {
   }
 });
 
-// ---------- JOIN LEAGUE ----------
+// ---------- JOIN LEAGUE (by id, public leagues) ----------
 router.post('/:id/join', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.id;
@@ -172,6 +191,59 @@ router.post('/:id/join', async (req, res) => {
   }
 });
 
+// ---------- JOIN LEAGUE BY CODE (private leagues) ----------
+router.post('/join-by-code', async (req, res) => {
+  const userId = req.userId;
+  const { code } = req.body;
+
+  if (!code) {
+    return res.status(400).json({ error: 'Please enter a join code.' });
+  }
+
+  try {
+    const league = await pool.query(
+      'SELECT * FROM leagues WHERE join_code = $1 AND is_private = true',
+      [code.trim().toUpperCase()]
+    );
+    if (league.rows.length === 0) {
+      return res.status(404).json({ error: 'Invalid join code.' });
+    }
+    const leagueData = league.rows[0];
+
+    const userResult = await pool.query('SELECT gender FROM users WHERE id = $1', [userId]);
+    const userGenderCategory = userResult.rows[0].gender === 'M' ? 'mens' : 'womens';
+    if (leagueData.gender_category !== userGenderCategory) {
+      return res.status(403).json({ error: 'This league is not in your gender category.' });
+    }
+
+    const hasSport = await pool.query(
+      'SELECT id FROM user_sports WHERE user_id = $1 AND sport = $2 LIMIT 1',
+      [userId, leagueData.sport]
+    );
+    if (hasSport.rows.length === 0) {
+      return res.status(403).json({ error: 'You need to add this sport to your profile before joining.' });
+    }
+
+    const existing = await pool.query(
+      'SELECT id FROM league_members WHERE league_id = $1 AND user_id = $2',
+      [leagueData.id, userId]
+    );
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'You already joined this league.' });
+    }
+
+    await pool.query(
+      'INSERT INTO league_members (league_id, user_id) VALUES ($1, $2)',
+      [leagueData.id, userId]
+    );
+
+    res.status(201).json({ message: 'Joined league successfully.', leagueId: leagueData.id });
+  } catch (err) {
+    console.error('Join by code error:', err);
+    res.status(500).json({ error: 'Something went wrong joining the league.' });
+  }
+});
+
 // ---------- LEAVE LEAGUE ----------
 router.post('/:id/leave', async (req, res) => {
   const userId = req.userId;
@@ -201,7 +273,7 @@ router.post('/:id/leave', async (req, res) => {
   }
 });
 
-// ---------- LEAGUE DETAIL + DUAL LEADERBOARD (points primary, rating shown alongside) ----------
+// ---------- LEAGUE DETAIL + DUAL LEADERBOARD ----------
 router.get('/:id', async (req, res) => {
   const leagueId = req.params.id;
 
