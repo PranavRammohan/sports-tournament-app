@@ -4,6 +4,17 @@ const router = express.Router();
 const pool = require('./db');
 const { calculateNewRatings } = require('./ratingEngine');
 
+// Approximate real-world scale for each sport's rating system, used only to
+// judge how "big" a rating gap is (as a fraction of the sport's typical
+// range) when deciding league-points upset bonuses. Does not affect the
+// actual rating engine at all.
+const SPORT_RATING_RANGES = {
+  badminton: 7000,
+  tennis: 15.5,
+  table_tennis: 2300,
+  pickleball: 6.0,
+};
+
 async function getRating(userId, sport, format) {
   const result = await pool.query(
     'SELECT rating FROM user_sports WHERE user_id = $1 AND sport = $2 AND format = $3',
@@ -31,19 +42,32 @@ async function updateRating(userId, sport, format, newRating, won) {
   }
 }
 
-function calculateLeaguePoints(setScores, winnerWonTeam1) {
+// League Points: base 2 for a win. If the winner was rated LOWER than the
+// loser going in (a genuine upset), add a bonus scaled to how big that gap
+// was — a small upset earns +1, a big one earns +2. Beating someone rated
+// lower (an expected win) earns no upset bonus at all. A dominant win
+// (didn't drop a single set/game) adds +1 on top, regardless of the above.
+function calculateLeaguePoints(sport, winnerRating, loserRating, setScores, winnerWonTeam1) {
   let points = 2;
+
+  if (winnerRating != null && loserRating != null && winnerRating < loserRating) {
+    const range = SPORT_RATING_RANGES[sport] || 1;
+    const gapFraction = (loserRating - winnerRating) / range;
+    points += gapFraction > 0.15 ? 2 : 1;
+  }
+
   try {
     const sets = JSON.parse(setScores);
-    const wonEverySet = sets.every((s) => {
+    const wonEverySet = sets.length > 0 && sets.every((s) => {
       const winnerScore = winnerWonTeam1 ? s.me : s.opponent;
       const loserScore = winnerWonTeam1 ? s.opponent : s.me;
       return winnerScore > loserScore;
     });
-    if (wonEverySet && sets.length > 0) points += 1;
+    if (wonEverySet) points += 1;
   } catch (err) {
-    // if parsing fails, just award the base 2 points
+    // if parsing fails, just skip the dominant-win bonus
   }
+
   return points;
 }
 
@@ -125,7 +149,12 @@ async function finalizeMatch(match, league) {
     [player1RatingChange, player2RatingChange, player1PartnerRatingChange, player2PartnerRatingChange, match.id]
   );
 
-  const points = calculateLeaguePoints(match.set_scores, team1Won);
+  // League points, based on the PRE-MATCH ratings (team1Rating/team2Rating),
+  // so an upset is judged on who was actually favored going in.
+  const winnerRating = team1Won ? team1Rating : team2Rating;
+  const loserRating = team1Won ? team2Rating : team1Rating;
+  const points = calculateLeaguePoints(sport, winnerRating, loserRating, match.set_scores, team1Won);
+
   await awardLeaguePoints(match.league_id, match.winner_id, points);
   if (match.winner_id === match.player1_id && match.player1_partner_id) {
     await awardLeaguePoints(match.league_id, match.player1_partner_id, points);
@@ -233,7 +262,7 @@ router.post('/report', async (req, res) => {
   }
 });
 
-// ---------- HOST ENTERS A MATCH SCORE DIRECTLY (auto-confirmed, for academies/organizers) ----------
+// ---------- HOST ENTERS A MATCH SCORE DIRECTLY (auto-confirmed) ----------
 router.post('/report-as-host', async (req, res) => {
   const userId = req.userId;
   const {

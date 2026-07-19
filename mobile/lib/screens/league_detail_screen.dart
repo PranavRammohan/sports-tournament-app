@@ -10,6 +10,8 @@ import '../widgets/sport_icon.dart';
 import 'report_match_screen.dart';
 import 'host_report_match_screen.dart';
 import 'playoffs_screen.dart';
+import 'regenerate_schedule_dialog.dart';
+import 'add_players_screen.dart';
 
 class LeagueDetailScreen extends StatefulWidget {
   final int leagueId;
@@ -30,6 +32,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   bool _leaving = false;
   bool _joining = false;
   bool _generating = false;
+  bool _regenerating = false;
   String? _error;
 
   bool get _isMember =>
@@ -162,6 +165,86 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       ).showSnackBar(const SnackBar(content: Text('Network error.')));
     } finally {
       if (mounted) setState(() => _generating = false);
+    }
+  }
+
+  Future<void> _regenerateSchedule() async {
+    final result = await showDialog<RegenerateScheduleResult>(
+      context: context,
+      builder: (ctx) => RegenerateScheduleDialog(
+        currentScheduleType: _league!['schedule_type'] ?? 'round_robin',
+        currentMatchesPerPlayer: _league!['matches_per_player'],
+        isSingles: _league!['format'] == 'singles',
+      ),
+    );
+    if (result == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Confirm regeneration?'),
+        content: const Text(
+          'This replaces the current fixture list. Confirmed results stay in history, but any pending unconfirmed reports will be discarded.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Regenerate'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _regenerating = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+
+      final response = await http.post(
+        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/regenerate-schedule'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'scheduleType': result.scheduleType,
+          'matchesPerPlayer': result.matchesPerPlayer,
+        }),
+      );
+      final data = jsonDecode(response.body);
+
+      if (!mounted) return;
+      if (response.statusCode == 201) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Schedule regenerated: ${data['matchCount']} matches',
+            ),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadAll();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not regenerate schedule.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _regenerating = false);
     }
   }
 
@@ -373,6 +456,21 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           actions: [
             if (isHost)
               IconButton(
+                icon: const Icon(Icons.person_add_alt_outlined),
+                tooltip: 'Add players',
+                onPressed: () async {
+                  final result = await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          AddPlayersScreen(leagueId: widget.leagueId),
+                    ),
+                  );
+                  if (result != null) _loadAll();
+                },
+              ),
+            if (isHost)
+              IconButton(
                 icon: _deleting
                     ? const SizedBox(
                         height: 18,
@@ -415,7 +513,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         body: TabBarView(
           children: [
             _buildLeaderboardTab(isHost),
-            _buildScheduleTab(),
+            _buildScheduleTab(isHost),
             _buildMyMatchesTab(),
           ],
         ),
@@ -637,7 +735,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
   }
 
-  Widget _buildScheduleTab() {
+  Widget _buildScheduleTab(bool isHost) {
     if (!_isMember) {
       return Center(
         child: Padding(
@@ -671,28 +769,50 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       tiers.putIfAbsent(f['tier_number'], () => []).add(f);
     }
 
+    final isMatchesPerPlayer =
+        _league!['schedule_type'] == 'matches_per_player';
+
     return RefreshIndicator(
       onRefresh: _loadAll,
       child: ListView(
         padding: const EdgeInsets.all(16),
-        children: tiers.entries.map((entry) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Tier ${entry.key}',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                ...entry.value.map(
-                  (f) => _buildFixtureCard(f, showContacts: true),
-                ),
-              ],
+        children: [
+          if (isHost)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: OutlinedButton.icon(
+                onPressed: _regenerating ? null : _regenerateSchedule,
+                icon: _regenerating
+                    ? const SizedBox(
+                        height: 16,
+                        width: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh),
+                label: const Text('Regenerate Schedule'),
+              ),
             ),
-          );
-        }).toList(),
+          ...tiers.entries.map((entry) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (!isMatchesPerPlayer) ...[
+                    Text(
+                      'Tier ${entry.key}',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  ...entry.value.map(
+                    (f) => _buildFixtureCard(f, showContacts: true),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
       ),
     );
   }

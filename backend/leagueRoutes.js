@@ -6,7 +6,7 @@ const pool = require('./db');
 const TIER_SIZE = 4;
 
 function generateJoinCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no O/0/I/1 to avoid confusion
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
   for (let i = 0; i < 6; i++) {
     code += chars[Math.floor(Math.random() * chars.length)];
@@ -39,7 +39,6 @@ router.post('/create', async (req, res) => {
   try {
     let joinCode = null;
     if (isPrivate === true) {
-      // Keep generating until we find one that isn't already in use.
       let unique = false;
       while (!unique) {
         joinCode = generateJoinCode();
@@ -244,6 +243,107 @@ router.post('/join-by-code', async (req, res) => {
   }
 });
 
+// ---------- SEARCH USERS TO ADD (host only) ----------
+router.get('/:id/search-players', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { q } = req.query;
+
+  if (!q || q.trim().length < 2) {
+    return res.status(400).json({ error: 'Enter at least 2 characters to search.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can search for players.' });
+    }
+
+    const genderChar = league.gender_category === 'mens' ? 'M' : 'F';
+
+    const result = await pool.query(
+      `SELECT DISTINCT u.id, u.username, u.location
+       FROM users u
+       JOIN user_sports us ON us.user_id = u.id AND us.sport = $1
+       WHERE u.username ILIKE $2
+         AND u.gender = $3
+         AND u.id NOT IN (
+           SELECT user_id FROM league_members WHERE league_id = $4
+         )
+       LIMIT 15`,
+      [league.sport, `%${q.trim()}%`, genderChar, leagueId]
+    );
+
+    res.status(200).json({ users: result.rows });
+  } catch (err) {
+    console.error('Search players error:', err);
+    res.status(500).json({ error: 'Something went wrong searching for players.' });
+  }
+});
+
+// ---------- ADD PLAYER DIRECTLY (host only) ----------
+router.post('/:id/add-player', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { playerId } = req.body;
+
+  if (!playerId) {
+    return res.status(400).json({ error: 'Please select a player to add.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can add players.' });
+    }
+
+    const genderChar = league.gender_category === 'mens' ? 'M' : 'F';
+    const playerResult = await pool.query('SELECT * FROM users WHERE id = $1', [playerId]);
+    if (playerResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Player not found.' });
+    }
+    if (playerResult.rows[0].gender !== genderChar) {
+      return res.status(400).json({ error: 'This player does not match the league\'s gender category.' });
+    }
+
+    const hasSport = await pool.query(
+      'SELECT id FROM user_sports WHERE user_id = $1 AND sport = $2 LIMIT 1',
+      [playerId, league.sport]
+    );
+    if (hasSport.rows.length === 0) {
+      return res.status(400).json({ error: 'This player has not added this sport to their profile yet.' });
+    }
+
+    const existing = await pool.query(
+      'SELECT id FROM league_members WHERE league_id = $1 AND user_id = $2',
+      [leagueId, playerId]
+    );
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'This player is already in the league.' });
+    }
+
+    await pool.query(
+      'INSERT INTO league_members (league_id, user_id) VALUES ($1, $2)',
+      [leagueId, playerId]
+    );
+
+    res.status(201).json({ message: 'Player added successfully.' });
+  } catch (err) {
+    console.error('Add player error:', err);
+    res.status(500).json({ error: 'Something went wrong adding the player.' });
+  }
+});
+
 // ---------- LEAVE LEAGUE ----------
 router.post('/:id/leave', async (req, res) => {
   const userId = req.userId;
@@ -286,10 +386,29 @@ router.get('/:id', async (req, res) => {
     const leagueData = league.rows[0];
 
     const leaderboard = await pool.query(
-      `SELECT u.id, u.username, u.gender, us.rating, us.matches_played, us.wins, us.losses, lm.points
+      `SELECT u.id, u.username, u.gender, us.rating, lm.points,
+              COALESCE(match_stats.matches_played, 0) AS matches_played,
+              COALESCE(match_stats.wins, 0) AS wins,
+              COALESCE(match_stats.losses, 0) AS losses
        FROM league_members lm
        JOIN users u ON u.id = lm.user_id
        JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+       LEFT JOIN (
+         SELECT player_id, COUNT(*) AS matches_played,
+                SUM(CASE WHEN player_id = winner_id THEN 1 ELSE 0 END) AS wins,
+                SUM(CASE WHEN player_id != winner_id THEN 1 ELSE 0 END) AS losses
+         FROM (
+           SELECT id, league_id, winner_id, player1_id AS player_id FROM matches WHERE status = 'confirmed'
+           UNION ALL
+           SELECT id, league_id, winner_id, player2_id AS player_id FROM matches WHERE status = 'confirmed'
+           UNION ALL
+           SELECT id, league_id, winner_id, player1_partner_id AS player_id FROM matches WHERE status = 'confirmed' AND player1_partner_id IS NOT NULL
+           UNION ALL
+           SELECT id, league_id, winner_id, player2_partner_id AS player_id FROM matches WHERE status = 'confirmed' AND player2_partner_id IS NOT NULL
+         ) all_participants
+         WHERE league_id = $3
+         GROUP BY player_id
+       ) match_stats ON match_stats.player_id = u.id
        WHERE lm.league_id = $3
        ORDER BY lm.points DESC, us.rating DESC`,
       [leagueData.sport, leagueData.format, leagueId]
@@ -302,7 +421,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// ---------- GENERATE SCHEDULE (host only, once) ----------
+// ---------- GENERATE SCHEDULE (host only, once, unless schedule was cleared) ----------
 router.post('/:id/generate-schedule', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.id;
@@ -323,7 +442,7 @@ router.post('/:id/generate-schedule', async (req, res) => {
       [leagueId]
     );
     if (existing.rows.length > 0) {
-      return res.status(409).json({ error: 'Schedule has already been generated for this league.' });
+      return res.status(409).json({ error: 'Schedule has already been generated for this league. Use Regenerate to make a new one.' });
     }
 
     const membersResult = await pool.query(
@@ -349,7 +468,7 @@ router.post('/:id/generate-schedule', async (req, res) => {
     let scheduledMatches = [];
 
     if (league.schedule_type === 'matches_per_player' && league.format === 'singles') {
-      scheduledMatches = generateMatchesPerPlayerSchedule(members, league.matches_per_player);
+      scheduledMatches = generateNearestRatingSchedule(members, league.matches_per_player);
     } else {
       scheduledMatches = generateRoundRobinSchedule(members, league.format);
     }
@@ -367,6 +486,90 @@ router.post('/:id/generate-schedule', async (req, res) => {
   } catch (err) {
     console.error('Generate schedule error:', err);
     res.status(500).json({ error: 'Something went wrong generating the schedule.' });
+  }
+});
+
+// ---------- REGENERATE SCHEDULE (host only) ----------
+router.post('/:id/regenerate-schedule', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { scheduleType, matchesPerPlayer } = req.body;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can regenerate the schedule.' });
+    }
+
+    if (scheduleType) {
+      const finalScheduleType = scheduleType === 'matches_per_player' ? 'matches_per_player' : 'round_robin';
+      if (finalScheduleType === 'matches_per_player' && (!matchesPerPlayer || matchesPerPlayer < 1)) {
+        return res.status(400).json({ error: 'Please specify how many matches each player should play.' });
+      }
+      await pool.query(
+        'UPDATE leagues SET schedule_type = $1, matches_per_player = $2 WHERE id = $3',
+        [finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null, leagueId]
+      );
+    }
+
+    await pool.query(
+      `DELETE FROM matches WHERE league_id = $1 AND status IN ('pending', 'rejected')`,
+      [leagueId]
+    );
+    await pool.query(
+      `UPDATE matches SET scheduled_match_id = NULL WHERE league_id = $1 AND status = 'confirmed'`,
+      [leagueId]
+    );
+    await pool.query('DELETE FROM scheduled_matches WHERE league_id = $1', [leagueId]);
+
+    const refreshedLeagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    const refreshedLeague = refreshedLeagueResult.rows[0];
+
+    const membersResult = await pool.query(
+      `SELECT u.id, us.rating
+       FROM league_members lm
+       JOIN users u ON u.id = lm.user_id
+       JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+       WHERE lm.league_id = $3
+       ORDER BY us.rating DESC`,
+      [refreshedLeague.sport, refreshedLeague.format, leagueId]
+    );
+    const members = membersResult.rows;
+
+    const minPlayersRequired = refreshedLeague.format === 'doubles' ? 4 : 2;
+    if (members.length < minPlayersRequired) {
+      return res.status(400).json({
+        error: refreshedLeague.format === 'doubles'
+          ? 'Need at least 4 players to generate a doubles schedule.'
+          : 'Need at least 2 players to generate a schedule.',
+      });
+    }
+
+    let scheduledMatches = [];
+    if (refreshedLeague.schedule_type === 'matches_per_player' && refreshedLeague.format === 'singles') {
+      scheduledMatches = generateNearestRatingSchedule(members, refreshedLeague.matches_per_player);
+    } else {
+      scheduledMatches = generateRoundRobinSchedule(members, refreshedLeague.format);
+    }
+
+    for (const m of scheduledMatches) {
+      await pool.query(
+        `INSERT INTO scheduled_matches
+          (league_id, tier_number, player1_id, player1_partner_id, player2_id, player2_partner_id)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [leagueId, m.tierNumber, m.player1Id, m.player1PartnerId, m.player2Id, m.player2PartnerId]
+      );
+    }
+
+    res.status(201).json({ message: 'Schedule regenerated.', matchCount: scheduledMatches.length });
+  } catch (err) {
+    console.error('Regenerate schedule error:', err);
+    res.status(500).json({ error: 'Something went wrong regenerating the schedule.' });
   }
 });
 
@@ -428,56 +631,100 @@ function generateRoundRobinSchedule(members, format) {
   return scheduledMatches;
 }
 
-function generateMatchesPerPlayerSchedule(members, matchesPerPlayer) {
-  const scheduledMatches = [];
-  const playedPairs = new Set();
+function generateNearestRatingSchedule(members, matchesPerPlayer) {
+  const n = members.length;
+  const baseCount = Math.min(matchesPerPlayer, n - 1);
+
+  const targetDegree = {};
+  members.forEach((m) => (targetDegree[m.id] = baseCount));
+  if ((n * baseCount) % 2 !== 0 && n > 0) {
+    targetDegree[members[n - 1].id] = Math.max(0, baseCount - 1);
+  }
+
   const matchCounts = {};
-  members.forEach((m) => (matchCounts[m.id] = 0));
+  const hasUp = {};
+  const hasDown = {};
+  members.forEach((m) => {
+    matchCounts[m.id] = 0;
+    hasUp[m.id] = false;
+    hasDown[m.id] = false;
+  });
 
+  const pairsSet = new Set();
+  const scheduledMatches = [];
   const pairKey = (a, b) => [a, b].sort((x, y) => x - y).join('-');
+  const hasRoom = (p) => matchCounts[p.id] < targetDegree[p.id];
 
-  for (let round = 1; round <= matchesPerPlayer; round++) {
-    let available = members
-      .filter((m) => matchCounts[m.id] < round)
-      .sort((a, b) => b.rating - a.rating);
+  function addMatch(a, b) {
+    const key = pairKey(a.id, b.id);
+    if (pairsSet.has(key)) return false;
+    pairsSet.add(key);
+    scheduledMatches.push({
+      tierNumber: 1,
+      player1Id: a.id,
+      player1PartnerId: null,
+      player2Id: b.id,
+      player2PartnerId: null,
+    });
+    matchCounts[a.id]++;
+    matchCounts[b.id]++;
+    return true;
+  }
 
-    const usedThisRound = new Set();
-
-    for (let i = 0; i < available.length; i++) {
-      const playerA = available[i];
-      if (usedThisRound.has(playerA.id)) continue;
-
-      let opponent = null;
-      for (let j = i + 1; j < available.length; j++) {
-        const candidate = available[j];
-        if (usedThisRound.has(candidate.id)) continue;
-        if (playedPairs.has(pairKey(playerA.id, candidate.id))) continue;
-        opponent = candidate;
+  for (let i = 0; i < n; i++) {
+    const player = members[i];
+    if (hasUp[player.id] || !hasRoom(player)) continue;
+    for (let j = i - 1; j >= 0; j--) {
+      const candidate = members[j];
+      if (!hasRoom(candidate)) continue;
+      if (pairsSet.has(pairKey(player.id, candidate.id))) continue;
+      if (addMatch(player, candidate)) {
+        hasUp[player.id] = true;
+        hasDown[candidate.id] = true;
         break;
       }
+    }
+  }
 
-      if (!opponent) {
-        for (let j = i + 1; j < available.length; j++) {
-          const candidate = available[j];
-          if (usedThisRound.has(candidate.id)) continue;
-          opponent = candidate;
-          break;
-        }
+  for (let i = 0; i < n; i++) {
+    const player = members[i];
+    if (hasDown[player.id] || !hasRoom(player)) continue;
+    for (let j = i + 1; j < n; j++) {
+      const candidate = members[j];
+      if (!hasRoom(candidate)) continue;
+      if (pairsSet.has(pairKey(player.id, candidate.id))) continue;
+      if (addMatch(player, candidate)) {
+        hasDown[player.id] = true;
+        hasUp[candidate.id] = true;
+        break;
       }
+    }
+  }
 
-      if (opponent) {
-        scheduledMatches.push({
-          tierNumber: round,
-          player1Id: playerA.id,
-          player1PartnerId: null,
-          player2Id: opponent.id,
-          player2PartnerId: null,
+  let progress = true;
+  while (progress) {
+    progress = false;
+    const deficient = members.filter(hasRoom);
+    if (deficient.length < 2) break;
+
+    const pairs = [];
+    for (let i = 0; i < deficient.length; i++) {
+      for (let j = i + 1; j < deficient.length; j++) {
+        const key = pairKey(deficient[i].id, deficient[j].id);
+        if (pairsSet.has(key)) continue;
+        pairs.push({
+          a: deficient[i],
+          b: deficient[j],
+          distance: Math.abs(deficient[i].rating - deficient[j].rating),
         });
-        playedPairs.add(pairKey(playerA.id, opponent.id));
-        matchCounts[playerA.id]++;
-        matchCounts[opponent.id]++;
-        usedThisRound.add(playerA.id);
-        usedThisRound.add(opponent.id);
+      }
+    }
+    if (pairs.length === 0) break;
+    pairs.sort((p1, p2) => p1.distance - p2.distance);
+
+    for (const pair of pairs) {
+      if (hasRoom(pair.a) && hasRoom(pair.b)) {
+        if (addMatch(pair.a, pair.b)) progress = true;
       }
     }
   }
