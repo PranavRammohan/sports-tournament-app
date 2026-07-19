@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const SALT_ROUNDS = 10;
 
 router.post('/signup', async (req, res) => {
-  const { username, phoneNumber, password, location, gender } = req.body;
+  const { username, phoneNumber, password, location, gender, profilePicUrl } = req.body;
 
   if (!username || !phoneNumber || !password || !location || !gender) {
     return res.status(400).json({ error: 'All fields are required.' });
@@ -37,10 +37,10 @@ router.post('/signup', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
 
     const result = await pool.query(
-      `INSERT INTO users (username, phone_number, password_hash, location, gender)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, username, phone_number, location, gender, created_at`,
-      [username, phoneNumber, passwordHash, location, gender]
+      `INSERT INTO users (username, phone_number, password_hash, location, gender, profile_pic_url)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, username, phone_number, location, gender, profile_pic_url, created_at`,
+      [username, phoneNumber, passwordHash, location, gender, profilePicUrl || null]
     );
 
     const newUser = result.rows[0];
@@ -82,6 +82,7 @@ router.post('/login', async (req, res) => {
         phoneNumber: user.phone_number,
         location: user.location,
         gender: user.gender,
+        profilePicUrl: user.profile_pic_url,
       },
       token,
     });
@@ -91,7 +92,6 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// ---------- EDIT PROFILE ----------
 router.patch('/profile', authMiddleware, async (req, res) => {
   const userId = req.userId;
   const { username, phoneNumber, location, gender } = req.body;
@@ -118,7 +118,7 @@ router.patch('/profile', authMiddleware, async (req, res) => {
     const result = await pool.query(
       `UPDATE users SET username = $1, phone_number = $2, location = $3, gender = $4
        WHERE id = $5
-       RETURNING id, username, phone_number, location, gender`,
+       RETURNING id, username, phone_number, location, gender, profile_pic_url`,
       [username, phoneNumber, location, gender, userId]
     );
 
@@ -129,7 +129,6 @@ router.patch('/profile', authMiddleware, async (req, res) => {
   }
 });
 
-// ---------- CHANGE PASSWORD (while logged in) ----------
 router.patch('/change-password', authMiddleware, async (req, res) => {
   const userId = req.userId;
   const { currentPassword, newPassword } = req.body;
@@ -162,7 +161,6 @@ router.patch('/change-password', authMiddleware, async (req, res) => {
   }
 });
 
-// ---------- FORGOT PASSWORD (not logged in — verifies via username + phone) ----------
 router.post('/forgot-password', async (req, res) => {
   const { username, phoneNumber, newPassword } = req.body;
 
@@ -180,7 +178,6 @@ router.post('/forgot-password', async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      // Deliberately vague — don't reveal whether the username or the phone was wrong.
       return res.status(401).json({ error: 'Username and mobile number do not match any account.' });
     }
 

@@ -8,7 +8,10 @@ const TIER_SIZE = 4;
 // ---------- CREATE LEAGUE ----------
 router.post('/create', async (req, res) => {
   const userId = req.userId;
-  const { sport, area, seasonStart, seasonEnd, format, genderCategory } = req.body;
+  const {
+    sport, area, seasonStart, seasonEnd, format, genderCategory,
+    scheduleType, matchesPerPlayer, hostEntersScores,
+  } = req.body;
 
   if (!sport || !area || !seasonStart || !seasonEnd || !format || !genderCategory) {
     return res.status(400).json({ error: 'All fields are required.' });
@@ -19,13 +22,23 @@ router.post('/create', async (req, res) => {
   if (!['mens', 'womens'].includes(genderCategory)) {
     return res.status(400).json({ error: 'Gender category must be mens or womens.' });
   }
+  const finalScheduleType = scheduleType === 'matches_per_player' ? 'matches_per_player' : 'round_robin';
+  if (finalScheduleType === 'matches_per_player' && (!matchesPerPlayer || matchesPerPlayer < 1)) {
+    return res.status(400).json({ error: 'Please specify how many matches each player should play.' });
+  }
 
   try {
     const result = await pool.query(
-      `INSERT INTO leagues (sport, area, season_start, season_end, created_by, format, gender_category)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, sport, area, season_start, season_end, format, gender_category, created_by`,
-      [sport, area, seasonStart, seasonEnd, userId, format, genderCategory]
+      `INSERT INTO leagues (sport, area, season_start, season_end, created_by, format, gender_category,
+                            schedule_type, matches_per_player, host_enters_scores)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, sport, area, season_start, season_end, format, gender_category, created_by,
+                 schedule_type, matches_per_player, host_enters_scores`,
+      [
+        sport, area, seasonStart, seasonEnd, userId, format, genderCategory,
+        finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null,
+        hostEntersScores === true,
+      ]
     );
 
     const league = result.rows[0];
@@ -56,6 +69,7 @@ router.get('/', async (req, res) => {
 
     let query = `
       SELECT l.id, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
+             l.schedule_type, l.matches_per_player, l.host_enters_scores,
              COUNT(lm.id) AS member_count
       FROM leagues l
       LEFT JOIN league_members lm ON lm.league_id = l.id
@@ -93,6 +107,7 @@ router.get('/mine', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT l.id, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
+              l.schedule_type, l.matches_per_player, l.host_enters_scores,
               COUNT(lm2.id) AS member_count
        FROM league_members lm
        JOIN leagues l ON l.id = lm.league_id
@@ -184,7 +199,7 @@ router.post('/:id/leave', async (req, res) => {
   }
 });
 
-// ---------- LEAGUE DETAIL + LEADERBOARD ----------
+// ---------- LEAGUE DETAIL + DUAL LEADERBOARD (points primary, rating shown alongside) ----------
 router.get('/:id', async (req, res) => {
   const leagueId = req.params.id;
 
@@ -197,12 +212,12 @@ router.get('/:id', async (req, res) => {
     const leagueData = league.rows[0];
 
     const leaderboard = await pool.query(
-      `SELECT u.id, u.username, u.gender, us.rating, us.matches_played, us.wins, us.losses
+      `SELECT u.id, u.username, u.gender, us.rating, us.matches_played, us.wins, us.losses, lm.points
        FROM league_members lm
        JOIN users u ON u.id = lm.user_id
        JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
        WHERE lm.league_id = $3
-       ORDER BY us.rating DESC`,
+       ORDER BY lm.points DESC, us.rating DESC`,
       [leagueData.sport, leagueData.format, leagueId]
     );
 
@@ -210,33 +225,6 @@ router.get('/:id', async (req, res) => {
   } catch (err) {
     console.error('League detail error:', err);
     res.status(500).json({ error: 'Something went wrong fetching league details.' });
-  }
-});
-
-// ---------- MATCH HISTORY FOR A LEAGUE ----------
-router.get('/:id/matches', async (req, res) => {
-  const leagueId = req.params.id;
-
-  try {
-    const result = await pool.query(
-      `SELECT m.id, m.player1_id, m.player2_id, m.player1_partner_id, m.player2_partner_id,
-              m.player1_units, m.player2_units, m.set_scores, m.winner_id,
-              m.status, m.created_at,
-              p1.username as player1_username, p2.username as player2_username,
-              pp1.username as player1_partner_username, pp2.username as player2_partner_username
-       FROM matches m
-       JOIN users p1 ON p1.id = m.player1_id
-       JOIN users p2 ON p2.id = m.player2_id
-       LEFT JOIN users pp1 ON pp1.id = m.player1_partner_id
-       LEFT JOIN users pp2 ON pp2.id = m.player2_partner_id
-       WHERE m.league_id = $1 AND m.status = 'confirmed'
-       ORDER BY m.created_at DESC`,
-      [leagueId]
-    );
-    res.status(200).json({ matches: result.rows });
-  } catch (err) {
-    console.error('Match history error:', err);
-    res.status(500).json({ error: 'Something went wrong fetching match history.' });
   }
 });
 
@@ -284,63 +272,13 @@ router.post('/:id/generate-schedule', async (req, res) => {
       });
     }
 
-    // Split into tiers of TIER_SIZE, sorted strongest-first.
-    const tiers = [];
-    for (let i = 0; i < members.length; i += TIER_SIZE) {
-      tiers.push(members.slice(i, i + TIER_SIZE));
+    let scheduledMatches = [];
+
+    if (league.schedule_type === 'matches_per_player' && league.format === 'singles') {
+      scheduledMatches = generateMatchesPerPlayerSchedule(members, league.matches_per_player);
+    } else {
+      scheduledMatches = generateRoundRobinSchedule(members, league.format);
     }
-
-    // Fix: if the leftover final tier is too small to generate matches on its own
-    // (e.g. just 1 player left over for singles, or fewer than 4 for doubles),
-    // merge it into the previous tier instead of leaving those players with no matches.
-    const minTierSize = league.format === 'doubles' ? 4 : 2;
-    while (tiers.length > 1 && tiers[tiers.length - 1].length < minTierSize) {
-      const leftover = tiers.pop();
-      tiers[tiers.length - 1] = tiers[tiers.length - 1].concat(leftover);
-    }
-
-    const scheduledMatches = [];
-
-    tiers.forEach((tier, tierIndex) => {
-      const tierNumber = tierIndex + 1;
-
-      if (league.format === 'singles') {
-        for (let i = 0; i < tier.length; i++) {
-          for (let j = i + 1; j < tier.length; j++) {
-            scheduledMatches.push({
-              tierNumber,
-              player1Id: tier[i].id,
-              player1PartnerId: null,
-              player2Id: tier[j].id,
-              player2PartnerId: null,
-            });
-          }
-        }
-      } else {
-        if (tier.length < 4) return;
-
-        const teams = [];
-        let lo = 0;
-        let hi = tier.length - 1;
-        while (lo < hi) {
-          teams.push([tier[lo], tier[hi]]);
-          lo++;
-          hi--;
-        }
-
-        for (let i = 0; i < teams.length; i++) {
-          for (let j = i + 1; j < teams.length; j++) {
-            scheduledMatches.push({
-              tierNumber,
-              player1Id: teams[i][0].id,
-              player1PartnerId: teams[i][1].id,
-              player2Id: teams[j][0].id,
-              player2PartnerId: teams[j][1].id,
-            });
-          }
-        }
-      }
-    });
 
     for (const m of scheduledMatches) {
       await pool.query(
@@ -357,6 +295,129 @@ router.post('/:id/generate-schedule', async (req, res) => {
     res.status(500).json({ error: 'Something went wrong generating the schedule.' });
   }
 });
+
+// Original tiered round-robin generator (singles: tier-based full round robin;
+// doubles: pairs strongest-with-weakest into teams, then round robins the teams).
+function generateRoundRobinSchedule(members, format) {
+  const tiers = [];
+  for (let i = 0; i < members.length; i += TIER_SIZE) {
+    tiers.push(members.slice(i, i + TIER_SIZE));
+  }
+
+  const minTierSize = format === 'doubles' ? 4 : 2;
+  while (tiers.length > 1 && tiers[tiers.length - 1].length < minTierSize) {
+    const leftover = tiers.pop();
+    tiers[tiers.length - 1] = tiers[tiers.length - 1].concat(leftover);
+  }
+
+  const scheduledMatches = [];
+
+  tiers.forEach((tier, tierIndex) => {
+    const tierNumber = tierIndex + 1;
+
+    if (format === 'singles') {
+      for (let i = 0; i < tier.length; i++) {
+        for (let j = i + 1; j < tier.length; j++) {
+          scheduledMatches.push({
+            tierNumber,
+            player1Id: tier[i].id,
+            player1PartnerId: null,
+            player2Id: tier[j].id,
+            player2PartnerId: null,
+          });
+        }
+      }
+    } else {
+      if (tier.length < 4) return;
+
+      const teams = [];
+      let lo = 0;
+      let hi = tier.length - 1;
+      while (lo < hi) {
+        teams.push([tier[lo], tier[hi]]);
+        lo++;
+        hi--;
+      }
+
+      for (let i = 0; i < teams.length; i++) {
+        for (let j = i + 1; j < teams.length; j++) {
+          scheduledMatches.push({
+            tierNumber,
+            player1Id: teams[i][0].id,
+            player1PartnerId: teams[i][1].id,
+            player2Id: teams[j][0].id,
+            player2PartnerId: teams[j][1].id,
+          });
+        }
+      }
+    }
+  });
+
+  return scheduledMatches;
+}
+
+// "Matches per player" generator for larger singles leagues (8+ players).
+// Round by round, pairs players closest in rating who haven't played each other yet.
+// Each round becomes its own "tier" number just for grouping/display purposes.
+function generateMatchesPerPlayerSchedule(members, matchesPerPlayer) {
+  const scheduledMatches = [];
+  const playedPairs = new Set();
+  const matchCounts = {};
+  members.forEach((m) => (matchCounts[m.id] = 0));
+
+  const pairKey = (a, b) => [a, b].sort((x, y) => x - y).join('-');
+
+  for (let round = 1; round <= matchesPerPlayer; round++) {
+    // Players still needing a match this round, sorted by rating (closest matchups first)
+    let available = members
+      .filter((m) => matchCounts[m.id] < round)
+      .sort((a, b) => b.rating - a.rating);
+
+    const usedThisRound = new Set();
+
+    for (let i = 0; i < available.length; i++) {
+      const playerA = available[i];
+      if (usedThisRound.has(playerA.id)) continue;
+
+      // Find the closest-rated available opponent not yet used this round and not already played
+      let opponent = null;
+      for (let j = i + 1; j < available.length; j++) {
+        const candidate = available[j];
+        if (usedThisRound.has(candidate.id)) continue;
+        if (playedPairs.has(pairKey(playerA.id, candidate.id))) continue;
+        opponent = candidate;
+        break;
+      }
+
+      // If everyone close by has already been played, allow a repeat rather than skipping entirely
+      if (!opponent) {
+        for (let j = i + 1; j < available.length; j++) {
+          const candidate = available[j];
+          if (usedThisRound.has(candidate.id)) continue;
+          opponent = candidate;
+          break;
+        }
+      }
+
+      if (opponent) {
+        scheduledMatches.push({
+          tierNumber: round,
+          player1Id: playerA.id,
+          player1PartnerId: null,
+          player2Id: opponent.id,
+          player2PartnerId: null,
+        });
+        playedPairs.add(pairKey(playerA.id, opponent.id));
+        matchCounts[playerA.id]++;
+        matchCounts[opponent.id]++;
+        usedThisRound.add(playerA.id);
+        usedThisRound.add(opponent.id);
+      }
+    }
+  }
+
+  return scheduledMatches;
+}
 
 // ---------- GET SCHEDULE (with completion status + contact info) ----------
 router.get('/:id/schedule', async (req, res) => {

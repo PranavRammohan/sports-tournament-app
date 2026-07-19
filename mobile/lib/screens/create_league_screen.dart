@@ -83,6 +83,11 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   DateTime? _endDate;
   bool _loading = false;
 
+  String _scheduleType = 'round_robin';
+  final TextEditingController _matchesPerPlayerController =
+      TextEditingController();
+  bool _hostEntersScores = false;
+
   Future<void> _pickDate({required bool isStart}) async {
     final picked = await showDatePicker(
       context: context,
@@ -116,6 +121,18 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
       return;
     }
 
+    int? matchesPerPlayer;
+    if (_scheduleType == 'matches_per_player') {
+      matchesPerPlayer = int.tryParse(_matchesPerPlayerController.text.trim());
+      if (matchesPerPlayer == null || matchesPerPlayer < 1) {
+        _showAlert(
+          'Missing info',
+          'Please enter how many matches each player should play.',
+        );
+        return;
+      }
+    }
+
     setState(() => _loading = true);
 
     try {
@@ -137,6 +154,9 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
           'genderCategory': _selectedGenderCategory == "Men's"
               ? 'mens'
               : 'womens',
+          'scheduleType': _scheduleType,
+          'matchesPerPlayer': matchesPerPlayer,
+          'hostEntersScores': _hostEntersScores,
         }),
       );
 
@@ -181,6 +201,8 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isSingles = _selectedFormat == 'Singles';
+
     return Scaffold(
       appBar: AppBar(title: const Text('Create League')),
       body: SingleChildScrollView(
@@ -239,6 +261,66 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               trailing: const Icon(Icons.calendar_today),
               onTap: () => _pickDate(isStart: false),
             ),
+
+            const SizedBox(height: 20),
+            const Divider(),
+            const SizedBox(height: 12),
+            Text(
+              'Match Format',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              isSingles
+                  ? 'Round Robin works best for 7 or fewer players. For larger groups, pick how many matches each player plays before playoffs.'
+                  : 'Doubles leagues always use Round Robin.',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            const SizedBox(height: 10),
+
+            RadioListTile<String>(
+              contentPadding: EdgeInsets.zero,
+              value: 'round_robin',
+              groupValue: _scheduleType,
+              title: const Text('Round Robin (everyone plays everyone)'),
+              onChanged: (v) => setState(() => _scheduleType = v!),
+            ),
+            if (isSingles)
+              RadioListTile<String>(
+                contentPadding: EdgeInsets.zero,
+                value: 'matches_per_player',
+                groupValue: _scheduleType,
+                title: const Text('Fixed number of matches per player'),
+                onChanged: (v) => setState(() => _scheduleType = v!),
+              ),
+            if (isSingles && _scheduleType == 'matches_per_player')
+              Padding(
+                padding: const EdgeInsets.only(top: 8, bottom: 4),
+                child: TextField(
+                  controller: _matchesPerPlayerController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Matches per player',
+                    isDense: true,
+                    hintText: 'e.g. 5',
+                  ),
+                ),
+              ),
+
+            const SizedBox(height: 20),
+            const Divider(),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _hostEntersScores,
+              onChanged: (v) => setState(() => _hostEntersScores = v),
+              title: const Text('I will enter all match scores myself'),
+              subtitle: const Text(
+                'For academies or organizers running the event — scores you enter are confirmed instantly, no player confirmation needed.',
+                style: TextStyle(fontSize: 12),
+              ),
+            ),
+
             const SizedBox(height: 24),
             ElevatedButton(
               onPressed: _loading ? null : _handleCreate,

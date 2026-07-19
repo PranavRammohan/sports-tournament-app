@@ -31,6 +31,29 @@ async function updateRating(userId, sport, format, newRating, won) {
   }
 }
 
+function calculateLeaguePoints(setScores, winnerWonTeam1) {
+  let points = 2;
+  try {
+    const sets = JSON.parse(setScores);
+    const wonEverySet = sets.every((s) => {
+      const winnerScore = winnerWonTeam1 ? s.me : s.opponent;
+      const loserScore = winnerWonTeam1 ? s.opponent : s.me;
+      return winnerScore > loserScore;
+    });
+    if (wonEverySet && sets.length > 0) points += 1;
+  } catch (err) {
+    // if parsing fails, just award the base 2 points
+  }
+  return points;
+}
+
+async function awardLeaguePoints(leagueId, winnerId, points) {
+  await pool.query(
+    'UPDATE league_members SET points = points + $1 WHERE league_id = $2 AND user_id = $3',
+    [points, leagueId, winnerId]
+  );
+}
+
 async function findMatchingFixture(leagueId, team1Ids, team2Ids) {
   const result = await pool.query(
     'SELECT id, player1_id, player1_partner_id, player2_id, player2_partner_id FROM scheduled_matches WHERE league_id = $1',
@@ -61,7 +84,58 @@ async function findMatchingFixture(leagueId, team1Ids, team2Ids) {
   return null;
 }
 
-// ---------- REPORT A MATCH ----------
+async function finalizeMatch(match, league) {
+  const { sport, format } = league;
+
+  const rating1a = await getRating(match.player1_id, sport, format);
+  const rating2a = await getRating(match.player2_id, sport, format);
+  const rating1b = match.player1_partner_id ? await getRating(match.player1_partner_id, sport, format) : null;
+  const rating2b = match.player2_partner_id ? await getRating(match.player2_partner_id, sport, format) : null;
+
+  const team1Rating = rating1b != null ? (rating1a + rating1b) / 2 : rating1a;
+  const team2Rating = rating2b != null ? (rating2a + rating2b) / 2 : rating2a;
+
+  const team1Won = match.winner_id === match.player1_id;
+
+  const { newRating1, newRating2 } = calculateNewRatings(
+    sport, team1Rating, team2Rating, team1Won, match.player1_units, match.player2_units
+  );
+
+  const change1 = newRating1 - team1Rating;
+  const change2 = newRating2 - team2Rating;
+
+  const applyChange = async (playerId, individualRating, change, won) => {
+    if (individualRating == null) return null;
+    const updated = Math.round((individualRating + change) * 10) / 10;
+    const actualChange = Math.round((updated - individualRating) * 100) / 100;
+    await updateRating(playerId, sport, format, updated, won);
+    return actualChange;
+  };
+
+  const player1RatingChange = await applyChange(match.player1_id, rating1a, change1, team1Won);
+  const player2RatingChange = await applyChange(match.player2_id, rating2a, change2, !team1Won);
+  const player1PartnerRatingChange = await applyChange(match.player1_partner_id, rating1b, change1, team1Won);
+  const player2PartnerRatingChange = await applyChange(match.player2_partner_id, rating2b, change2, !team1Won);
+
+  await pool.query(
+    `UPDATE matches SET status = 'confirmed',
+      player1_rating_change = $1, player2_rating_change = $2,
+      player1_partner_rating_change = $3, player2_partner_rating_change = $4
+     WHERE id = $5`,
+    [player1RatingChange, player2RatingChange, player1PartnerRatingChange, player2PartnerRatingChange, match.id]
+  );
+
+  const points = calculateLeaguePoints(match.set_scores, team1Won);
+  await awardLeaguePoints(match.league_id, match.winner_id, points);
+  if (match.winner_id === match.player1_id && match.player1_partner_id) {
+    await awardLeaguePoints(match.league_id, match.player1_partner_id, points);
+  }
+  if (match.winner_id === match.player2_id && match.player2_partner_id) {
+    await awardLeaguePoints(match.league_id, match.player2_partner_id, points);
+  }
+}
+
+// ---------- REPORT A MATCH (self, needs opponent confirmation) ----------
 router.post('/report', async (req, res) => {
   const userId = req.userId;
   const {
@@ -85,6 +159,10 @@ router.post('/report', async (req, res) => {
       return res.status(404).json({ error: 'League not found.' });
     }
     const league = leagueResult.rows[0];
+
+    if (league.host_enters_scores) {
+      return res.status(403).json({ error: 'This league requires the host to enter all scores.' });
+    }
 
     if (league.format === 'doubles' && (!partnerId || !opponentPartnerId)) {
       return res.status(400).json({ error: 'Doubles matches need a partner and opponent partner.' });
@@ -119,6 +197,11 @@ router.post('/report', async (req, res) => {
       if (alreadyConfirmed.rows.length > 0) {
         return res.status(409).json({ error: 'This scheduled match has already been completed.' });
       }
+
+      await pool.query(
+        `DELETE FROM matches WHERE scheduled_match_id = $1 AND status IN ('pending', 'rejected')`,
+        [scheduledMatchId]
+      );
     }
 
     const result = await pool.query(
@@ -147,6 +230,88 @@ router.post('/report', async (req, res) => {
   } catch (err) {
     console.error('Report match error:', err);
     res.status(500).json({ error: 'Something went wrong reporting the match.' });
+  }
+});
+
+// ---------- HOST ENTERS A MATCH SCORE DIRECTLY (auto-confirmed, for academies/organizers) ----------
+router.post('/report-as-host', async (req, res) => {
+  const userId = req.userId;
+  const {
+    leagueId,
+    player1Id,
+    player1PartnerId,
+    player2Id,
+    player2PartnerId,
+    player1Units,
+    player2Units,
+    player1Won,
+    setScores,
+  } = req.body;
+
+  if (!leagueId || !player1Id || !player2Id || player1Units == null || player2Units == null || player1Won == null) {
+    return res.status(400).json({ error: 'Missing required fields.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (!league.host_enters_scores || league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the host can enter scores directly for this league.' });
+    }
+
+    const winnerId = player1Won ? player1Id : player2Id;
+
+    const scheduledMatchId = await findMatchingFixture(
+      leagueId,
+      [player1Id, player1PartnerId],
+      [player2Id, player2PartnerId]
+    );
+
+    if (scheduledMatchId === null) {
+      return res.status(400).json({ error: 'This matchup is not part of the generated schedule.' });
+    }
+
+    const alreadyConfirmed = await pool.query(
+      `SELECT id FROM matches WHERE scheduled_match_id = $1 AND status = 'confirmed' LIMIT 1`,
+      [scheduledMatchId]
+    );
+    if (alreadyConfirmed.rows.length > 0) {
+      return res.status(409).json({ error: 'This scheduled match has already been completed.' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO matches
+        (league_id, player1_id, player1_partner_id, player2_id, player2_partner_id,
+         player1_units, player2_units, winner_id, reported_by, status, format, set_scores, scheduled_match_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'confirmed', $10, $11, $12)
+       RETURNING *`,
+      [
+        leagueId,
+        player1Id,
+        player1PartnerId || null,
+        player2Id,
+        player2PartnerId || null,
+        player1Units,
+        player2Units,
+        winnerId,
+        userId,
+        league.format,
+        JSON.stringify(setScores || []),
+        scheduledMatchId,
+      ]
+    );
+
+    const match = result.rows[0];
+    await finalizeMatch(match, league);
+
+    res.status(201).json({ match });
+  } catch (err) {
+    console.error('Host report match error:', err);
+    res.status(500).json({ error: 'Something went wrong entering the score.' });
   }
 });
 
@@ -268,50 +433,8 @@ router.post('/:id/confirm', async (req, res) => {
 
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
     const league = leagueResult.rows[0];
-    const { sport, format } = league;
 
-    const rating1a = await getRating(match.player1_id, sport, format);
-    const rating2a = await getRating(match.player2_id, sport, format);
-    const rating1b = match.player1_partner_id ? await getRating(match.player1_partner_id, sport, format) : null;
-    const rating2b = match.player2_partner_id ? await getRating(match.player2_partner_id, sport, format) : null;
-
-    const team1Rating = rating1b != null ? (rating1a + rating1b) / 2 : rating1a;
-    const team2Rating = rating2b != null ? (rating2a + rating2b) / 2 : rating2a;
-
-    const team1Won = match.winner_id === match.player1_id;
-
-    const { newRating1, newRating2 } = calculateNewRatings(
-      sport, team1Rating, team2Rating, team1Won, match.player1_units, match.player2_units
-    );
-
-    const change1 = newRating1 - team1Rating;
-    const change2 = newRating2 - team2Rating;
-
-    let player1RatingChange = null;
-    let player2RatingChange = null;
-    let player1PartnerRatingChange = null;
-    let player2PartnerRatingChange = null;
-
-    const applyChange = async (playerId, individualRating, change, won) => {
-      if (individualRating == null) return null;
-      const updated = Math.round((individualRating + change) * 10) / 10;
-      const actualChange = Math.round((updated - individualRating) * 100) / 100;
-      await updateRating(playerId, sport, format, updated, won);
-      return actualChange;
-    };
-
-    player1RatingChange = await applyChange(match.player1_id, rating1a, change1, team1Won);
-    player2RatingChange = await applyChange(match.player2_id, rating2a, change2, !team1Won);
-    player1PartnerRatingChange = await applyChange(match.player1_partner_id, rating1b, change1, team1Won);
-    player2PartnerRatingChange = await applyChange(match.player2_partner_id, rating2b, change2, !team1Won);
-
-    await pool.query(
-      `UPDATE matches SET status = 'confirmed',
-        player1_rating_change = $1, player2_rating_change = $2,
-        player1_partner_rating_change = $3, player2_partner_rating_change = $4
-       WHERE id = $5`,
-      [player1RatingChange, player2RatingChange, player1PartnerRatingChange, player2PartnerRatingChange, matchId]
-    );
+    await finalizeMatch(match, league);
 
     res.status(200).json({ message: 'Match confirmed and ratings updated.' });
   } catch (err) {

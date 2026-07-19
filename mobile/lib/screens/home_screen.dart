@@ -144,6 +144,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final winRate = _matchesPlayed == 0
         ? 0
         : ((_wins / _matchesPlayed) * 100).round();
+    final losses = _matchesPlayed - _wins;
 
     return Scaffold(
       appBar: AppBar(title: const Text('RallyX')),
@@ -245,13 +246,14 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: _statCard(
                           Icons.emoji_events,
                           'Win rate',
-                          '$winRate%',
+                          '$winRate% ($_wins-$losses)',
                           onTap: () => Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (_) => const MatchHistoryScreen(),
                             ),
                           ),
+                          smallValue: true,
                         ),
                       ),
                     ],
@@ -351,12 +353,13 @@ class _HomeScreenState extends State<HomeScreen> {
     String label,
     String value, {
     required VoidCallback onTap,
+    bool smallValue = false,
   }) {
     return InkWell(
       borderRadius: BorderRadius.circular(10),
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14),
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(10),
@@ -368,11 +371,12 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 4),
             Text(
               value,
-              style: const TextStyle(
-                fontSize: 18,
+              style: TextStyle(
+                fontSize: smallValue ? 14 : 18,
                 fontWeight: FontWeight.w600,
                 color: AppColors.textDark,
               ),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 2),
             Text(

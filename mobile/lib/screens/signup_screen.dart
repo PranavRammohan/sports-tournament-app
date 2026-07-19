@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:image_picker/image_picker.dart';
+import 'dart:typed_data';
 import '../main.dart';
 import '../config.dart';
 
@@ -77,6 +79,26 @@ class _SignupScreenState extends State<SignupScreen> {
   bool _loading = false;
   bool _obscurePassword = true;
 
+  Uint8List? _profileImageBytes;
+  String? _profileImageBase64;
+
+  Future<void> _pickProfileImage() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 300,
+      maxHeight: 300,
+      imageQuality: 70,
+    );
+    if (picked == null) return;
+
+    final bytes = await picked.readAsBytes();
+    setState(() {
+      _profileImageBytes = bytes;
+      _profileImageBase64 = 'data:image/jpeg;base64,${base64Encode(bytes)}';
+    });
+  }
+
   Future<void> _handleSignup() async {
     final username = _usernameController.text.trim();
     final phoneNumber = _phoneController.text.trim();
@@ -115,6 +137,7 @@ class _SignupScreenState extends State<SignupScreen> {
           'password': password,
           'location': _selectedArea,
           'gender': _selectedGender,
+          'profilePicUrl': _profileImageBase64,
         }),
       );
 
@@ -179,6 +202,56 @@ class _SignupScreenState extends State<SignupScreen> {
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
+              const SizedBox(height: 20),
+
+              // Profile picture picker (optional)
+              Center(
+                child: GestureDetector(
+                  onTap: _pickProfileImage,
+                  child: Stack(
+                    children: [
+                      CircleAvatar(
+                        radius: 44,
+                        backgroundColor: Colors.grey.shade200,
+                        backgroundImage: _profileImageBytes != null
+                            ? MemoryImage(_profileImageBytes!)
+                            : null,
+                        child: _profileImageBytes == null
+                            ? Icon(
+                                Icons.person,
+                                size: 44,
+                                color: Colors.grey.shade400,
+                              )
+                            : null,
+                      ),
+                      Positioned(
+                        bottom: 0,
+                        right: 0,
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: const BoxDecoration(
+                            color: AppColors.primary,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.camera_alt,
+                            size: 16,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Center(
+                child: Text(
+                  'Add a profile photo (optional)',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+              ),
+
               const SizedBox(height: 26),
               TextField(
                 controller: _usernameController,

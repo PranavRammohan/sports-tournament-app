@@ -8,6 +8,7 @@ import '../config.dart';
 import '../utils.dart';
 import '../widgets/sport_icon.dart';
 import 'report_match_screen.dart';
+import 'host_report_match_screen.dart';
 import 'playoffs_screen.dart';
 
 class LeagueDetailScreen extends StatefulWidget {
@@ -22,7 +23,6 @@ class LeagueDetailScreen extends StatefulWidget {
 class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   Map<String, dynamic>? _league;
   List<dynamic> _leaderboard = [];
-  List<dynamic> _matchHistory = [];
   List<dynamic> _schedule = [];
   int? _currentUserId;
   bool _loading = true;
@@ -71,15 +71,6 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         _league = leagueData['league'];
         _leaderboard = leagueData['leaderboard'];
       });
-
-      final historyRes = await http.get(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/matches'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final historyData = jsonDecode(historyRes.body);
-      if (historyRes.statusCode == 200) {
-        setState(() => _matchHistory = historyData['matches']);
-      }
 
       final scheduleRes = await http.get(
         Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/schedule'),
@@ -301,6 +292,57 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     }
   }
 
+  Widget? _buildActionButton(bool isHost) {
+    final hostEntersScores = _league!['host_enters_scores'] == true;
+
+    if (hostEntersScores) {
+      if (!isHost) return null;
+
+      final pendingFixtures = _schedule
+          .where((f) => f['match_status'] != 'confirmed')
+          .toList();
+
+      return FloatingActionButton.extended(
+        onPressed: () async {
+          final reported = await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => HostReportMatchScreen(
+                leagueId: widget.leagueId,
+                sport: _league!['sport'],
+                pendingFixtures: pendingFixtures,
+              ),
+            ),
+          );
+          if (reported == true) _loadAll();
+        },
+        icon: const Icon(Icons.sports_score),
+        label: const Text('Enter Score'),
+      );
+    }
+
+    if (!_isMember) return null;
+
+    return FloatingActionButton.extended(
+      onPressed: () async {
+        final reported = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ReportMatchScreen(
+              leagueId: widget.leagueId,
+              format: _league!['format'],
+              sport: _league!['sport'],
+              members: _leaderboard,
+            ),
+          ),
+        );
+        if (reported == true) _loadAll();
+      },
+      icon: const Icon(Icons.sports_score),
+      label: const Text('Report'),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isHost = _league != null && _league!['created_by'] == _currentUserId;
@@ -369,7 +411,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
             tabs: [
               Tab(text: 'Leaderboard'),
               Tab(text: 'Schedule'),
-              Tab(text: 'History'),
+              Tab(text: 'My Matches'),
             ],
           ),
         ),
@@ -377,29 +419,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           children: [
             _buildLeaderboardTab(isHost),
             _buildScheduleTab(),
-            _buildHistoryTab(),
+            _buildMyMatchesTab(),
           ],
         ),
-        floatingActionButton: _isMember
-            ? FloatingActionButton.extended(
-                onPressed: () async {
-                  final reported = await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => ReportMatchScreen(
-                        leagueId: widget.leagueId,
-                        format: _league!['format'],
-                        sport: _league!['sport'],
-                        members: _leaderboard,
-                      ),
-                    ),
-                  );
-                  if (reported == true) _loadAll();
-                },
-                icon: const Icon(Icons.sports_score),
-                label: const Text('Report'),
-              )
-            : null,
+        floatingActionButton: _buildActionButton(isHost),
       ),
     );
   }
@@ -418,9 +441,26 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.grey.shade200),
             ),
-            child: Text(
-              '${formatDateOnly(_league!['season_start'])} to ${formatDateOnly(_league!['season_end'])} · ${_leaderboard.length} players · ${_league!['format']} · ${_league!['gender_category'] == 'mens' ? "Men's" : "Women's"}',
-              style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${formatDateOnly(_league!['season_start'])} to ${formatDateOnly(_league!['season_end'])} · ${_leaderboard.length} players · ${_league!['format']} · ${_league!['gender_category'] == 'mens' ? "Men's" : "Women's"}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textGrey,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Ranked by league points (win = 2, +1 for a dominant win)',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textGrey,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
             ),
           ),
           if (!_isMember)
@@ -458,6 +498,23 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 },
                 icon: const Icon(Icons.emoji_events_outlined),
                 label: const Text('Playoffs'),
+              ),
+            ),
+          if (_isMember && isHost && _schedule.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: ElevatedButton(
+                onPressed: _generating ? null : _generateSchedule,
+                child: _generating
+                    ? const SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Text('Generate Schedule'),
               ),
             ),
           if (_leaderboard.isEmpty)
@@ -512,13 +569,26 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                     '${player['matches_played']} matches · ${player['wins']}W ${player['losses']}L',
                     style: const TextStyle(fontSize: 11),
                   ),
-                  trailing: Text(
-                    '${player['rating']}',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.primary,
-                    ),
+                  trailing: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        '${player['points']} pts',
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.accent,
+                        ),
+                      ),
+                      Text(
+                        'Rating: ${player['rating']}',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          color: AppColors.textGrey,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               );
@@ -546,33 +616,12 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                _league!['created_by'] == _currentUserId
-                    ? 'No schedule yet.'
-                    : "The host hasn't generated a schedule yet.",
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              if (_league!['created_by'] == _currentUserId) ...[
-                const SizedBox(height: 14),
-                ElevatedButton(
-                  onPressed: _generating ? null : _generateSchedule,
-                  child: _generating
-                      ? const SizedBox(
-                          height: 18,
-                          width: 18,
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2,
-                          ),
-                        )
-                      : const Text('Generate Schedule'),
-                ),
-              ],
-            ],
+          child: Text(
+            _league!['created_by'] == _currentUserId
+                ? 'No schedule yet. Generate one from the Leaderboard tab.'
+                : "The host hasn't generated a schedule yet.",
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium,
           ),
         ),
       );
@@ -598,136 +647,9 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: 8),
-                ...entry.value.map((f) {
-                  final isDoubles = f['player1_partner_username'] != null;
-                  final team1 = isDoubles
-                      ? '${f['player1_username']} & ${f['player1_partner_username']}'
-                      : f['player1_username'];
-                  final team2 = isDoubles
-                      ? '${f['player2_username']} & ${f['player2_partner_username']}'
-                      : f['player2_username'];
-                  final isCompleted = f['match_status'] == 'confirmed';
-
-                  final involvesMe = [
-                    f['player1_id'],
-                    f['player1_partner_id'],
-                    f['player2_id'],
-                    f['player2_partner_id'],
-                  ].contains(_currentUserId);
-                  final iAmTeam1 =
-                      f['player1_id'] == _currentUserId ||
-                      f['player1_partner_id'] == _currentUserId;
-
-                  final List<Map<String, String>> opponentContacts = [];
-                  if (involvesMe && !isCompleted) {
-                    if (iAmTeam1) {
-                      if (f['player2_phone'] != null) {
-                        opponentContacts.add({
-                          'name': f['player2_username'],
-                          'phone': f['player2_phone'],
-                        });
-                      }
-                      if (f['player2_partner_phone'] != null) {
-                        opponentContacts.add({
-                          'name': f['player2_partner_username'],
-                          'phone': f['player2_partner_phone'],
-                        });
-                      }
-                    } else {
-                      if (f['player1_phone'] != null) {
-                        opponentContacts.add({
-                          'name': f['player1_username'],
-                          'phone': f['player1_phone'],
-                        });
-                      }
-                      if (f['player1_partner_phone'] != null) {
-                        opponentContacts.add({
-                          'name': f['player1_partner_username'],
-                          'phone': f['player1_partner_phone'],
-                        });
-                      }
-                    }
-                  }
-
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 6),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: isCompleted
-                            ? AppColors.success.withValues(alpha: 0.4)
-                            : Colors.grey.shade200,
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                '$team1 vs $team2',
-                                style: const TextStyle(fontSize: 13),
-                              ),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 7,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: isCompleted
-                                    ? AppColors.success.withValues(alpha: 0.1)
-                                    : AppColors.warning.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                isCompleted ? 'Done' : 'Pending',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w600,
-                                  color: isCompleted
-                                      ? AppColors.success
-                                      : AppColors.warning,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        if (opponentContacts.isNotEmpty) ...[
-                          const SizedBox(height: 6),
-                          ...opponentContacts.map(
-                            (c) => Padding(
-                              padding: const EdgeInsets.only(top: 2),
-                              child: Row(
-                                children: [
-                                  const Icon(
-                                    Icons.phone,
-                                    size: 12,
-                                    color: AppColors.textGrey,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    '${c['name']}: ${c['phone']}',
-                                    style: const TextStyle(
-                                      fontSize: 11,
-                                      color: AppColors.textGrey,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  );
-                }),
+                ...entry.value.map(
+                  (f) => _buildFixtureCard(f, showContacts: true),
+                ),
               ],
             ),
           );
@@ -736,95 +658,220 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
   }
 
-  Widget _buildHistoryTab() {
+  Widget _buildMyMatchesTab() {
+    if (!_isMember) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            'Join this league to see your matches.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ),
+      );
+    }
+
+    final myFixtures = _schedule.where((f) {
+      return [
+        f['player1_id'],
+        f['player1_partner_id'],
+        f['player2_id'],
+        f['player2_partner_id'],
+      ].contains(_currentUserId);
+    }).toList();
+
+    if (myFixtures.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            'No scheduled matches for you yet.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ),
+      );
+    }
+
     return RefreshIndicator(
       onRefresh: _loadAll,
-      child: _matchHistory.isEmpty
-          ? ListView(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text(
-                    'No matches played yet.',
-                    style: Theme.of(context).textTheme.bodyMedium,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: myFixtures
+            .map((f) => _buildFixtureCard(f, showContacts: true))
+            .toList(),
+      ),
+    );
+  }
+
+  Widget _buildFixtureCard(dynamic f, {required bool showContacts}) {
+    final isDoubles = f['player1_partner_username'] != null;
+    final team1 = isDoubles
+        ? '${f['player1_username']} & ${f['player1_partner_username']}'
+        : f['player1_username'];
+    final team2 = isDoubles
+        ? '${f['player2_username']} & ${f['player2_partner_username']}'
+        : f['player2_username'];
+    final isCompleted = f['match_status'] == 'confirmed';
+    final team1Won = isCompleted && f['winner_id'] == f['reported_player1_id'];
+    final team2Won = isCompleted && f['winner_id'] == f['reported_player2_id'];
+
+    final involvesMe = [
+      f['player1_id'],
+      f['player1_partner_id'],
+      f['player2_id'],
+      f['player2_partner_id'],
+    ].contains(_currentUserId);
+    final iAmTeam1 =
+        f['player1_id'] == _currentUserId ||
+        f['player1_partner_id'] == _currentUserId;
+
+    final List<Map<String, String>> opponentContacts = [];
+    if (showContacts && involvesMe && !isCompleted) {
+      if (iAmTeam1) {
+        if (f['player2_phone'] != null) {
+          opponentContacts.add({
+            'name': f['player2_username'],
+            'phone': f['player2_phone'],
+          });
+        }
+        if (f['player2_partner_phone'] != null) {
+          opponentContacts.add({
+            'name': f['player2_partner_username'],
+            'phone': f['player2_partner_phone'],
+          });
+        }
+      } else {
+        if (f['player1_phone'] != null) {
+          opponentContacts.add({
+            'name': f['player1_username'],
+            'phone': f['player1_phone'],
+          });
+        }
+        if (f['player1_partner_phone'] != null) {
+          opponentContacts.add({
+            'name': f['player1_partner_username'],
+            'phone': f['player1_partner_phone'],
+          });
+        }
+      }
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isCompleted
+              ? AppColors.success.withValues(alpha: 0.4)
+              : Colors.grey.shade200,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: isCompleted
+                    ? Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                              text: team1,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: team1Won
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                                color: team1Won
+                                    ? AppColors.success
+                                    : AppColors.textDark,
+                              ),
+                            ),
+                            const TextSpan(
+                              text: '  vs  ',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: AppColors.textGrey,
+                              ),
+                            ),
+                            TextSpan(
+                              text: team2,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: team2Won
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                                color: team2Won
+                                    ? AppColors.success
+                                    : AppColors.textDark,
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    : Text(
+                        '$team1 vs $team2',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: isCompleted
+                      ? AppColors.success.withValues(alpha: 0.1)
+                      : AppColors.warning.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  isCompleted ? 'Done' : 'Pending',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: isCompleted ? AppColors.success : AppColors.warning,
                   ),
                 ),
-              ],
-            )
-          : ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: _matchHistory.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 6),
-              itemBuilder: (context, index) {
-                final m = _matchHistory[index];
-                final isDoubles = m['player1_partner_username'] != null;
-                final team1 = isDoubles
-                    ? '${m['player1_username']} & ${m['player1_partner_username']}'
-                    : m['player1_username'];
-                final team2 = isDoubles
-                    ? '${m['player2_username']} & ${m['player2_partner_username']}'
-                    : m['player2_username'];
-                final team1Won = m['winner_id'] == m['player1_id'];
-
-                return Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.grey.shade200),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: RichText(
-                          text: TextSpan(
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: AppColors.textDark,
-                            ),
-                            children: [
-                              TextSpan(
-                                text: team1,
-                                style: TextStyle(
-                                  fontWeight: team1Won
-                                      ? FontWeight.bold
-                                      : FontWeight.normal,
-                                  color: team1Won
-                                      ? AppColors.success
-                                      : AppColors.textDark,
-                                ),
-                              ),
-                              const TextSpan(text: '  vs  '),
-                              TextSpan(
-                                text: team2,
-                                style: TextStyle(
-                                  fontWeight: !team1Won
-                                      ? FontWeight.bold
-                                      : FontWeight.normal,
-                                  color: !team1Won
-                                      ? AppColors.success
-                                      : AppColors.textDark,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      Text(
-                        _formatSetScores(m['set_scores']),
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppColors.textGrey,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
+              ),
+            ],
+          ),
+          if (isCompleted) ...[
+            const SizedBox(height: 4),
+            Text(
+              _formatSetScores(f['set_scores']),
+              style: const TextStyle(fontSize: 11, color: AppColors.textGrey),
             ),
+          ],
+          if (opponentContacts.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            ...opponentContacts.map(
+              (c) => Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.phone,
+                      size: 12,
+                      color: AppColors.textGrey,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${c['name']}: ${c['phone']}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppColors.textGrey,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
