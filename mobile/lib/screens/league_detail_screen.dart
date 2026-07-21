@@ -12,6 +12,7 @@ import 'host_report_match_screen.dart';
 import 'playoffs_screen.dart';
 import 'regenerate_schedule_dialog.dart';
 import 'add_players_screen.dart';
+import 'add_manual_match_screen.dart';
 
 class LeagueDetailScreen extends StatefulWidget {
   final int leagueId;
@@ -26,6 +27,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   Map<String, dynamic>? _league;
   List<dynamic> _leaderboard = [];
   List<dynamic> _schedule = [];
+  List<dynamic> _bracket = [];
   int? _currentUserId;
   bool _loading = true;
   bool _deleting = false;
@@ -38,6 +40,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   bool get _isMember =>
       _currentUserId != null &&
       _leaderboard.any((p) => p['id'] == _currentUserId);
+  bool get _isKnockout =>
+      _league != null && _league!['schedule_type'] == 'knockout';
+  bool get _isCustom =>
+      _league != null && _league!['schedule_type'] == 'custom';
 
   @override
   void initState() {
@@ -75,13 +81,24 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         _leaderboard = leagueData['leaderboard'];
       });
 
-      final scheduleRes = await http.get(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/schedule'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final scheduleData = jsonDecode(scheduleRes.body);
-      if (scheduleRes.statusCode == 200) {
-        setState(() => _schedule = scheduleData['schedule']);
+      if (_isKnockout) {
+        final bracketRes = await http.get(
+          Uri.parse('$baseApiUrl/playoffs/${widget.leagueId}'),
+          headers: {'Authorization': 'Bearer $token'},
+        );
+        final bracketData = jsonDecode(bracketRes.body);
+        if (bracketRes.statusCode == 200) {
+          setState(() => _bracket = bracketData['bracket']);
+        }
+      } else {
+        final scheduleRes = await http.get(
+          Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/schedule'),
+          headers: {'Authorization': 'Bearer $token'},
+        );
+        final scheduleData = jsonDecode(scheduleRes.body);
+        if (scheduleRes.statusCode == 200) {
+          setState(() => _schedule = scheduleData['schedule']);
+        }
       }
     } catch (err) {
       setState(() => _error = 'Could not reach the server.');
@@ -145,7 +162,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       if (response.statusCode == 201) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Schedule generated: ${data['matchCount']} matches'),
+            content: Text(data['message'] ?? 'Schedule generated.'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -220,12 +237,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       final data = jsonDecode(response.body);
 
       if (!mounted) return;
-      if (response.statusCode == 201) {
+      if (response.statusCode == 201 || response.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              'Schedule regenerated: ${data['matchCount']} matches',
-            ),
+            content: Text(data['message'] ?? 'Schedule regenerated.'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -360,12 +375,174 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     }
   }
 
+  Future<void> _reportKnockoutMatch(int matchId) async {
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => const _SelfReportSetsDialog(),
+    );
+    if (result == null) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final response = await http.post(
+        Uri.parse('$baseApiUrl/playoffs/match/$matchId/report'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode(result),
+      );
+      final data = jsonDecode(response.body);
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Result reported!'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadAll();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not report.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    }
+  }
+
+  Future<void> _hostReportKnockoutMatch(
+    int matchId,
+    String p1Name,
+    String p2Name,
+  ) async {
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) =>
+          _HostReportSetsDialog(player1Name: p1Name, player2Name: p2Name),
+    );
+    if (result == null) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final response = await http.post(
+        Uri.parse('$baseApiUrl/playoffs/match/$matchId/report-as-host'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode(result),
+      );
+      final data = jsonDecode(response.body);
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Match confirmed!'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadAll();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not enter score.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    }
+  }
+
+  Future<void> _confirmKnockoutMatch(int matchId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final response = await http.post(
+        Uri.parse('$baseApiUrl/playoffs/match/$matchId/confirm'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      final data = jsonDecode(response.body);
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Match confirmed!'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadAll();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not confirm.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    }
+  }
+
+  Future<void> _rejectKnockoutMatch(int matchId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final response = await http.post(
+        Uri.parse('$baseApiUrl/playoffs/match/$matchId/reject'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      final data = jsonDecode(response.body);
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Result rejected.'),
+            backgroundColor: AppColors.warning,
+          ),
+        );
+        _loadAll();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not reject.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    }
+  }
+
   String _formatSport(String sport) => sport
       .split('_')
       .map((w) => w[0].toUpperCase() + w.substring(1))
       .join(' ');
 
   String _formatSetScores(dynamic raw) {
+    if (raw == null) return '';
     try {
       final List sets = jsonDecode(raw);
       if (sets.isEmpty) return '';
@@ -376,7 +553,30 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   }
 
   Widget? _buildActionButton(bool isHost) {
+    if (_isKnockout)
+      return null; // knockout actions live inline on each bracket match
+
     final hostEntersScores = _league!['host_enters_scores'] == true;
+
+    if (_isCustom && isHost) {
+      return FloatingActionButton.extended(
+        onPressed: () async {
+          final added = await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => AddManualMatchScreen(
+                leagueId: widget.leagueId,
+                format: _league!['format'],
+                members: _leaderboard,
+              ),
+            ),
+          );
+          if (added == true) _loadAll();
+        },
+        icon: const Icon(Icons.add),
+        label: const Text('Add Match'),
+      );
+    }
 
     if (hostEntersScores) {
       if (!isHost) return null;
@@ -513,7 +713,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         body: TabBarView(
           children: [
             _buildLeaderboardTab(isHost),
-            _buildScheduleTab(isHost),
+            _isKnockout ? _buildKnockoutTab(isHost) : _buildScheduleTab(isHost),
             _buildMyMatchesTab(),
           ],
         ),
@@ -556,9 +756,11 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
-                  'Ranked by league points (win = 2, +1 for a dominant win)',
-                  style: TextStyle(
+                Text(
+                  _isKnockout
+                      ? 'Knockout bracket'
+                      : 'Ranked by league points (win = 2, +1 for a dominant win)',
+                  style: const TextStyle(
                     fontSize: 11,
                     color: AppColors.textGrey,
                     fontStyle: FontStyle.italic,
@@ -618,7 +820,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 label: const Text('Join League'),
               ),
             ),
-          if (_isMember && _league!['format'] == 'singles')
+          if (_isMember && _league!['format'] == 'singles' && !_isKnockout)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: OutlinedButton.icon(
@@ -637,7 +839,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 label: const Text('Playoffs'),
               ),
             ),
-          if (isHost && _schedule.isEmpty)
+          if (isHost &&
+              !_isCustom &&
+              ((_isKnockout && _bracket.isEmpty) ||
+                  (!_isKnockout && _schedule.isEmpty)))
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: ElevatedButton(
@@ -651,7 +856,9 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                           strokeWidth: 2,
                         ),
                       )
-                    : const Text('Generate Schedule'),
+                    : Text(
+                        _isKnockout ? 'Generate Bracket' : 'Generate Schedule',
+                      ),
               ),
             ),
           if (_leaderboard.isEmpty)
@@ -735,6 +942,207 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
   }
 
+  Widget _buildKnockoutTab(bool isHost) {
+    if (!_isMember && !isHost) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            'Join this league to see the bracket.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ),
+      );
+    }
+    if (_bracket.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            isHost
+                ? 'No bracket yet. Generate one from the Leaderboard tab.'
+                : "The host hasn't generated the bracket yet.",
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ),
+      );
+    }
+
+    final hostEntersScores = _league!['host_enters_scores'] == true;
+    final Map<int, List<dynamic>> rounds = {};
+    for (final m in _bracket) {
+      rounds.putIfAbsent(m['round_number'], () => []).add(m);
+    }
+    final totalRounds = rounds.keys.reduce((a, b) => a > b ? a : b);
+
+    return RefreshIndicator(
+      onRefresh: _loadAll,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: rounds.entries.map((entry) {
+          final roundNumber = entry.key;
+          final roundName = roundNumber == totalRounds
+              ? 'Final'
+              : roundNumber == totalRounds - 1
+              ? 'Semifinal'
+              : 'Round $roundNumber';
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(roundName, style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 10),
+                ...entry.value.map((m) {
+                  final p1 = m['player1_username'] ?? 'TBD';
+                  final p2 = m['player2_username'] ?? 'TBD';
+                  final isReady = m['status'] == 'ready';
+                  final isReported = m['status'] == 'reported';
+                  final isConfirmed = m['status'] == 'confirmed';
+                  final involvesMe =
+                      m['player1_id'] == _currentUserId ||
+                      m['player2_id'] == _currentUserId;
+                  final reportedByMe = m['reported_by'] == _currentUserId;
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: isConfirmed
+                            ? AppColors.success.withValues(alpha: 0.4)
+                            : Colors.grey.shade200,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '$p1  vs  $p2',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: isConfirmed
+                                      ? FontWeight.w600
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                            if (isConfirmed)
+                              Text(
+                                'Won: ${m['winner_id'] == m['player1_id'] ? p1 : p2}',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: AppColors.success,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                          ],
+                        ),
+                        if (m['set_scores'] != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            _formatSetScores(m['set_scores']),
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: AppColors.textGrey,
+                            ),
+                          ),
+                        ],
+                        if (hostEntersScores && isHost && isReady) ...[
+                          const SizedBox(height: 8),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                            ),
+                            onPressed: () =>
+                                _hostReportKnockoutMatch(m['id'], p1, p2),
+                            child: const Text(
+                              'Enter Score',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ],
+                        if (!hostEntersScores && isReady && involvesMe) ...[
+                          const SizedBox(height: 8),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                            ),
+                            onPressed: () => _reportKnockoutMatch(m['id']),
+                            child: const Text(
+                              'Report Result',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ],
+                        if (!hostEntersScores &&
+                            isReported &&
+                            involvesMe &&
+                            !reportedByMe) ...[
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: AppColors.danger,
+                                    side: const BorderSide(
+                                      color: AppColors.danger,
+                                    ),
+                                  ),
+                                  onPressed: () =>
+                                      _rejectKnockoutMatch(m['id']),
+                                  child: const Text(
+                                    'Reject',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: () =>
+                                      _confirmKnockoutMatch(m['id']),
+                                  child: const Text(
+                                    'Confirm',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                        if (!hostEntersScores && isReported && reportedByMe)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 6),
+                            child: Text(
+                              'Waiting for opponent to confirm...',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: AppColors.textGrey,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
   Widget _buildScheduleTab(bool isHost) {
     if (!_isMember) {
       return Center(
@@ -754,9 +1162,13 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(
-            _league!['created_by'] == _currentUserId
-                ? 'No schedule yet. Generate one from the Leaderboard tab.'
-                : "The host hasn't generated a schedule yet.",
+            _isCustom
+                ? (isHost
+                      ? 'No matches added yet. Use "Add Match" below.'
+                      : "The host hasn't added any matches yet.")
+                : (isHost
+                      ? 'No schedule yet. Generate one from the Leaderboard tab.'
+                      : "The host hasn't generated a schedule yet."),
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium,
           ),
@@ -769,15 +1181,14 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       tiers.putIfAbsent(f['tier_number'], () => []).add(f);
     }
 
-    final isMatchesPerPlayer =
-        _league!['schedule_type'] == 'matches_per_player';
+    final showTierHeadings = _league!['schedule_type'] == 'round_robin';
 
     return RefreshIndicator(
       onRefresh: _loadAll,
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          if (isHost)
+          if (isHost && !_isCustom)
             Padding(
               padding: const EdgeInsets.only(bottom: 16),
               child: OutlinedButton.icon(
@@ -798,7 +1209,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (!isMatchesPerPlayer) ...[
+                  if (showTierHeadings) ...[
                     Text(
                       'Tier ${entry.key}',
                       style: Theme.of(context).textTheme.titleMedium,
@@ -828,6 +1239,62 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
             style: Theme.of(context).textTheme.bodyMedium,
           ),
         ),
+      );
+    }
+
+    if (_isKnockout) {
+      final myMatches = _bracket
+          .where(
+            (m) =>
+                m['player1_id'] == _currentUserId ||
+                m['player2_id'] == _currentUserId,
+          )
+          .toList();
+      if (myMatches.isEmpty) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              'No bracket matches for you yet.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
+        );
+      }
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: myMatches.map((m) {
+          final p1 = m['player1_username'] ?? 'TBD';
+          final p2 = m['player2_username'] ?? 'TBD';
+          final isConfirmed = m['status'] == 'confirmed';
+          return Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey.shade200),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '$p1 vs $p2',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+                Text(
+                  isConfirmed ? 'Done' : m['status'],
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textGrey,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }).toList(),
       );
     }
 
@@ -1031,6 +1498,215 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           ],
         ],
       ),
+    );
+  }
+}
+
+class _SetScore {
+  final TextEditingController myScore = TextEditingController();
+  final TextEditingController opponentScore = TextEditingController();
+}
+
+class _SelfReportSetsDialog extends StatefulWidget {
+  const _SelfReportSetsDialog();
+
+  @override
+  State<_SelfReportSetsDialog> createState() => _SelfReportSetsDialogState();
+}
+
+class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
+  final List<_SetScore> _sets = [_SetScore()];
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      title: const Text('Report Result'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ..._sets.asMap().entries.map((entry) {
+              final index = entry.key;
+              final set = entry.value;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: set.myScore,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          labelText: 'Set ${index + 1} — You',
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 6),
+                      child: Text('-'),
+                    ),
+                    Expanded(
+                      child: TextField(
+                        controller: set.opponentScore,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Opponent',
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+            TextButton.icon(
+              onPressed: () => setState(() => _sets.add(_SetScore())),
+              icon: const Icon(Icons.add),
+              label: const Text('Add Set'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            int totalMy = 0, totalOpp = 0, setsWonByMe = 0, setsWonByOpp = 0;
+            final List<Map<String, int>> setScores = [];
+            for (final s in _sets) {
+              final my = int.tryParse(s.myScore.text.trim());
+              final opp = int.tryParse(s.opponentScore.text.trim());
+              if (my == null || opp == null || my == opp) return;
+              setScores.add({'me': my, 'opponent': opp});
+              totalMy += my;
+              totalOpp += opp;
+              if (my > opp) {
+                setsWonByMe++;
+              } else {
+                setsWonByOpp++;
+              }
+            }
+            if (setsWonByMe == setsWonByOpp) return;
+            Navigator.pop(context, {
+              'myUnits': totalMy,
+              'opponentUnits': totalOpp,
+              'iWon': setsWonByMe > setsWonByOpp,
+              'setScores': setScores,
+            });
+          },
+          child: const Text('Submit'),
+        ),
+      ],
+    );
+  }
+}
+
+class _HostReportSetsDialog extends StatefulWidget {
+  final String player1Name;
+  final String player2Name;
+
+  const _HostReportSetsDialog({
+    required this.player1Name,
+    required this.player2Name,
+  });
+
+  @override
+  State<_HostReportSetsDialog> createState() => _HostReportSetsDialogState();
+}
+
+class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
+  final List<_SetScore> _sets = [_SetScore()];
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      title: const Text('Enter Score'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ..._sets.asMap().entries.map((entry) {
+              final index = entry.key;
+              final set = entry.value;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: set.myScore,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          labelText: 'Set ${index + 1} — ${widget.player1Name}',
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 6),
+                      child: Text('-'),
+                    ),
+                    Expanded(
+                      child: TextField(
+                        controller: set.opponentScore,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          labelText: widget.player2Name,
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+            TextButton.icon(
+              onPressed: () => setState(() => _sets.add(_SetScore())),
+              icon: const Icon(Icons.add),
+              label: const Text('Add Set'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            int totalP1 = 0, totalP2 = 0, setsWonByP1 = 0, setsWonByP2 = 0;
+            final List<Map<String, int>> setScores = [];
+            for (final s in _sets) {
+              final p1 = int.tryParse(s.myScore.text.trim());
+              final p2 = int.tryParse(s.opponentScore.text.trim());
+              if (p1 == null || p2 == null || p1 == p2) return;
+              setScores.add({'me': p1, 'opponent': p2});
+              totalP1 += p1;
+              totalP2 += p2;
+              if (p1 > p2) {
+                setsWonByP1++;
+              } else {
+                setsWonByP2++;
+              }
+            }
+            if (setsWonByP1 == setsWonByP2) return;
+            Navigator.pop(context, {
+              'player1Units': totalP1,
+              'player2Units': totalP2,
+              'player1Won': setsWonByP1 > setsWonByP2,
+              'setScores': setScores,
+            });
+          },
+          child: const Text('Submit'),
+        ),
+      ],
     );
   }
 }

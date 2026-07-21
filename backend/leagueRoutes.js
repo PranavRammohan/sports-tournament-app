@@ -14,6 +14,24 @@ function generateJoinCode() {
   return code;
 }
 
+function isPowerOfTwo(n) {
+  return n > 0 && (n & (n - 1)) === 0;
+}
+
+function generateSeedOrder(size) {
+  let result = [1, 2];
+  while (result.length < size) {
+    const newSize = result.length * 2;
+    const newResult = [];
+    for (const seed of result) {
+      newResult.push(seed);
+      newResult.push(newSize + 1 - seed);
+    }
+    result = newResult;
+  }
+  return result;
+}
+
 // ---------- CREATE LEAGUE ----------
 router.post('/create', async (req, res) => {
   const userId = req.userId;
@@ -31,9 +49,15 @@ router.post('/create', async (req, res) => {
   if (!['mens', 'womens'].includes(genderCategory)) {
     return res.status(400).json({ error: 'Gender category must be mens or womens.' });
   }
-  const finalScheduleType = scheduleType === 'matches_per_player' ? 'matches_per_player' : 'round_robin';
+
+  const validScheduleTypes = ['round_robin', 'matches_per_player', 'knockout', 'custom'];
+  const finalScheduleType = validScheduleTypes.includes(scheduleType) ? scheduleType : 'round_robin';
+
   if (finalScheduleType === 'matches_per_player' && (!matchesPerPlayer || matchesPerPlayer < 1)) {
     return res.status(400).json({ error: 'Please specify how many matches each player should play.' });
+  }
+  if (finalScheduleType === 'knockout' && format !== 'singles') {
+    return res.status(400).json({ error: 'Knockout format is currently only supported for singles leagues.' });
   }
 
   try {
@@ -437,6 +461,14 @@ router.post('/:id/generate-schedule', async (req, res) => {
       return res.status(403).json({ error: 'Only the league host can generate the schedule.' });
     }
 
+    if (league.schedule_type === 'custom') {
+      return res.status(400).json({ error: 'Custom leagues do not use auto-generated schedules. Add matches manually instead.' });
+    }
+
+    if (league.schedule_type === 'knockout') {
+      return generateKnockoutBracket(req, res, league);
+    }
+
     const existing = await pool.query(
       'SELECT id FROM scheduled_matches WHERE league_id = $1 LIMIT 1',
       [leagueId]
@@ -489,6 +521,115 @@ router.post('/:id/generate-schedule', async (req, res) => {
   }
 });
 
+// Knockout: builds a full seeded bracket directly in playoff_matches, using ALL
+// current league members (not just top leaderboard picks). Requires an exact
+// power-of-two member count — no bye-round handling for now.
+async function generateKnockoutBracket(req, res, league) {
+  const leagueId = league.id;
+
+  const existing = await pool.query('SELECT id FROM playoff_matches WHERE league_id = $1 LIMIT 1', [leagueId]);
+  if (existing.rows.length > 0) {
+    return res.status(409).json({ error: 'A bracket has already been generated for this league.' });
+  }
+
+  const membersResult = await pool.query(
+    `SELECT u.id, us.rating
+     FROM league_members lm
+     JOIN users u ON u.id = lm.user_id
+     JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+     WHERE lm.league_id = $3
+     ORDER BY us.rating DESC`,
+    [league.sport, league.format, leagueId]
+  );
+  const members = membersResult.rows;
+
+  if (!isPowerOfTwo(members.length) || members.length < 2) {
+    return res.status(400).json({
+      error: `Knockout leagues need an exact power-of-two number of players (2, 4, 8, 16...). Currently has ${members.length}.`,
+    });
+  }
+
+  const size = members.length;
+  const seedOrder = generateSeedOrder(size);
+  const totalRounds = Math.log2(size);
+
+  for (let i = 0; i < seedOrder.length; i += 2) {
+    const seedA = seedOrder[i];
+    const seedB = seedOrder[i + 1];
+    await pool.query(
+      `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, player2_id, status)
+       VALUES ($1, 1, $2, $3, $4, 'ready')`,
+      [leagueId, i / 2 + 1, members[seedA - 1].id, members[seedB - 1].id]
+    );
+  }
+
+  for (let round = 2; round <= totalRounds; round++) {
+    const matchesInRound = size / Math.pow(2, round);
+    for (let pos = 1; pos <= matchesInRound; pos++) {
+      await pool.query(
+        `INSERT INTO playoff_matches (league_id, round_number, position, status)
+         VALUES ($1, $2, $3, 'pending')`,
+        [leagueId, round, pos]
+      );
+    }
+  }
+
+  res.status(201).json({ message: 'Bracket generated.', matchCount: seedOrder.length / 2 });
+}
+
+// ---------- ADD A MANUAL MATCH (custom format, host only) ----------
+router.post('/:id/add-manual-match', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { player1Id, player1PartnerId, player2Id, player2PartnerId } = req.body;
+
+  if (!player1Id || !player2Id) {
+    return res.status(400).json({ error: 'Please select both sides of the match.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can add matches.' });
+    }
+    if (league.schedule_type !== 'custom') {
+      return res.status(400).json({ error: 'This league does not use manual match building.' });
+    }
+    if (league.format === 'doubles' && (!player1PartnerId || !player2PartnerId)) {
+      return res.status(400).json({ error: 'Doubles matches need both partners selected.' });
+    }
+    if (league.format === 'singles' && (player1PartnerId || player2PartnerId)) {
+      return res.status(400).json({ error: 'Singles matches should not have partners.' });
+    }
+
+    const allIds = [player1Id, player2Id, player1PartnerId, player2PartnerId].filter(Boolean);
+    const memberCheck = await pool.query(
+      `SELECT user_id FROM league_members WHERE league_id = $1 AND user_id = ANY($2::int[])`,
+      [leagueId, allIds]
+    );
+    if (memberCheck.rows.length !== allIds.length) {
+      return res.status(400).json({ error: 'All selected players must be members of this league.' });
+    }
+
+    await pool.query(
+      `INSERT INTO scheduled_matches
+        (league_id, tier_number, player1_id, player1_partner_id, player2_id, player2_partner_id)
+       VALUES ($1, 1, $2, $3, $4, $5)`,
+      [leagueId, player1Id, player1PartnerId || null, player2Id, player2PartnerId || null]
+    );
+
+    res.status(201).json({ message: 'Match added.' });
+  } catch (err) {
+    console.error('Add manual match error:', err);
+    res.status(500).json({ error: 'Something went wrong adding the match.' });
+  }
+});
+
 // ---------- REGENERATE SCHEDULE (host only) ----------
 router.post('/:id/regenerate-schedule', async (req, res) => {
   const userId = req.userId;
@@ -507,7 +648,8 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
     }
 
     if (scheduleType) {
-      const finalScheduleType = scheduleType === 'matches_per_player' ? 'matches_per_player' : 'round_robin';
+      const validScheduleTypes = ['round_robin', 'matches_per_player', 'knockout', 'custom'];
+      const finalScheduleType = validScheduleTypes.includes(scheduleType) ? scheduleType : 'round_robin';
       if (finalScheduleType === 'matches_per_player' && (!matchesPerPlayer || matchesPerPlayer < 1)) {
         return res.status(400).json({ error: 'Please specify how many matches each player should play.' });
       }
@@ -529,6 +671,13 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
 
     const refreshedLeagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     const refreshedLeague = refreshedLeagueResult.rows[0];
+
+    if (refreshedLeague.schedule_type === 'custom') {
+      return res.status(200).json({ message: 'Schedule cleared. Add matches manually.', matchCount: 0 });
+    }
+    if (refreshedLeague.schedule_type === 'knockout') {
+      return generateKnockoutBracket(req, res, refreshedLeague);
+    }
 
     const membersResult = await pool.query(
       `SELECT u.id, us.rating

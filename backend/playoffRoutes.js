@@ -3,10 +3,26 @@ const express = require('express');
 const router = express.Router();
 const pool = require('./db');
 
-const SEEDING_PATTERNS = {
-  4: [[1, 4], [2, 3]],
-  8: [[1, 8], [4, 5], [2, 7], [3, 6]],
-};
+// Generates standard tournament bracket seed order for any power-of-two size,
+// e.g. size=8 -> [1,8,4,5,2,7,3,6] (grouped in pairs: 1v8, 4v5, 2v7, 3v6),
+// ensuring top seeds can't meet until later rounds.
+function generateSeedOrder(size) {
+  let result = [1, 2];
+  while (result.length < size) {
+    const newSize = result.length * 2;
+    const newResult = [];
+    for (const seed of result) {
+      newResult.push(seed);
+      newResult.push(newSize + 1 - seed);
+    }
+    result = newResult;
+  }
+  return result;
+}
+
+function isPowerOfTwo(n) {
+  return n > 0 && (n & (n - 1)) === 0;
+}
 
 // ---------- GENERATE PLAYOFF BRACKET (host only, once, singles only) ----------
 router.post('/:leagueId/generate', async (req, res) => {
@@ -14,8 +30,8 @@ router.post('/:leagueId/generate', async (req, res) => {
   const leagueId = req.params.leagueId;
   const { qualifierCount } = req.body;
 
-  if (![4, 8].includes(qualifierCount)) {
-    return res.status(400).json({ error: 'Qualifier count must be 4 or 8.' });
+  if (!isPowerOfTwo(qualifierCount) || qualifierCount < 2) {
+    return res.status(400).json({ error: 'Qualifier count must be a power of 2 (2, 4, 8, 16...).' });
   }
 
   try {
@@ -29,12 +45,12 @@ router.post('/:leagueId/generate', async (req, res) => {
       return res.status(403).json({ error: 'Only the league host can start playoffs.' });
     }
     if (league.format !== 'singles') {
-      return res.status(400).json({ error: 'Playoffs are currently only supported for singles leagues.' });
+      return res.status(400).json({ error: 'Brackets are currently only supported for singles leagues.' });
     }
 
     const existing = await pool.query('SELECT id FROM playoff_matches WHERE league_id = $1 LIMIT 1', [leagueId]);
     if (existing.rows.length > 0) {
-      return res.status(409).json({ error: 'Playoffs have already been started for this league.' });
+      return res.status(409).json({ error: 'A bracket has already been started for this league.' });
     }
 
     const standingsResult = await pool.query(
@@ -53,15 +69,17 @@ router.post('/:leagueId/generate', async (req, res) => {
       return res.status(400).json({ error: `Need at least ${qualifierCount} players in the leaderboard to start this bracket size.` });
     }
 
-    const pattern = SEEDING_PATTERNS[qualifierCount];
+    const seedOrder = generateSeedOrder(qualifierCount);
     const totalRounds = Math.log2(qualifierCount);
 
-    for (let i = 0; i < pattern.length; i++) {
-      const [seedA, seedB] = pattern[i];
+    // Group seedOrder into round-1 pairs: [s1,s2, s3,s4, ...] -> (s1 vs s2), (s3 vs s4), ...
+    for (let i = 0; i < seedOrder.length; i += 2) {
+      const seedA = seedOrder[i];
+      const seedB = seedOrder[i + 1];
       await pool.query(
         `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, player2_id, status)
          VALUES ($1, 1, $2, $3, $4, 'ready')`,
-        [leagueId, i + 1, qualifiers[seedA - 1].id, qualifiers[seedB - 1].id]
+        [leagueId, i / 2 + 1, qualifiers[seedA - 1].id, qualifiers[seedB - 1].id]
       );
     }
 
@@ -76,7 +94,7 @@ router.post('/:leagueId/generate', async (req, res) => {
       }
     }
 
-    res.status(201).json({ message: 'Playoff bracket generated.' });
+    res.status(201).json({ message: 'Bracket generated.' });
   } catch (err) {
     console.error('Generate playoffs error:', err);
     res.status(500).json({ error: 'Something went wrong generating the bracket.' });
@@ -104,9 +122,6 @@ router.get('/:leagueId', async (req, res) => {
   }
 });
 
-// Advances the winner of a completed playoff match into the correct slot of
-// the next round, and marks that next match "ready" once both slots are filled.
-// Shared by both the normal confirm flow and the host-direct-entry flow.
 async function advanceWinner(match) {
   const nextRound = match.round_number + 1;
   const nextPosition = Math.ceil(match.position / 2);
@@ -153,7 +168,7 @@ router.post('/match/:matchId/report', async (req, res) => {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
     const league = leagueResult.rows[0];
     if (league.host_enters_scores) {
-      return res.status(403).json({ error: 'This league requires the host to enter all playoff scores.' });
+      return res.status(403).json({ error: 'This league requires the host to enter all scores.' });
     }
 
     if (match.status !== 'ready') {
@@ -202,7 +217,7 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
     const league = leagueResult.rows[0];
 
     if (!league.host_enters_scores || league.created_by !== userId) {
-      return res.status(403).json({ error: 'Only the host can enter playoff scores directly for this league.' });
+      return res.status(403).json({ error: 'Only the host can enter scores directly for this league.' });
     }
 
     if (match.status !== 'ready') {

@@ -181,7 +181,6 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
 
       if (!mounted) return;
 
-      // If a private league was created, show the join code before leaving the screen.
       final league = data['league'];
       if (_isPrivate && league['join_code'] != null) {
         await showDialog(
@@ -293,7 +292,15 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                 DropdownMenuItem(value: 'Singles', child: Text('Singles')),
                 DropdownMenuItem(value: 'Doubles', child: Text('Doubles')),
               ],
-              onChanged: (v) => setState(() => _selectedFormat = v),
+              onChanged: (v) {
+                setState(() {
+                  _selectedFormat = v;
+                  // Knockout is singles-only; fall back if doubles is chosen.
+                  if (v == 'Doubles' && _scheduleType == 'knockout') {
+                    _scheduleType = 'round_robin';
+                  }
+                });
+              },
             ),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
@@ -336,13 +343,6 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               'Match Format',
               style: Theme.of(context).textTheme.titleMedium,
             ),
-            const SizedBox(height: 4),
-            Text(
-              isSingles
-                  ? 'Round Robin works best for 7 or fewer players. For larger groups, pick how many matches each player plays before playoffs.'
-                  : 'Doubles leagues always use Round Robin.',
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
             const SizedBox(height: 10),
 
             RadioListTile<String>(
@@ -350,6 +350,10 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               value: 'round_robin',
               groupValue: _scheduleType,
               title: const Text('Round Robin (everyone plays everyone)'),
+              subtitle: const Text(
+                'Best for 7 or fewer players',
+                style: TextStyle(fontSize: 11),
+              ),
               onChanged: (v) => setState(() => _scheduleType = v!),
             ),
             if (isSingles)
@@ -358,6 +362,10 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                 value: 'matches_per_player',
                 groupValue: _scheduleType,
                 title: const Text('Fixed number of matches per player'),
+                subtitle: const Text(
+                  'Good for larger groups',
+                  style: TextStyle(fontSize: 11),
+                ),
                 onChanged: (v) => setState(() => _scheduleType = v!),
               ),
             if (isSingles && _scheduleType == 'matches_per_player')
@@ -373,6 +381,29 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                   ),
                 ),
               ),
+            if (isSingles)
+              RadioListTile<String>(
+                contentPadding: EdgeInsets.zero,
+                value: 'knockout',
+                groupValue: _scheduleType,
+                title: const Text('Knockout (seeded, single elimination)'),
+                subtitle: const Text(
+                  'Needs an exact power-of-2 player count (2, 4, 8, 16...)',
+                  style: TextStyle(fontSize: 11),
+                ),
+                onChanged: (v) => setState(() => _scheduleType = v!),
+              ),
+            RadioListTile<String>(
+              contentPadding: EdgeInsets.zero,
+              value: 'custom',
+              groupValue: _scheduleType,
+              title: const Text('Custom — I\'ll decide who plays who'),
+              subtitle: const Text(
+                'Add matches manually, any time',
+                style: TextStyle(fontSize: 11),
+              ),
+              onChanged: (v) => setState(() => _scheduleType = v!),
+            ),
 
             const SizedBox(height: 20),
             const Divider(),
