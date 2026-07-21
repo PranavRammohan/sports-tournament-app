@@ -4,15 +4,13 @@ const router = express.Router();
 const pool = require('./db');
 const { calculateNewRatings } = require('./ratingEngine');
 
-// Approximate real-world scale for each sport's rating system, used only to
-// judge how "big" a rating gap is (as a fraction of the sport's typical
-// range) when deciding league-points upset bonuses. Does not affect the
-// actual rating engine at all.
+// Recalibrated to match each sport's real practical rating range used in this
+// app (see ratingEngine.js for the same recalibration reasoning).
 const SPORT_RATING_RANGES = {
-  badminton: 7000,
-  tennis: 15.5,
-  table_tennis: 2300,
-  pickleball: 6.0,
+  badminton: 2500,      // 6000–8500
+  tennis: 11.5,          // 2.5–13 (plus a little headroom above 13, in case)
+  table_tennis: 1500,    // 1000–2500
+  pickleball: 4.5,       // 2.5–7.0
 };
 
 async function getRating(userId, sport, format) {
@@ -42,11 +40,6 @@ async function updateRating(userId, sport, format, newRating, won) {
   }
 }
 
-// League Points: base 2 for a win. If the winner was rated LOWER than the
-// loser going in (a genuine upset), add a bonus scaled to how big that gap
-// was — a small upset earns +1, a big one earns +2. Beating someone rated
-// lower (an expected win) earns no upset bonus at all. A dominant win
-// (didn't drop a single set/game) adds +1 on top, regardless of the above.
 function calculateLeaguePoints(sport, winnerRating, loserRating, setScores, winnerWonTeam1) {
   let points = 2;
 
@@ -149,8 +142,6 @@ async function finalizeMatch(match, league) {
     [player1RatingChange, player2RatingChange, player1PartnerRatingChange, player2PartnerRatingChange, match.id]
   );
 
-  // League points, based on the PRE-MATCH ratings (team1Rating/team2Rating),
-  // so an upset is judged on who was actually favored going in.
   const winnerRating = team1Won ? team1Rating : team2Rating;
   const loserRating = team1Won ? team2Rating : team1Rating;
   const points = calculateLeaguePoints(sport, winnerRating, loserRating, match.set_scores, team1Won);

@@ -37,7 +37,7 @@ router.post('/create', async (req, res) => {
   const userId = req.userId;
   const {
     name, sport, area, seasonStart, seasonEnd, format, genderCategory,
-    scheduleType, matchesPerPlayer, hostEntersScores, hostPlays, isPrivate,
+    scheduleType, matchesPerPlayer, hostEntersScores, hostPlays, isPrivate, academyName,
   } = req.body;
 
   if (!name || !sport || !area || !seasonStart || !seasonEnd || !format || !genderCategory) {
@@ -73,14 +73,15 @@ router.post('/create', async (req, res) => {
 
     const result = await pool.query(
       `INSERT INTO leagues (name, sport, area, season_start, season_end, created_by, format, gender_category,
-                            schedule_type, matches_per_player, host_enters_scores, is_private, join_code)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                            schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING id, name, sport, area, season_start, season_end, format, gender_category, created_by,
-                 schedule_type, matches_per_player, host_enters_scores, is_private, join_code`,
+                 schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name`,
       [
         name, sport, area, seasonStart, seasonEnd, userId, format, genderCategory,
         finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null,
         hostEntersScores === true, isPrivate === true, joinCode,
+        academyName && academyName.trim().length > 0 ? academyName.trim() : null,
       ]
     );
 
@@ -114,7 +115,7 @@ router.get('/', async (req, res) => {
 
     let query = `
       SELECT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
-             l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private,
+             l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.academy_name,
              COUNT(lm.id) AS member_count
       FROM leagues l
       LEFT JOIN league_members lm ON lm.league_id = l.id
@@ -153,7 +154,7 @@ router.get('/mine', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT DISTINCT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
-              l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.join_code,
+              l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.join_code, l.academy_name,
               (SELECT COUNT(*) FROM league_members lm2 WHERE lm2.league_id = l.id) AS member_count
        FROM leagues l
        LEFT JOIN league_members lm ON lm.league_id = l.id AND lm.user_id = $1
@@ -402,7 +403,13 @@ router.get('/:id', async (req, res) => {
   const leagueId = req.params.id;
 
   try {
-    const league = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    const league = await pool.query(
+      `SELECT l.*, u.username as host_username
+       FROM leagues l
+       JOIN users u ON u.id = l.created_by
+       WHERE l.id = $1`,
+      [leagueId]
+    );
     if (league.rows.length === 0) {
       return res.status(404).json({ error: 'League not found.' });
     }
@@ -521,9 +528,6 @@ router.post('/:id/generate-schedule', async (req, res) => {
   }
 });
 
-// Knockout: builds a full seeded bracket directly in playoff_matches, using ALL
-// current league members (not just top leaderboard picks). Requires an exact
-// power-of-two member count — no bye-round handling for now.
 async function generateKnockoutBracket(req, res, league) {
   const leagueId = league.id;
 

@@ -553,8 +553,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   }
 
   Widget? _buildActionButton(bool isHost) {
-    if (_isKnockout)
-      return null; // knockout actions live inline on each bracket match
+    if (_isKnockout) return null;
 
     final hostEntersScores = _league!['host_enters_scores'] == true;
 
@@ -723,6 +722,9 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   }
 
   Widget _buildLeaderboardTab(bool isHost) {
+    final academyName = _league!['academy_name'];
+    final hostUsername = _league!['host_username'];
+
     return RefreshIndicator(
       onRefresh: _loadAll,
       child: ListView(
@@ -754,6 +756,32 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                     fontSize: 12,
                     color: AppColors.textGrey,
                   ),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Icon(
+                      academyName != null
+                          ? Icons.school_outlined
+                          : Icons.person_outline,
+                      size: 14,
+                      color: AppColors.textGrey,
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        academyName != null
+                            ? 'Hosted by $academyName'
+                            : 'Hosted by $hostUsername',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textGrey,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 4),
                 Text(

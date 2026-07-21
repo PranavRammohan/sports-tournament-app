@@ -76,6 +76,7 @@ class CreateLeagueScreen extends StatefulWidget {
 
 class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _academyNameController = TextEditingController();
   String? _selectedSport;
   String? _selectedArea;
   String? _selectedFormat;
@@ -166,6 +167,9 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
           'hostEntersScores': _hostEntersScores,
           'hostPlays': _hostPlays,
           'isPrivate': _isPrivate,
+          'academyName': _academyNameController.text.trim().isEmpty
+              ? null
+              : _academyNameController.text.trim(),
         }),
       );
 
@@ -276,6 +280,15 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               ),
             ),
             const SizedBox(height: 16),
+            TextField(
+              controller: _academyNameController,
+              decoration: const InputDecoration(
+                labelText: 'Academy Name (optional)',
+                hintText: 'e.g. Ace Tennis Academy',
+                prefixIcon: Icon(Icons.school_outlined),
+              ),
+            ),
+            const SizedBox(height: 16),
             DropdownButtonFormField<String>(
               initialValue: _selectedSport,
               decoration: const InputDecoration(labelText: 'Sport'),
@@ -295,7 +308,6 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               onChanged: (v) {
                 setState(() {
                   _selectedFormat = v;
-                  // Knockout is singles-only; fall back if doubles is chosen.
                   if (v == 'Doubles' && _scheduleType == 'knockout') {
                     _scheduleType = 'round_robin';
                   }

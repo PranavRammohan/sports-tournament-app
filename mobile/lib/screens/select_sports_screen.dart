@@ -7,39 +7,48 @@ import '../main.dart';
 import '../config.dart';
 import '../widgets/sport_icon.dart';
 
-const Map<String, Map<String, num>> startingRatings = {
+// Skill levels shown per sport, in display order. The key is what gets sent
+// to the backend (must match STARTING_RATINGS in sportsRoutes.js exactly),
+// the value is the label shown to the user alongside its starting rating.
+const Map<String, Map<String, num>> sportLevels = {
   'Badminton': {
-    'Beginner': 1500,
-    'Intermediate': 3000,
-    'Advanced': 5000,
-    'Expert': 7000,
+    'beginner': 6000,
+    'intermediate': 6500,
+    'higher intermediate': 7000,
+    'advanced': 7500,
+    'pro': 8500,
   },
   'Tennis': {
-    'Beginner': 2.5,
-    'Intermediate': 5.0,
-    'Advanced': 8.5,
-    'Expert': 12.0,
+    'beginner': 2.5,
+    'lower intermediate': 4.5,
+    'intermediate': 6.5,
+    'intermediate advanced': 8.5,
+    'advanced': 10.5,
+    'pro': 13,
   },
   'Table Tennis': {
-    'Beginner': 800,
-    'Intermediate': 1200,
-    'Advanced': 1600,
-    'Expert': 2000,
+    'beginner': 1000,
+    'early intermediate': 1400,
+    'intermediate': 1600,
+    'higher intermediate': 1800,
+    'advanced': 2200,
+    'pro': 2500,
   },
   'Pickleball': {
-    'Beginner': 2.5,
-    'Intermediate': 3.5,
-    'Advanced': 5.0,
-    'Expert': 6.5,
+    'beginner': 2.5,
+    'intermediate': 3.5,
+    'mid-intermediate': 4,
+    'advanced': 5,
+    'pro': 7,
   },
 };
 
-const List<String> skillLevels = [
-  'Beginner',
-  'Intermediate',
-  'Advanced',
-  'Expert',
-];
+String _capitalizeLevel(String level) {
+  return level
+      .split(' ')
+      .map((w) => w.isEmpty ? w : w[0].toUpperCase() + w.substring(1))
+      .join(' ');
+}
 
 class SelectSportsScreen extends StatefulWidget {
   const SelectSportsScreen({super.key});
@@ -67,14 +76,14 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
         _skillLevels.remove(sport);
       } else {
         _selectedSports.add(sport);
-        _skillLevels[sport] = 'Intermediate';
+        _skillLevels[sport] = 'intermediate';
       }
     });
   }
 
   String _levelLabel(String sport, String level) {
-    final rating = startingRatings[sport]?[level];
-    return '$level (starts at $rating)';
+    final rating = sportLevels[sport]?[level];
+    return '${_capitalizeLevel(level)} (starts at $rating)';
   }
 
   Future<void> _handleContinue() async {
@@ -97,7 +106,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
       final sportsPayload = _selectedSports.map((sport) {
         return {
           'sport': sport.toLowerCase().replaceAll(' ', '_'),
-          'level': _skillLevels[sport]!.toLowerCase(),
+          'level': _skillLevels[sport]!,
         };
       }).toList();
 
@@ -228,6 +237,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
                 child: ListView(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   children: _selectedSports.map((sport) {
+                    final levels = sportLevels[sport]!.keys.toList();
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 10),
                       child: DropdownButtonFormField<String>(
@@ -236,7 +246,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
                           labelText: '$sport level',
                           isDense: true,
                         ),
-                        items: skillLevels
+                        items: levels
                             .map(
                               (level) => DropdownMenuItem(
                                 value: level,
