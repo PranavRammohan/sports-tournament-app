@@ -145,6 +145,12 @@ class _HomeScreenState extends State<HomeScreen> {
         ? 0
         : ((_wins / _matchesPlayed) * 100).round();
     final losses = _matchesPlayed - _wins;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = Theme.of(context).cardColor;
+    final borderColor = isDark ? Colors.grey.shade800 : Colors.grey.shade200;
+    final subtleTextColor = isDark
+        ? Colors.grey.shade400
+        : Colors.grey.shade600;
 
     return Scaffold(
       appBar: AppBar(title: const Text('RallyX')),
@@ -219,6 +225,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           Icons.list_alt,
                           'Leagues',
                           '$_leagueCount',
+                          cardColor,
+                          borderColor,
+                          subtleTextColor,
                           onTap: () => Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -233,6 +242,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           Icons.sports_score,
                           'Matches',
                           '$_matchesPlayed',
+                          cardColor,
+                          borderColor,
+                          subtleTextColor,
                           onTap: () => Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -247,6 +259,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           Icons.emoji_events,
                           'Win rate',
                           '$winRate% ($_wins-$losses)',
+                          cardColor,
+                          borderColor,
+                          subtleTextColor,
                           onTap: () => Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -273,7 +288,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: AppColors.warning.withValues(alpha: 0.1),
+                          color: AppColors.warning.withValues(
+                            alpha: isDark ? 0.15 : 0.1,
+                          ),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
                             color: AppColors.warning.withValues(alpha: 0.4),
@@ -291,10 +308,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                 _pendingMatches.length == 1
                                     ? '1 match is waiting on your confirmation'
                                     : '${_pendingMatches.length} matches are waiting on your confirmation',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontWeight: FontWeight.w600,
                                   fontSize: 13,
-                                  color: AppColors.textDark,
+                                  color:
+                                      Theme.of(
+                                        context,
+                                      ).textTheme.bodyLarge?.color ??
+                                      AppColors.textDark,
                                 ),
                               ),
                             ),
@@ -316,7 +337,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     const SizedBox(height: 10),
-                    _buildRecentMatchCard(),
+                    _buildRecentMatchCard(cardColor, subtleTextColor),
                   ],
 
                   // Your Sports summary
@@ -327,7 +348,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     const SizedBox(height: 10),
-                    ..._sports.map((s) => _buildSportSummaryRow(s)),
+                    ..._sports.map(
+                      (s) => _buildSportSummaryRow(s, cardColor, borderColor),
+                    ),
                   ],
 
                   // Upcoming matches
@@ -338,7 +361,14 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     const SizedBox(height: 10),
-                    ..._upcomingMatches.map((m) => _buildUpcomingMatchRow(m)),
+                    ..._upcomingMatches.map(
+                      (m) => _buildUpcomingMatchRow(
+                        m,
+                        cardColor,
+                        borderColor,
+                        subtleTextColor,
+                      ),
+                    ),
                   ],
 
                   const SizedBox(height: 10),
@@ -351,7 +381,10 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _statCard(
     IconData icon,
     String label,
-    String value, {
+    String value,
+    Color cardColor,
+    Color borderColor,
+    Color subtleTextColor, {
     required VoidCallback onTap,
     bool smallValue = false,
   }) {
@@ -361,35 +394,34 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: cardColor,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: Colors.grey.shade200),
+          border: Border.all(color: borderColor),
         ),
         child: Column(
           children: [
-            Icon(icon, size: 18, color: AppColors.primary),
+            Icon(icon, size: 18, color: AppColors.accent),
             const SizedBox(height: 4),
             Text(
               value,
               style: TextStyle(
                 fontSize: smallValue ? 14 : 18,
                 fontWeight: FontWeight.w600,
-                color: AppColors.textDark,
+                color:
+                    Theme.of(context).textTheme.bodyLarge?.color ??
+                    AppColors.textDark,
               ),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 2),
-            Text(
-              label,
-              style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-            ),
+            Text(label, style: TextStyle(fontSize: 11, color: subtleTextColor)),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildRecentMatchCard() {
+  Widget _buildRecentMatchCard(Color cardColor, Color subtleTextColor) {
     final m = _recentMatch!;
     final isTeam1 =
         m['player1_id'] == _currentUserId ||
@@ -424,7 +456,7 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: cardColor,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: (iWon ? AppColors.success : AppColors.danger).withValues(
@@ -455,9 +487,12 @@ class _HomeScreenState extends State<HomeScreen> {
             Expanded(
               child: Text(
                 'vs $opponent',
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w600,
                   fontSize: 13,
+                  color:
+                      Theme.of(context).textTheme.bodyLarge?.color ??
+                      AppColors.textDark,
                 ),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -479,14 +514,14 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildSportSummaryRow(dynamic s) {
+  Widget _buildSportSummaryRow(dynamic s, Color cardColor, Color borderColor) {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: cardColor,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: borderColor),
       ),
       child: Row(
         children: [
@@ -495,7 +530,13 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(
             child: Text(
               _formatSportName(s['sport']),
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+                color:
+                    Theme.of(context).textTheme.bodyLarge?.color ??
+                    AppColors.textDark,
+              ),
             ),
           ),
           Text(
@@ -503,7 +544,7 @@ class _HomeScreenState extends State<HomeScreen> {
             style: const TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
-              color: AppColors.primary,
+              color: AppColors.accent,
             ),
           ),
         ],
@@ -511,7 +552,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildUpcomingMatchRow(dynamic m) {
+  Widget _buildUpcomingMatchRow(
+    dynamic m,
+    Color cardColor,
+    Color borderColor,
+    Color subtleTextColor,
+  ) {
     final isTeam1 =
         m['player1_id'] == _currentUserId ||
         m['player1_partner_id'] == _currentUserId;
@@ -537,9 +583,9 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: cardColor,
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.grey.shade200),
+            border: Border.all(color: borderColor),
           ),
           child: Row(
             children: [
@@ -551,22 +597,22 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Text(
                       'vs $opponent',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w600,
                         fontSize: 13,
+                        color:
+                            Theme.of(context).textTheme.bodyLarge?.color ??
+                            AppColors.textDark,
                       ),
                     ),
                     Text(
                       m['area'],
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.grey.shade600,
-                      ),
+                      style: TextStyle(fontSize: 11, color: subtleTextColor),
                     ),
                   ],
                 ),
               ),
-              Icon(Icons.chevron_right, size: 18, color: Colors.grey.shade400),
+              Icon(Icons.chevron_right, size: 18, color: subtleTextColor),
             ],
           ),
         ),

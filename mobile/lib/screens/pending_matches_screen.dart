@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../config.dart';
 import '../widgets/sport_icon.dart';
+import '../widgets/loading_skeleton.dart';
+import '../widgets/friendly_empty_state.dart';
 
 class PendingMatchesScreen extends StatefulWidget {
   const PendingMatchesScreen({super.key});
@@ -168,10 +170,18 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = Theme.of(context).cardColor;
+    final subtleTextColor = isDark
+        ? Colors.grey.shade400
+        : Colors.grey.shade600;
+    final primaryTextColor =
+        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Pending Confirmations')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const SkeletonList()
           : RefreshIndicator(
               onRefresh: _loadMatches,
               child: _matches.isEmpty
@@ -179,11 +189,10 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                       children: [
                         SizedBox(
                           height: MediaQuery.of(context).size.height * 0.5,
-                          child: Center(
-                            child: Text(
-                              'Nothing waiting on you right now.',
-                              style: Theme.of(context).textTheme.bodyMedium,
-                            ),
+                          child: const FriendlyEmptyState(
+                            icon: Icons.check_circle_outline,
+                            title: 'Nothing waiting on you right now.',
+                            subtitle: "You're all caught up!",
                           ),
                         ),
                       ],
@@ -204,95 +213,104 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                         final reportedByPlayer1 =
                             m['reported_by'] == m['player1_id'];
 
-                        return Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: AppColors.warning.withValues(alpha: 0.4),
-                            ),
+                        return TweenAnimationBuilder<double>(
+                          tween: Tween(begin: 0, end: 1),
+                          duration: Duration(
+                            milliseconds: 180 + (index * 30).clamp(0, 400),
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  sportIcon(m['sport'], size: 20),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          _formatSport(m['sport']),
-                                          style: const TextStyle(
-                                            fontSize: 10,
-                                            color: AppColors.textGrey,
-                                          ),
-                                        ),
-                                        Text(
-                                          '$team1 vs $team2',
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                        Text(
-                                          _formatSetScores(
-                                            m['set_scores'],
-                                            reportedByPlayer1,
-                                          ),
-                                          style: const TextStyle(
-                                            fontSize: 11,
-                                            color: AppColors.textGrey,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
+                          builder: (context, value, child) =>
+                              Opacity(opacity: value, child: child),
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: cardColor,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: AppColors.warning.withValues(alpha: 0.4),
                               ),
-                              const SizedBox(height: 10),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: OutlinedButton(
-                                      style: OutlinedButton.styleFrom(
-                                        foregroundColor: AppColors.danger,
-                                        side: const BorderSide(
-                                          color: AppColors.danger,
-                                        ),
-                                        padding: const EdgeInsets.symmetric(
-                                          vertical: 10,
-                                        ),
-                                      ),
-                                      onPressed: () => _rejectMatch(m['id']),
-                                      child: const Text(
-                                        'Reject',
-                                        style: TextStyle(fontSize: 13),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    sportIcon(m['sport'], size: 20),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            _formatSport(m['sport']),
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              color: subtleTextColor,
+                                            ),
+                                          ),
+                                          Text(
+                                            '$team1 vs $team2',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 13,
+                                              color: primaryTextColor,
+                                            ),
+                                          ),
+                                          Text(
+                                            _formatSetScores(
+                                              m['set_scores'],
+                                              reportedByPlayer1,
+                                            ),
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: subtleTextColor,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: ElevatedButton(
-                                      style: ElevatedButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(
-                                          vertical: 10,
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: OutlinedButton(
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: AppColors.danger,
+                                          side: const BorderSide(
+                                            color: AppColors.danger,
+                                          ),
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 10,
+                                          ),
+                                        ),
+                                        onPressed: () => _rejectMatch(m['id']),
+                                        child: const Text(
+                                          'Reject',
+                                          style: TextStyle(fontSize: 13),
                                         ),
                                       ),
-                                      onPressed: () => _confirmMatch(m['id']),
-                                      child: const Text(
-                                        'Confirm',
-                                        style: TextStyle(fontSize: 13),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: ElevatedButton(
+                                        style: ElevatedButton.styleFrom(
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 10,
+                                          ),
+                                        ),
+                                        onPressed: () => _confirmMatch(m['id']),
+                                        child: const Text(
+                                          'Confirm',
+                                          style: TextStyle(fontSize: 13),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ],
-                              ),
-                            ],
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
                         );
                       },

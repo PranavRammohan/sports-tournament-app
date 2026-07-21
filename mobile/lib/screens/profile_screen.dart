@@ -22,11 +22,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Map<String, dynamic>? _user;
   List<dynamic> _sports = [];
   bool _loading = true;
+  bool _isDarkMode = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
+    _isDarkMode = themeModeNotifier.value == ThemeMode.dark;
     _loadProfile();
   }
 
@@ -68,6 +70,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } finally {
       setState(() => _loading = false);
     }
+  }
+
+  Future<void> _toggleDarkMode(bool value) async {
+    setState(() => _isDarkMode = value);
+    themeModeNotifier.value = value ? ThemeMode.dark : ThemeMode.light;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('darkMode', value);
   }
 
   Future<void> _handleLogout() async {
@@ -203,6 +212,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           ],
                         ),
                       ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).cardColor,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.grey.shade200),
+                    ),
+                    child: SwitchListTile(
+                      value: _isDarkMode,
+                      onChanged: _toggleDarkMode,
+                      title: const Text(
+                        'Dark Mode',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                      secondary: const Icon(Icons.dark_mode_outlined),
                     ),
                   ),
                   const SizedBox(height: 22),

@@ -345,6 +345,15 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   }
 
   Widget _buildBracket() {
+    final cardColor = Theme.of(context).cardColor;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final borderColor = isDark ? Colors.grey.shade800 : Colors.grey.shade200;
+    final subtleTextColor = isDark
+        ? Colors.grey.shade400
+        : Colors.grey.shade600;
+    final primaryTextColor =
+        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
+
     final Map<int, List<dynamic>> rounds = {};
     for (final m in _bracket) {
       rounds.putIfAbsent(m['round_number'], () => []).add(m);
@@ -385,12 +394,12 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
                     margin: const EdgeInsets.only(bottom: 8),
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: cardColor,
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
                         color: isConfirmed
                             ? AppColors.success.withValues(alpha: 0.4)
-                            : Colors.grey.shade200,
+                            : borderColor,
                       ),
                     ),
                     child: Column(
@@ -406,6 +415,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
                                   fontWeight: isConfirmed
                                       ? FontWeight.w600
                                       : FontWeight.normal,
+                                  color: primaryTextColor,
                                 ),
                               ),
                             ),
@@ -424,14 +434,12 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
                           const SizedBox(height: 4),
                           Text(
                             _formatSetScores(m['set_scores']),
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 11,
-                              color: AppColors.textGrey,
+                              color: subtleTextColor,
                             ),
                           ),
                         ],
-
-                        // Host-enters-scores mode: only the host sees an entry button.
                         if (_hostEntersScores && widget.isHost && isReady) ...[
                           const SizedBox(height: 8),
                           ElevatedButton(
@@ -449,8 +457,6 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
                             ),
                           ),
                         ],
-
-                        // Normal mode: either player self-reports.
                         if (!_hostEntersScores && isReady && involvesMe) ...[
                           const SizedBox(height: 8),
                           ElevatedButton(
@@ -500,13 +506,13 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
                           ),
                         ],
                         if (!_hostEntersScores && isReported && reportedByMe)
-                          const Padding(
-                            padding: EdgeInsets.only(top: 6),
+                          Padding(
+                            padding: const EdgeInsets.only(top: 6),
                             child: Text(
                               'Waiting for opponent to confirm...',
                               style: TextStyle(
                                 fontSize: 11,
-                                color: AppColors.textGrey,
+                                color: subtleTextColor,
                               ),
                             ),
                           ),
@@ -523,15 +529,14 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   }
 }
 
-class _SetScore {
-  final TextEditingController player1Score = TextEditingController();
-  final TextEditingController player2Score = TextEditingController();
-}
-
-// Self-report dialog (normal mode) — asks from "your" perspective.
 class _PlayoffReportDialog extends StatefulWidget {
   @override
   State<_PlayoffReportDialog> createState() => _PlayoffReportDialogState();
+}
+
+class _SetScore {
+  final TextEditingController myScore = TextEditingController();
+  final TextEditingController opponentScore = TextEditingController();
 }
 
 class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
@@ -555,7 +560,7 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
                   children: [
                     Expanded(
                       child: TextField(
-                        controller: set.player1Score,
+                        controller: set.myScore,
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
                           labelText: 'Set ${index + 1} — You',
@@ -569,7 +574,7 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
                     ),
                     Expanded(
                       child: TextField(
-                        controller: set.player2Score,
+                        controller: set.opponentScore,
                         keyboardType: TextInputType.number,
                         decoration: const InputDecoration(
                           labelText: 'Opponent',
@@ -603,8 +608,8 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
             final List<Map<String, int>> setScores = [];
 
             for (final s in _sets) {
-              final my = int.tryParse(s.player1Score.text.trim());
-              final opp = int.tryParse(s.player2Score.text.trim());
+              final my = int.tryParse(s.myScore.text.trim());
+              final opp = int.tryParse(s.opponentScore.text.trim());
               if (my == null || opp == null || my == opp) return;
               setScores.add({'me': my, 'opponent': opp});
               totalMy += my;
@@ -631,7 +636,6 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
   }
 }
 
-// Host-entry dialog — asks explicitly for Player1's and Player2's scores by name.
 class _HostPlayoffReportDialog extends StatefulWidget {
   final String player1Name;
   final String player2Name;
@@ -667,7 +671,7 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
                   children: [
                     Expanded(
                       child: TextField(
-                        controller: set.player1Score,
+                        controller: set.myScore,
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
                           labelText: 'Set ${index + 1} — ${widget.player1Name}',
@@ -681,7 +685,7 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
                     ),
                     Expanded(
                       child: TextField(
-                        controller: set.player2Score,
+                        controller: set.opponentScore,
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
                           labelText: widget.player2Name,
@@ -715,8 +719,8 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
             final List<Map<String, int>> setScores = [];
 
             for (final s in _sets) {
-              final p1 = int.tryParse(s.player1Score.text.trim());
-              final p2 = int.tryParse(s.player2Score.text.trim());
+              final p1 = int.tryParse(s.myScore.text.trim());
+              final p2 = int.tryParse(s.opponentScore.text.trim());
               if (p1 == null || p2 == null || p1 == p2) return;
               setScores.add({'me': p1, 'opponent': p2});
               totalP1 += p1;

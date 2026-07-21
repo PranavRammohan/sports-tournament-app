@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../config.dart';
 import '../widgets/sport_icon.dart';
+import '../widgets/loading_skeleton.dart';
+import '../widgets/friendly_empty_state.dart';
 
 class MatchHistoryScreen extends StatefulWidget {
   const MatchHistoryScreen({super.key});
@@ -18,6 +20,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
   List<dynamic> _matches = [];
   int? _currentUserId;
   bool _loading = true;
+  String? _filter; // null = all, 'win', 'loss'
 
   @override
   void initState() {
@@ -51,6 +54,22 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
     }
   }
 
+  bool _didIWin(dynamic m) {
+    final isTeam1 =
+        m['player1_id'] == _currentUserId ||
+        m['player1_partner_id'] == _currentUserId;
+    return isTeam1
+        ? m['winner_id'] == m['player1_id']
+        : m['winner_id'] == m['player2_id'];
+  }
+
+  List<dynamic> get _filteredMatches {
+    if (_filter == null) return _matches;
+    return _matches
+        .where((m) => _filter == 'win' ? _didIWin(m) : !_didIWin(m))
+        .toList();
+  }
+
   String _formatSport(String sport) => sport
       .split('_')
       .map((w) => w[0].toUpperCase() + w.substring(1))
@@ -75,150 +94,206 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final matches = _filteredMatches;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Match History')),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _loadHistory,
-              child: _matches.isEmpty
-                  ? ListView(
-                      children: [
-                        SizedBox(
-                          height: MediaQuery.of(context).size.height * 0.5,
-                          child: Center(
-                            child: Text(
-                              "You haven't played any confirmed matches yet.",
-                              textAlign: TextAlign.center,
-                              style: Theme.of(context).textTheme.bodyMedium,
-                            ),
-                          ),
-                        ),
-                      ],
-                    )
-                  : ListView.separated(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: _matches.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 6),
-                      itemBuilder: (context, index) {
-                        final m = _matches[index];
-
-                        final isTeam1 =
-                            m['player1_id'] == _currentUserId ||
-                            m['player1_partner_id'] == _currentUserId;
-                        final iWon = isTeam1
-                            ? m['winner_id'] == m['player1_id']
-                            : m['winner_id'] == m['player2_id'];
-
-                        final isDoubles = m['player1_partner_username'] != null;
-                        final opponentLabel = isTeam1
-                            ? (isDoubles
-                                  ? '${m['player2_username']} & ${m['player2_partner_username']}'
-                                  : m['player2_username'])
-                            : (isDoubles
-                                  ? '${m['player1_username']} & ${m['player1_partner_username']}'
-                                  : m['player1_username']);
-
-                        double? ratingChange;
-                        if (m['player1_id'] == _currentUserId) {
-                          ratingChange = _toDouble(m['player1_rating_change']);
-                        } else if (m['player2_id'] == _currentUserId) {
-                          ratingChange = _toDouble(m['player2_rating_change']);
-                        } else if (m['player1_partner_id'] == _currentUserId) {
-                          ratingChange = _toDouble(
-                            m['player1_partner_rating_change'],
-                          );
-                        } else if (m['player2_partner_id'] == _currentUserId) {
-                          ratingChange = _toDouble(
-                            m['player2_partner_rating_change'],
-                          );
-                        }
-
-                        final changeText = ratingChange == null
-                            ? ''
-                            : (ratingChange >= 0
-                                  ? '+${ratingChange.toStringAsFixed(2)}'
-                                  : ratingChange.toStringAsFixed(2));
-                        final changeColor = (ratingChange ?? 0) >= 0
-                            ? AppColors.success
-                            : AppColors.danger;
-
-                        return Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 9,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.grey.shade200),
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 4,
-                                height: 30,
-                                decoration: BoxDecoration(
-                                  color: iWon
-                                      ? AppColors.success
-                                      : AppColors.danger,
-                                  borderRadius: BorderRadius.circular(2),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              sportIcon(m['sport'], size: 16),
-                              const SizedBox(width: 8),
-                              SizedBox(
-                                width: 34,
-                                child: Text(
-                                  iWon ? 'WIN' : 'LOSS',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                    color: iWon
-                                        ? AppColors.success
-                                        : AppColors.danger,
-                                  ),
-                                ),
-                              ),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'vs $opponentLabel',
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 13,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    Text(
-                                      '${_formatSport(m['sport'])} · ${m['area']} · ${_formatSetScores(m['set_scores'])}',
-                                      style: const TextStyle(
-                                        fontSize: 10,
-                                        color: AppColors.textGrey,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              if (ratingChange != null)
-                                Text(
-                                  changeText,
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.bold,
-                                    color: changeColor,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Row(
+              children: [
+                _filterChip('All', null),
+                const SizedBox(width: 8),
+                _filterChip('Wins', 'win'),
+                const SizedBox(width: 8),
+                _filterChip('Losses', 'loss'),
+              ],
             ),
+          ),
+          Expanded(
+            child: _loading
+                ? const SkeletonList()
+                : RefreshIndicator(
+                    onRefresh: _loadHistory,
+                    child: matches.isEmpty
+                        ? ListView(
+                            children: [
+                              SizedBox(
+                                height:
+                                    MediaQuery.of(context).size.height * 0.5,
+                                child: FriendlyEmptyState(
+                                  icon: Icons.sports_score,
+                                  title: _matches.isEmpty
+                                      ? "You haven't played any confirmed matches yet."
+                                      : 'No matches match this filter.',
+                                ),
+                              ),
+                            ],
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.all(16),
+                            itemCount: matches.length,
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 6),
+                            itemBuilder: (context, index) {
+                              final m = matches[index];
+
+                              final isTeam1 =
+                                  m['player1_id'] == _currentUserId ||
+                                  m['player1_partner_id'] == _currentUserId;
+                              final iWon = isTeam1
+                                  ? m['winner_id'] == m['player1_id']
+                                  : m['winner_id'] == m['player2_id'];
+
+                              final isDoubles =
+                                  m['player1_partner_username'] != null;
+                              final opponentLabel = isTeam1
+                                  ? (isDoubles
+                                        ? '${m['player2_username']} & ${m['player2_partner_username']}'
+                                        : m['player2_username'])
+                                  : (isDoubles
+                                        ? '${m['player1_username']} & ${m['player1_partner_username']}'
+                                        : m['player1_username']);
+
+                              double? ratingChange;
+                              if (m['player1_id'] == _currentUserId) {
+                                ratingChange = _toDouble(
+                                  m['player1_rating_change'],
+                                );
+                              } else if (m['player2_id'] == _currentUserId) {
+                                ratingChange = _toDouble(
+                                  m['player2_rating_change'],
+                                );
+                              } else if (m['player1_partner_id'] ==
+                                  _currentUserId) {
+                                ratingChange = _toDouble(
+                                  m['player1_partner_rating_change'],
+                                );
+                              } else if (m['player2_partner_id'] ==
+                                  _currentUserId) {
+                                ratingChange = _toDouble(
+                                  m['player2_partner_rating_change'],
+                                );
+                              }
+
+                              final changeText = ratingChange == null
+                                  ? ''
+                                  : (ratingChange >= 0
+                                        ? '+${ratingChange.toStringAsFixed(2)}'
+                                        : ratingChange.toStringAsFixed(2));
+                              final changeColor = (ratingChange ?? 0) >= 0
+                                  ? AppColors.success
+                                  : AppColors.danger;
+
+                              return TweenAnimationBuilder<double>(
+                                tween: Tween(begin: 0, end: 1),
+                                duration: Duration(
+                                  milliseconds:
+                                      180 + (index * 30).clamp(0, 400),
+                                ),
+                                builder: (context, value, child) =>
+                                    Opacity(opacity: value, child: child),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 9,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context).cardColor,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: Colors.grey.shade200,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        width: 4,
+                                        height: 30,
+                                        decoration: BoxDecoration(
+                                          color: iWon
+                                              ? AppColors.success
+                                              : AppColors.danger,
+                                          borderRadius: BorderRadius.circular(
+                                            2,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      sportIcon(m['sport'], size: 16),
+                                      const SizedBox(width: 8),
+                                      SizedBox(
+                                        width: 34,
+                                        child: Text(
+                                          iWon ? 'WIN' : 'LOSS',
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                            color: iWon
+                                                ? AppColors.success
+                                                : AppColors.danger,
+                                          ),
+                                        ),
+                                      ),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'vs $opponentLabel',
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w600,
+                                                fontSize: 13,
+                                              ),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            Text(
+                                              '${_formatSport(m['sport'])} · ${m['area']} · ${_formatSetScores(m['set_scores'])}',
+                                              style: const TextStyle(
+                                                fontSize: 10,
+                                                color: AppColors.textGrey,
+                                              ),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      if (ratingChange != null)
+                                        Text(
+                                          changeText,
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.bold,
+                                            color: changeColor,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _filterChip(String label, String? value) {
+    final selected = _filter == value;
+    return ChoiceChip(
+      label: Text(label, style: const TextStyle(fontSize: 12)),
+      selected: selected,
+      onSelected: (_) => setState(() => _filter = value),
+      selectedColor: AppColors.primary.withValues(alpha: 0.15),
+      labelStyle: TextStyle(
+        color: selected ? AppColors.primary : Colors.grey.shade700,
+        fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+      ),
     );
   }
 }

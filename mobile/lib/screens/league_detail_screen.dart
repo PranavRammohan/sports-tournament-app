@@ -734,7 +734,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
             padding: const EdgeInsets.all(12),
             margin: const EdgeInsets.only(bottom: 12),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.grey.shade200),
             ),
@@ -909,58 +909,61 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               return Container(
                 margin: const EdgeInsets.only(bottom: 6),
                 decoration: BoxDecoration(
-                  color: Colors.white,
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.grey.shade200),
                 ),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 0,
-                  ),
-                  leading: CircleAvatar(
-                    radius: 15,
-                    backgroundColor: rankColor,
-                    child: Text(
-                      '$rank',
-                      style: TextStyle(
-                        color: rankTextColor,
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                      ),
+                child: Material(
+                  color: Theme.of(context).cardColor,
+                  borderRadius: BorderRadius.circular(8),
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 0,
                     ),
-                  ),
-                  title: Text(
-                    player['username'],
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
-                  subtitle: Text(
-                    '${player['matches_played']} matches · ${player['wins']}W ${player['losses']}L',
-                    style: const TextStyle(fontSize: 11),
-                  ),
-                  trailing: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        '${player['points']} pts',
-                        style: const TextStyle(
-                          fontSize: 15,
+                    leading: CircleAvatar(
+                      radius: 15,
+                      backgroundColor: rankColor,
+                      child: Text(
+                        '$rank',
+                        style: TextStyle(
+                          color: rankTextColor,
+                          fontSize: 13,
                           fontWeight: FontWeight.bold,
-                          color: AppColors.accent,
                         ),
                       ),
-                      Text(
-                        'Rating: ${player['rating']}',
-                        style: const TextStyle(
-                          fontSize: 10,
-                          color: AppColors.textGrey,
-                        ),
+                    ),
+                    title: Text(
+                      player['username'],
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
                       ),
-                    ],
+                    ),
+                    subtitle: Text(
+                      '${player['matches_played']} matches · ${player['wins']}W ${player['losses']}L',
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    trailing: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          '${player['points']} pts',
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.accent,
+                          ),
+                        ),
+                        Text(
+                          'Rating: ${player['rating']}',
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: AppColors.textGrey,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               );
@@ -1039,7 +1042,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                     margin: const EdgeInsets.only(bottom: 8),
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: Theme.of(context).cardColor,
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
                         color: isConfirmed
@@ -1300,7 +1303,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
             margin: const EdgeInsets.only(bottom: 8),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.grey.shade200),
             ),
@@ -1412,11 +1415,16 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       }
     }
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryTextColor =
+        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
+    final subtleVsColor = isDark ? Colors.grey.shade400 : AppColors.textGrey;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: isCompleted
@@ -1443,14 +1451,14 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                                     : FontWeight.normal,
                                 color: team1Won
                                     ? AppColors.success
-                                    : AppColors.textDark,
+                                    : primaryTextColor,
                               ),
                             ),
-                            const TextSpan(
+                            TextSpan(
                               text: '  vs  ',
                               style: TextStyle(
                                 fontSize: 13,
-                                color: AppColors.textGrey,
+                                color: subtleVsColor,
                               ),
                             ),
                             TextSpan(
@@ -1462,7 +1470,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                                     : FontWeight.normal,
                                 color: team2Won
                                     ? AppColors.success
-                                    : AppColors.textDark,
+                                    : primaryTextColor,
                               ),
                             ),
                           ],
@@ -1470,7 +1478,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                       )
                     : Text(
                         '$team1 vs $team2',
-                        style: const TextStyle(fontSize: 13),
+                        style: TextStyle(fontSize: 13, color: primaryTextColor),
                       ),
               ),
               Container(
