@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../main.dart';
 import '../config.dart';
 
 class HostReportMatchScreen extends StatefulWidget {
@@ -167,6 +168,17 @@ class _HostReportMatchScreenState extends State<HostReportMatchScreen> {
       );
     }
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = Theme.of(context).cardColor;
+    final unselectedBorder = isDark
+        ? Colors.grey.shade600
+        : Colors.grey.shade300;
+    final unselectedIconColor = isDark
+        ? Colors.grey.shade500
+        : Colors.grey.shade400;
+    final titleColor =
+        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Enter Match Score')),
       body: SingleChildScrollView(
@@ -192,11 +204,13 @@ class _HostReportMatchScreenState extends State<HostReportMatchScreen> {
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: selected
-                          ? Colors.blue.withValues(alpha: 0.06)
-                          : Colors.white,
+                          ? AppColors.primary.withValues(
+                              alpha: isDark ? 0.18 : 0.06,
+                            )
+                          : cardColor,
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                        color: selected ? Colors.blue : Colors.grey.shade300,
+                        color: selected ? AppColors.primary : unselectedBorder,
                         width: selected ? 2 : 1,
                       ),
                     ),
@@ -204,13 +218,18 @@ class _HostReportMatchScreenState extends State<HostReportMatchScreen> {
                       children: [
                         Icon(
                           selected ? Icons.check_circle : Icons.circle_outlined,
-                          color: selected ? Colors.blue : Colors.grey.shade400,
+                          color: selected
+                              ? AppColors.primary
+                              : unselectedIconColor,
                         ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
                             _fixtureLabel(fixture),
-                            style: const TextStyle(fontWeight: FontWeight.w600),
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: titleColor,
+                            ),
                           ),
                         ),
                       ],
@@ -270,7 +289,7 @@ class _HostReportMatchScreenState extends State<HostReportMatchScreen> {
                         IconButton(
                           icon: const Icon(
                             Icons.remove_circle_outline,
-                            color: Colors.red,
+                            color: AppColors.danger,
                           ),
                           onPressed: () => _removeSet(index),
                         ),

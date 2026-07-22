@@ -39,10 +39,16 @@ class _RegenerateScheduleDialogState extends State<RegenerateScheduleDialog> {
   }
 
   @override
+  void dispose() {
+    _matchesPerPlayerController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      title: const Text('Regenerate Schedule'),
+      title: const Text('Change Match Format'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -61,6 +67,10 @@ class _RegenerateScheduleDialogState extends State<RegenerateScheduleDialog> {
               value: 'round_robin',
               groupValue: _scheduleType,
               title: const Text('Round Robin', style: TextStyle(fontSize: 14)),
+              subtitle: const Text(
+                'Everyone plays everyone. Best for 7 or fewer players.',
+                style: TextStyle(fontSize: 11),
+              ),
               onChanged: (v) => setState(() => _scheduleType = v!),
             ),
             if (widget.isSingles)
@@ -72,11 +82,15 @@ class _RegenerateScheduleDialogState extends State<RegenerateScheduleDialog> {
                   'Fixed matches per player',
                   style: TextStyle(fontSize: 14),
                 ),
+                subtitle: const Text(
+                  'Good for larger groups.',
+                  style: TextStyle(fontSize: 11),
+                ),
                 onChanged: (v) => setState(() => _scheduleType = v!),
               ),
             if (widget.isSingles && _scheduleType == 'matches_per_player')
               Padding(
-                padding: const EdgeInsets.only(top: 8),
+                padding: const EdgeInsets.only(top: 8, bottom: 4),
                 child: TextField(
                   controller: _matchesPerPlayerController,
                   keyboardType: TextInputType.number,
@@ -86,6 +100,29 @@ class _RegenerateScheduleDialogState extends State<RegenerateScheduleDialog> {
                   ),
                 ),
               ),
+            if (widget.isSingles)
+              RadioListTile<String>(
+                contentPadding: EdgeInsets.zero,
+                value: 'knockout',
+                groupValue: _scheduleType,
+                title: const Text('Knockout', style: TextStyle(fontSize: 14)),
+                subtitle: const Text(
+                  'Seeded single elimination. Needs an exact power-of-2 player count (2, 4, 8, 16...).',
+                  style: TextStyle(fontSize: 11),
+                ),
+                onChanged: (v) => setState(() => _scheduleType = v!),
+              ),
+            RadioListTile<String>(
+              contentPadding: EdgeInsets.zero,
+              value: 'custom',
+              groupValue: _scheduleType,
+              title: const Text('Custom', style: TextStyle(fontSize: 14)),
+              subtitle: const Text(
+                'You decide who plays who. Add matches manually, any time.',
+                style: TextStyle(fontSize: 11),
+              ),
+              onChanged: (v) => setState(() => _scheduleType = v!),
+            ),
           ],
         ),
       ),
@@ -111,7 +148,7 @@ class _RegenerateScheduleDialogState extends State<RegenerateScheduleDialog> {
               ),
             );
           },
-          child: const Text('Regenerate'),
+          child: const Text('Continue'),
         ),
       ],
     );

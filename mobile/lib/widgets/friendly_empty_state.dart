@@ -22,6 +22,11 @@ class FriendlyEmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final titleColor =
+        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
+    final subtitleColor = isDark ? Colors.grey.shade400 : Colors.grey.shade600;
+
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -31,23 +36,25 @@ class FriendlyEmptyState extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.06),
+                color: AppColors.primary.withValues(
+                  alpha: isDark ? 0.15 : 0.06,
+                ),
                 shape: BoxShape.circle,
               ),
               child: Icon(
                 icon,
                 size: 40,
-                color: AppColors.primary.withValues(alpha: 0.6),
+                color: AppColors.primary.withValues(alpha: isDark ? 0.9 : 0.6),
               ),
             ),
             const SizedBox(height: 16),
             Text(
               title,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
-                color: AppColors.textDark,
+                color: titleColor,
               ),
             ),
             if (subtitle != null) ...[
@@ -55,7 +62,7 @@ class FriendlyEmptyState extends StatelessWidget {
               Text(
                 subtitle!,
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                style: TextStyle(fontSize: 12, color: subtitleColor),
               ),
             ],
             if (actionLabel != null && onAction != null) ...[

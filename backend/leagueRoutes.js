@@ -398,6 +398,71 @@ router.post('/:id/leave', async (req, res) => {
   }
 });
 
+// ---------- REMOVE PLAYER (host only) ----------
+router.delete('/:id/members/:userId', async (req, res) => {
+  const hostId = req.userId;
+  const leagueId = req.params.id;
+  const targetUserId = parseInt(req.params.userId, 10);
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== hostId) {
+      return res.status(403).json({ error: 'Only the league host can remove players.' });
+    }
+    if (targetUserId === hostId) {
+      return res.status(400).json({ error: 'You cannot remove yourself. Delete the league instead if needed.' });
+    }
+
+    const memberCheck = await pool.query(
+      'SELECT id FROM league_members WHERE league_id = $1 AND user_id = $2',
+      [leagueId, targetUserId]
+    );
+    if (memberCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'This player is not a member of this league.' });
+    }
+
+    // Remove any not-yet-played fixtures involving this player — they can no
+    // longer be scheduled to play. Confirmed match history and rating changes
+    // are left untouched, since that's a permanent record.
+    await pool.query(
+      `DELETE FROM matches
+       WHERE league_id = $1 AND status IN ('pending', 'rejected')
+         AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)`,
+      [leagueId, targetUserId]
+    );
+    await pool.query(
+      `DELETE FROM scheduled_matches
+       WHERE league_id = $1
+         AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)
+         AND id NOT IN (
+           SELECT scheduled_match_id FROM matches WHERE scheduled_match_id IS NOT NULL AND status = 'confirmed'
+         )`,
+      [leagueId, targetUserId]
+    );
+    await pool.query(
+      `DELETE FROM playoff_matches
+       WHERE league_id = $1 AND status != 'confirmed'
+         AND (player1_id = $2 OR player2_id = $2)`,
+      [leagueId, targetUserId]
+    );
+
+    await pool.query(
+      'DELETE FROM league_members WHERE league_id = $1 AND user_id = $2',
+      [leagueId, targetUserId]
+    );
+
+    res.status(200).json({ message: 'Player removed from league.' });
+  } catch (err) {
+    console.error('Remove player error:', err);
+    res.status(500).json({ error: 'Something went wrong removing the player.' });
+  }
+});
+
 // ---------- LEAGUE DETAIL + DUAL LEADERBOARD ----------
 router.get('/:id', async (req, res) => {
   const leagueId = req.params.id;
@@ -657,6 +722,9 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
       if (finalScheduleType === 'matches_per_player' && (!matchesPerPlayer || matchesPerPlayer < 1)) {
         return res.status(400).json({ error: 'Please specify how many matches each player should play.' });
       }
+      if (finalScheduleType === 'knockout' && league.format !== 'singles') {
+        return res.status(400).json({ error: 'Knockout format is currently only supported for singles leagues.' });
+      }
       await pool.query(
         'UPDATE leagues SET schedule_type = $1, matches_per_player = $2 WHERE id = $3',
         [finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null, leagueId]
@@ -672,6 +740,7 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
       [leagueId]
     );
     await pool.query('DELETE FROM scheduled_matches WHERE league_id = $1', [leagueId]);
+    await pool.query('DELETE FROM playoff_matches WHERE league_id = $1', [leagueId]);
 
     const refreshedLeagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     const refreshedLeague = refreshedLeagueResult.rows[0];
@@ -891,7 +960,7 @@ router.get('/:id/schedule', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT sm.id, sm.tier_number,
+      `SELECT sm.id, sm.tier_number, sm.scheduled_time,
               sm.player1_id, sm.player1_partner_id, sm.player2_id, sm.player2_partner_id,
               p1.username as player1_username, p1.phone_number as player1_phone,
               pp1.username as player1_partner_username, pp1.phone_number as player1_partner_phone,
@@ -938,6 +1007,190 @@ router.delete('/:id', async (req, res) => {
   } catch (err) {
     console.error('Delete league error:', err);
     res.status(500).json({ error: 'Something went wrong deleting the league.' });
+  }
+});
+
+// ---------- EDIT LEAGUE PARAMETERS (host only) ----------
+router.put('/:id', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { name, area, seasonStart, seasonEnd, academyName, isPrivate, hostEntersScores } = req.body;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can edit this league.' });
+    }
+
+    const updates = [];
+    const params = [];
+    let idx = 1;
+
+    if (name !== undefined) { updates.push(`name = $${idx++}`); params.push(name); }
+    if (area !== undefined) { updates.push(`area = $${idx++}`); params.push(area); }
+    if (seasonStart !== undefined) { updates.push(`season_start = $${idx++}`); params.push(seasonStart); }
+    if (seasonEnd !== undefined) { updates.push(`season_end = $${idx++}`); params.push(seasonEnd); }
+    if (academyName !== undefined) {
+      updates.push(`academy_name = $${idx++}`);
+      params.push(academyName && academyName.trim().length > 0 ? academyName.trim() : null);
+    }
+
+    if (hostEntersScores !== undefined) {
+      const confirmedCount = await pool.query(
+        `SELECT COUNT(*) FROM matches WHERE league_id = $1 AND status = 'confirmed'`,
+        [leagueId]
+      );
+      if (parseInt(confirmedCount.rows[0].count, 10) > 0) {
+        return res.status(400).json({ error: 'Cannot change scoring mode after matches have been confirmed.' });
+      }
+      updates.push(`host_enters_scores = $${idx++}`);
+      params.push(hostEntersScores === true);
+    }
+
+    if (isPrivate !== undefined) {
+      if (isPrivate === true && !league.join_code) {
+        let joinCode;
+        let unique = false;
+        while (!unique) {
+          joinCode = generateJoinCode();
+          const existing = await pool.query('SELECT id FROM leagues WHERE join_code = $1', [joinCode]);
+          if (existing.rows.length === 0) unique = true;
+        }
+        updates.push(`is_private = $${idx++}`); params.push(true);
+        updates.push(`join_code = $${idx++}`); params.push(joinCode);
+      } else {
+        updates.push(`is_private = $${idx++}`); params.push(isPrivate === true);
+      }
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No editable fields provided.' });
+    }
+
+    params.push(leagueId);
+    const result = await pool.query(
+      `UPDATE leagues SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`,
+      params
+    );
+
+    res.status(200).json({ league: result.rows[0] });
+  } catch (err) {
+    console.error('Edit league error:', err);
+    res.status(500).json({ error: 'Something went wrong updating the league.' });
+  }
+});
+
+// ---------- EDIT AN UNPLAYED SCHEDULED MATCH (host only) ----------
+router.put('/:id/schedule/:scheduledMatchId', async (req, res) => {
+  const userId = req.userId;
+  const { id: leagueId, scheduledMatchId } = req.params;
+  const { player1Id, player1PartnerId, player2Id, player2PartnerId, scheduledTime } = req.body;
+
+  if (!player1Id || !player2Id) {
+    return res.status(400).json({ error: 'Please select both sides of the match.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can edit the schedule.' });
+    }
+
+    const fixtureResult = await pool.query(
+      'SELECT * FROM scheduled_matches WHERE id = $1 AND league_id = $2',
+      [scheduledMatchId, leagueId]
+    );
+    if (fixtureResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Scheduled match not found.' });
+    }
+
+    const confirmedCheck = await pool.query(
+      `SELECT id FROM matches WHERE scheduled_match_id = $1 AND status = 'confirmed' LIMIT 1`,
+      [scheduledMatchId]
+    );
+    if (confirmedCheck.rows.length > 0) {
+      return res.status(400).json({ error: 'This match has already been played and cannot be edited here. Edit the confirmed score instead.' });
+    }
+
+    if (league.format === 'doubles' && (!player1PartnerId || !player2PartnerId)) {
+      return res.status(400).json({ error: 'Doubles matches need both partners selected.' });
+    }
+    if (league.format === 'singles' && (player1PartnerId || player2PartnerId)) {
+      return res.status(400).json({ error: 'Singles matches should not have partners.' });
+    }
+
+    const allIds = [player1Id, player2Id, player1PartnerId, player2PartnerId].filter(Boolean);
+    const memberCheck = await pool.query(
+      `SELECT user_id FROM league_members WHERE league_id = $1 AND user_id = ANY($2::int[])`,
+      [leagueId, allIds]
+    );
+    if (memberCheck.rows.length !== allIds.length) {
+      return res.status(400).json({ error: 'All selected players must be members of this league.' });
+    }
+
+    await pool.query(
+      `DELETE FROM matches WHERE scheduled_match_id = $1 AND status IN ('pending', 'rejected')`,
+      [scheduledMatchId]
+    );
+
+    await pool.query(
+      `UPDATE scheduled_matches SET player1_id = $1, player1_partner_id = $2, player2_id = $3, player2_partner_id = $4,
+       scheduled_time = $5
+       WHERE id = $6`,
+      [player1Id, player1PartnerId || null, player2Id, player2PartnerId || null, scheduledTime || null, scheduledMatchId]
+    );
+
+    res.status(200).json({ message: 'Match updated.' });
+  } catch (err) {
+    console.error('Edit scheduled match error:', err);
+    res.status(500).json({ error: 'Something went wrong updating the match.' });
+  }
+});
+
+// ---------- DELETE AN UNPLAYED SCHEDULED MATCH (host only) ----------
+router.delete('/:id/schedule/:scheduledMatchId', async (req, res) => {
+  const userId = req.userId;
+  const { id: leagueId, scheduledMatchId } = req.params;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can delete a scheduled match.' });
+    }
+
+    const confirmedCheck = await pool.query(
+      `SELECT id FROM matches WHERE scheduled_match_id = $1 AND status = 'confirmed' LIMIT 1`,
+      [scheduledMatchId]
+    );
+    if (confirmedCheck.rows.length > 0) {
+      return res.status(400).json({ error: 'This match has already been played. Delete the confirmed score instead if needed.' });
+    }
+
+    await pool.query(
+      `DELETE FROM matches WHERE scheduled_match_id = $1 AND status IN ('pending', 'rejected')`,
+      [scheduledMatchId]
+    );
+    await pool.query('DELETE FROM scheduled_matches WHERE id = $1 AND league_id = $2', [scheduledMatchId, leagueId]);
+
+    res.status(200).json({ message: 'Match removed from schedule.' });
+  } catch (err) {
+    console.error('Delete scheduled match error:', err);
+    res.status(500).json({ error: 'Something went wrong deleting the match.' });
   }
 });
 

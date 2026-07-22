@@ -183,6 +183,20 @@ class _SignupScreenState extends State<SignupScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final subtleTextColor = isDark
+        ? Colors.grey.shade400
+        : Colors.grey.shade600;
+    final avatarBg = isDark ? Colors.grey.shade800 : Colors.grey.shade200;
+    final avatarIconColor = isDark
+        ? Colors.grey.shade500
+        : Colors.grey.shade400;
+    final disabledFieldColor = isDark
+        ? Colors.grey.shade800
+        : Colors.grey.shade100;
+    final primaryTextColor =
+        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
+
     return Scaffold(
       body: SafeArea(
         child: SingleChildScrollView(
@@ -212,7 +226,7 @@ class _SignupScreenState extends State<SignupScreen> {
                     children: [
                       CircleAvatar(
                         radius: 44,
-                        backgroundColor: Colors.grey.shade200,
+                        backgroundColor: avatarBg,
                         backgroundImage: _profileImageBytes != null
                             ? MemoryImage(_profileImageBytes!)
                             : null,
@@ -220,7 +234,7 @@ class _SignupScreenState extends State<SignupScreen> {
                             ? Icon(
                                 Icons.person,
                                 size: 44,
-                                color: Colors.grey.shade400,
+                                color: avatarIconColor,
                               )
                             : null,
                       ),
@@ -248,7 +262,7 @@ class _SignupScreenState extends State<SignupScreen> {
               Center(
                 child: Text(
                   'Add a profile photo (optional)',
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  style: TextStyle(fontSize: 12, color: subtleTextColor),
                 ),
               ),
 
@@ -314,10 +328,12 @@ class _SignupScreenState extends State<SignupScreen> {
               const SizedBox(height: 18),
               TextField(
                 enabled: false,
+                style: TextStyle(color: primaryTextColor),
                 decoration: InputDecoration(
                   labelText: 'City',
                   prefixIcon: const Icon(Icons.location_city_outlined),
-                  fillColor: Colors.grey.shade100,
+                  filled: true,
+                  fillColor: disabledFieldColor,
                 ),
                 controller: TextEditingController(text: 'Bangalore'),
               ),
@@ -378,6 +394,13 @@ class _SelectChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final unselectedBg = Theme.of(context).cardColor;
+    final unselectedBorder = isDark
+        ? Colors.grey.shade600
+        : Colors.grey.shade300;
+    final unselectedText = isDark ? Colors.grey.shade300 : Colors.grey.shade700;
+
     return InkWell(
       borderRadius: BorderRadius.circular(8),
       onTap: onTap,
@@ -385,10 +408,10 @@ class _SelectChip extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 13),
         decoration: BoxDecoration(
           color: selected
-              ? AppColors.primary.withValues(alpha: 0.08)
-              : Colors.white,
+              ? AppColors.primary.withValues(alpha: isDark ? 0.18 : 0.08)
+              : unselectedBg,
           border: Border.all(
-            color: selected ? AppColors.primary : Colors.grey.shade300,
+            color: selected ? AppColors.primary : unselectedBorder,
             width: selected ? 1.5 : 1,
           ),
           borderRadius: BorderRadius.circular(8),
@@ -398,7 +421,7 @@ class _SelectChip extends StatelessWidget {
             label,
             style: TextStyle(
               fontWeight: FontWeight.w600,
-              color: selected ? AppColors.primary : Colors.grey.shade700,
+              color: selected ? AppColors.primary : unselectedText,
             ),
           ),
         ),

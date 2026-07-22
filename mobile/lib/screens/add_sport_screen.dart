@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../main.dart';
 import '../config.dart';
 
 const Map<String, Map<String, num>> sportLevels = {
@@ -157,6 +158,13 @@ class _AddSportScreenState extends State<AddSportScreen> {
   @override
   Widget build(BuildContext context) {
     final available = _availableSports;
+    final cardColor = Theme.of(context).cardColor;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final unselectedBorder = isDark
+        ? Colors.grey.shade700
+        : Colors.grey.shade200;
+    final titleColor =
+        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Add a Sport')),
@@ -182,12 +190,12 @@ class _AddSportScreenState extends State<AddSportScreen> {
                       return Container(
                         margin: const EdgeInsets.only(bottom: 10),
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: cardColor,
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
                             color: isSelected
-                                ? Colors.blue
-                                : Colors.grey.shade200,
+                                ? AppColors.primary
+                                : unselectedBorder,
                             width: isSelected ? 1.5 : 1,
                           ),
                         ),
@@ -196,9 +204,10 @@ class _AddSportScreenState extends State<AddSportScreen> {
                             CheckboxListTile(
                               title: Text(
                                 sport,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontWeight: FontWeight.w600,
                                   fontSize: 14,
+                                  color: titleColor,
                                 ),
                               ),
                               value: isSelected,

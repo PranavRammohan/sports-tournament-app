@@ -114,103 +114,136 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
     super.dispose();
   }
 
+  void _handleBack() {
+    // Report back whether any players were actually added, so the league
+    // screen knows to refresh its leaderboard/schedule instead of assuming
+    // nothing changed just because we didn't pop with an explicit value.
+    Navigator.pop(context, _addedIds.isNotEmpty);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Add Players')),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: TextField(
-              controller: _searchController,
-              onChanged: _onSearchChanged,
-              decoration: const InputDecoration(
-                labelText: 'Search by username',
-                prefixIcon: Icon(Icons.search),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = Theme.of(context).cardColor;
+    final borderColor = isDark ? Colors.grey.shade700 : Colors.grey.shade200;
+    final titleColor =
+        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
+    final subtitleColor = isDark ? Colors.grey.shade400 : Colors.grey.shade700;
+
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _handleBack();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Add Players'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: _handleBack,
+          ),
+        ),
+        body: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: TextField(
+                controller: _searchController,
+                onChanged: _onSearchChanged,
+                decoration: const InputDecoration(
+                  labelText: 'Search by username',
+                  prefixIcon: Icon(Icons.search),
+                ),
               ),
             ),
-          ),
-          Expanded(
-            child: _searching
-                ? const Center(child: CircularProgressIndicator())
-                : _results.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                        _searchController.text.trim().length < 2
-                            ? 'Type at least 2 characters to search.'
-                            : 'No matching players found.',
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodyMedium,
+            Expanded(
+              child: _searching
+                  ? const Center(child: CircularProgressIndicator())
+                  : _results.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          _searchController.text.trim().length < 2
+                              ? 'Type at least 2 characters to search.'
+                              : 'No matching players found.',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
                       ),
-                    ),
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    itemCount: _results.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (context, index) {
-                      final user = _results[index];
-                      final isAdding = _addingIds.contains(user['id']);
-                      final isAdded = _addedIds.contains(user['id']);
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      itemCount: _results.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final user = _results[index];
+                        final isAdding = _addingIds.contains(user['id']);
+                        final isAdded = _addedIds.contains(user['id']);
 
-                      return Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.grey.shade200),
-                        ),
-                        child: ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(
-                            user['username'],
-                            style: const TextStyle(fontWeight: FontWeight.w600),
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 4,
                           ),
-                          subtitle: Text(
-                            user['location'] ?? '',
-                            style: const TextStyle(fontSize: 12),
+                          decoration: BoxDecoration(
+                            color: cardColor,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: borderColor),
                           ),
-                          trailing: isAdded
-                              ? const Icon(
-                                  Icons.check_circle,
-                                  color: AppColors.success,
-                                )
-                              : ElevatedButton(
-                                  style: ElevatedButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                      vertical: 8,
+                          child: ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(
+                              user['username'],
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: titleColor,
+                              ),
+                            ),
+                            subtitle: Text(
+                              user['location'] ?? '',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: subtitleColor,
+                              ),
+                            ),
+                            trailing: isAdded
+                                ? const Icon(
+                                    Icons.check_circle,
+                                    color: AppColors.success,
+                                  )
+                                : ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 8,
+                                      ),
                                     ),
-                                  ),
-                                  onPressed: isAdding
-                                      ? null
-                                      : () => _addPlayer(user['id']),
-                                  child: isAdding
-                                      ? const SizedBox(
-                                          height: 14,
-                                          width: 14,
-                                          child: CircularProgressIndicator(
-                                            color: Colors.white,
-                                            strokeWidth: 2,
+                                    onPressed: isAdding
+                                        ? null
+                                        : () => _addPlayer(user['id']),
+                                    child: isAdding
+                                        ? const SizedBox(
+                                            height: 14,
+                                            width: 14,
+                                            child: CircularProgressIndicator(
+                                              color: Colors.white,
+                                              strokeWidth: 2,
+                                            ),
+                                          )
+                                        : const Text(
+                                            'Add',
+                                            style: TextStyle(fontSize: 13),
                                           ),
-                                        )
-                                      : const Text(
-                                          'Add',
-                                          style: TextStyle(fontSize: 13),
-                                        ),
-                                ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ],
+                                  ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }

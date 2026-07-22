@@ -160,6 +160,15 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = Theme.of(context).cardColor;
+    final unselectedBorder = isDark
+        ? Colors.grey.shade700
+        : Colors.grey.shade200;
+    final unselectedIconColor = isDark
+        ? Colors.grey.shade500
+        : Colors.grey.shade400;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Choose Your Sports')),
       body: SafeArea(
@@ -194,13 +203,15 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
                     child: Container(
                       decoration: BoxDecoration(
                         color: isSelected
-                            ? AppColors.primary.withValues(alpha: 0.06)
-                            : Colors.white,
+                            ? AppColors.primary.withValues(
+                                alpha: isDark ? 0.16 : 0.06,
+                              )
+                            : cardColor,
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(
                           color: isSelected
                               ? AppColors.primary
-                              : Colors.grey.shade200,
+                              : unselectedBorder,
                           width: isSelected ? 1.5 : 1,
                         ),
                       ),
@@ -222,7 +233,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
                                 : Icons.circle_outlined,
                             color: isSelected
                                 ? AppColors.primary
-                                : Colors.grey.shade400,
+                                : unselectedIconColor,
                             size: 18,
                           ),
                         ],

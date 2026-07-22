@@ -134,17 +134,18 @@ async function finalizeMatch(match, league) {
   const player1PartnerRatingChange = await applyChange(match.player1_partner_id, rating1b, change1, team1Won);
   const player2PartnerRatingChange = await applyChange(match.player2_partner_id, rating2b, change2, !team1Won);
 
-  await pool.query(
-    `UPDATE matches SET status = 'confirmed',
-      player1_rating_change = $1, player2_rating_change = $2,
-      player1_partner_rating_change = $3, player2_partner_rating_change = $4
-     WHERE id = $5`,
-    [player1RatingChange, player2RatingChange, player1PartnerRatingChange, player2PartnerRatingChange, match.id]
-  );
-
   const winnerRating = team1Won ? team1Rating : team2Rating;
   const loserRating = team1Won ? team2Rating : team1Rating;
   const points = calculateLeaguePoints(sport, winnerRating, loserRating, match.set_scores, team1Won);
+
+  await pool.query(
+    `UPDATE matches SET status = 'confirmed',
+      player1_rating_change = $1, player2_rating_change = $2,
+      player1_partner_rating_change = $3, player2_partner_rating_change = $4,
+      league_points_awarded = $5
+     WHERE id = $6`,
+    [player1RatingChange, player2RatingChange, player1PartnerRatingChange, player2PartnerRatingChange, points, match.id]
+  );
 
   await awardLeaguePoints(match.league_id, match.winner_id, points);
   if (match.winner_id === match.player1_id && match.player1_partner_id) {
@@ -153,6 +154,70 @@ async function finalizeMatch(match, league) {
   if (match.winner_id === match.player2_id && match.player2_partner_id) {
     await awardLeaguePoints(match.league_id, match.player2_partner_id, points);
   }
+}
+
+// Undoes the rating + league-points effects of a previously confirmed match.
+// Used when a host edits or deletes a confirmed score.
+async function reverseMatchEffects(match, league) {
+  const { sport, format } = league;
+  const team1Won = match.winner_id === match.player1_id;
+
+  const reverseOne = async (playerId, ratingChange, won) => {
+    if (playerId == null || ratingChange == null) return;
+    if (sport === 'table_tennis') {
+      await pool.query(
+        `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
+         wins = wins - $2, losses = losses - $3
+         WHERE user_id = $4 AND sport = $5`,
+        [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport]
+      );
+    } else {
+      await pool.query(
+        `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
+         wins = wins - $2, losses = losses - $3
+         WHERE user_id = $4 AND sport = $5 AND format = $6`,
+        [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport, format]
+      );
+    }
+  };
+
+  await reverseOne(match.player1_id, match.player1_rating_change, team1Won);
+  await reverseOne(match.player2_id, match.player2_rating_change, !team1Won);
+  await reverseOne(match.player1_partner_id, match.player1_partner_rating_change, team1Won);
+  await reverseOne(match.player2_partner_id, match.player2_partner_rating_change, !team1Won);
+
+  if (match.league_points_awarded != null) {
+    const winnerIds = [match.winner_id];
+    if (match.winner_id === match.player1_id && match.player1_partner_id) winnerIds.push(match.player1_partner_id);
+    if (match.winner_id === match.player2_id && match.player2_partner_id) winnerIds.push(match.player2_partner_id);
+    for (const wId of winnerIds) {
+      await pool.query(
+        'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+        [match.league_points_awarded, match.league_id, wId]
+      );
+    }
+  }
+}
+
+// Checks if any participant in this match has played another confirmed match
+// (same sport/format) since this one happened — a signal that reversing this
+// match's rating change may not perfectly restore their "true" current rating.
+async function checkForRatingDrift(match, league) {
+  const participantIds = [
+    match.player1_id, match.player2_id, match.player1_partner_id, match.player2_partner_id,
+  ].filter(Boolean);
+
+  const result = await pool.query(
+    `SELECT COUNT(*) FROM matches m
+     JOIN leagues l ON l.id = m.league_id
+     WHERE m.status = 'confirmed' AND m.id != $1
+       AND l.sport = $2 AND l.format = $3
+       AND m.created_at > $4
+       AND (m.player1_id = ANY($5::int[]) OR m.player2_id = ANY($5::int[])
+            OR m.player1_partner_id = ANY($5::int[]) OR m.player2_partner_id = ANY($5::int[]))`,
+    [match.id, league.sport, league.format, match.created_at, participantIds]
+  );
+  return parseInt(result.rows[0].count, 10) > 0;
 }
 
 // ---------- REPORT A MATCH (self, needs opponent confirmation) ----------
@@ -493,6 +558,97 @@ router.post('/:id/reject', async (req, res) => {
   } catch (err) {
     console.error('Reject match error:', err);
     res.status(500).json({ error: 'Something went wrong rejecting the match.' });
+  }
+});
+
+// ---------- HOST EDITS A CONFIRMED MATCH'S SCORE ----------
+router.put('/:id/edit', async (req, res) => {
+  const userId = req.userId;
+  const matchId = req.params.id;
+  const { player1Units, player2Units, player1Won, setScores } = req.body;
+
+  if (player1Units == null || player2Units == null || player1Won == null) {
+    return res.status(400).json({ error: 'Missing required fields.' });
+  }
+
+  try {
+    const matchResult = await pool.query('SELECT * FROM matches WHERE id = $1', [matchId]);
+    if (matchResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Match not found.' });
+    }
+    const match = matchResult.rows[0];
+
+    if (match.status !== 'confirmed') {
+      return res.status(400).json({ error: 'Only confirmed matches can be edited.' });
+    }
+
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can edit match scores.' });
+    }
+
+    const hasDrift = await checkForRatingDrift(match, league);
+
+    await reverseMatchEffects(match, league);
+
+    const winnerId = player1Won ? match.player1_id : match.player2_id;
+    await pool.query(
+      `UPDATE matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4
+       WHERE id = $5`,
+      [player1Units, player2Units, winnerId, JSON.stringify(setScores || []), matchId]
+    );
+
+    const updatedMatchResult = await pool.query('SELECT * FROM matches WHERE id = $1', [matchId]);
+    await finalizeMatch(updatedMatchResult.rows[0], league);
+
+    res.status(200).json({
+      message: 'Match updated and ratings recalculated.',
+      warning: hasDrift
+        ? 'One or more players have played other confirmed matches since this one — their current rating may not perfectly reflect this correction.'
+        : null,
+    });
+  } catch (err) {
+    console.error('Edit match error:', err);
+    res.status(500).json({ error: 'Something went wrong editing the match.' });
+  }
+});
+
+// ---------- HOST DELETES A MATCH (confirmed or pending) ----------
+router.delete('/:id', async (req, res) => {
+  const userId = req.userId;
+  const matchId = req.params.id;
+
+  try {
+    const matchResult = await pool.query('SELECT * FROM matches WHERE id = $1', [matchId]);
+    if (matchResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Match not found.' });
+    }
+    const match = matchResult.rows[0];
+
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can delete a match.' });
+    }
+
+    let warning = null;
+    if (match.status === 'confirmed') {
+      const hasDrift = await checkForRatingDrift(match, league);
+      if (hasDrift) {
+        warning = 'One or more players have played other confirmed matches since this one — their current rating may not perfectly reflect this reversal.';
+      }
+      await reverseMatchEffects(match, league);
+    }
+
+    await pool.query('DELETE FROM matches WHERE id = $1', [matchId]);
+
+    res.status(200).json({ message: 'Match deleted.', warning });
+  } catch (err) {
+    console.error('Delete match error:', err);
+    res.status(500).json({ error: 'Something went wrong deleting the match.' });
   }
 });
 
