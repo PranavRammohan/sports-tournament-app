@@ -36,6 +36,12 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadEverything();
   }
 
+  // Called by MainShell whenever this tab is tapped, so Home reflects
+  // any changes made on other screens without needing a full reload.
+  void refresh() {
+    _loadEverything();
+  }
+
   Future<void> _loadEverything() async {
     setState(() => _loading = true);
     try {

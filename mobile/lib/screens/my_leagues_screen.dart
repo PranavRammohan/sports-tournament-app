@@ -30,6 +30,12 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
     _loadLeagues();
   }
 
+  // Called by MainShell whenever this tab is tapped, so the list reflects
+  // any changes made elsewhere without needing a full reload.
+  void refresh() {
+    _loadLeagues();
+  }
+
   Future<void> _loadLeagues() async {
     setState(() => _loading = true);
     try {

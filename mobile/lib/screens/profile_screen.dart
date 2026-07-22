@@ -32,6 +32,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _loadProfile();
   }
 
+  // Called by MainShell whenever this tab is tapped, so the profile
+  // reflects any changes made elsewhere without needing a full reload.
+  void refresh() {
+    _loadProfile();
+  }
+
   Future<void> _loadProfile() async {
     setState(() {
       _loading = true;
@@ -107,6 +113,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     final groupedSports = _groupSportsByName();
     final existingSportKeys = groupedSports.keys.toList();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = Theme.of(context).cardColor;
+    final borderColor = isDark ? Colors.grey.shade800 : Colors.grey.shade200;
+    final subtleTextColor = isDark
+        ? Colors.grey.shade400
+        : Colors.grey.shade600;
+    final primaryTextColor =
+        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
+    final ratingRowBg = isDark
+        ? AppColors.darkBackground
+        : AppColors.background;
 
     return Scaffold(
       appBar: AppBar(
@@ -217,21 +234,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   const SizedBox(height: 16),
                   Container(
                     decoration: BoxDecoration(
-                      color: Theme.of(context).cardColor,
+                      color: cardColor,
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.grey.shade200),
+                      border: Border.all(color: borderColor),
                     ),
                     child: SwitchListTile(
                       value: _isDarkMode,
                       onChanged: _toggleDarkMode,
-                      title: const Text(
+                      title: Text(
                         'Dark Mode',
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
                           fontSize: 14,
+                          color: primaryTextColor,
                         ),
                       ),
-                      secondary: const Icon(Icons.dark_mode_outlined),
+                      secondary: Icon(
+                        Icons.dark_mode_outlined,
+                        color: primaryTextColor,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 22),
@@ -294,14 +315,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               ),
                               const SizedBox(height: 10),
                               if (isTableTennis && singles != null)
-                                _ratingRow('Rating', singles)
+                                _ratingRow(
+                                  'Rating',
+                                  singles,
+                                  ratingRowBg,
+                                  primaryTextColor,
+                                  subtleTextColor,
+                                )
                               else ...[
                                 if (singles != null)
-                                  _ratingRow('Singles', singles),
+                                  _ratingRow(
+                                    'Singles',
+                                    singles,
+                                    ratingRowBg,
+                                    primaryTextColor,
+                                    subtleTextColor,
+                                  ),
                                 if (singles != null && doubles != null)
                                   const SizedBox(height: 8),
                                 if (doubles != null)
-                                  _ratingRow('Doubles', doubles),
+                                  _ratingRow(
+                                    'Doubles',
+                                    doubles,
+                                    ratingRowBg,
+                                    primaryTextColor,
+                                    subtleTextColor,
+                                  ),
                               ],
                             ],
                           ),
@@ -314,11 +353,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _ratingRow(String label, Map<String, dynamic> data) {
+  Widget _ratingRow(
+    String label,
+    Map<String, dynamic> data,
+    Color bgColor,
+    Color textColor,
+    Color subtleTextColor,
+  ) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
-        color: AppColors.background,
+        color: bgColor,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
@@ -329,14 +374,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
             children: [
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w600,
                   fontSize: 13,
+                  color: textColor,
                 ),
               ),
               Text(
                 '${data['matches_played']} matches · ${data['wins']}W ${data['losses']}L',
-                style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                style: TextStyle(fontSize: 11, color: subtleTextColor),
               ),
             ],
           ),
@@ -345,7 +391,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             style: const TextStyle(
               fontSize: 17,
               fontWeight: FontWeight.bold,
-              color: AppColors.primary,
+              color: AppColors.accent,
             ),
           ),
         ],

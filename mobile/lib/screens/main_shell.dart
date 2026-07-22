@@ -21,11 +21,18 @@ class _MainShellState extends State<MainShell> {
   int _index = 0;
   int _pendingCount = 0;
 
-  final _screens = const [
-    HomeScreen(),
-    MyLeaguesScreen(),
-    PendingMatchesScreen(),
-    ProfileScreen(),
+  // Keys let us reach into each screen's State and call refresh(),
+  // even though IndexedStack keeps them alive in memory.
+  final _homeKey = GlobalKey<State<HomeScreen>>();
+  final _leaguesKey = GlobalKey<State<MyLeaguesScreen>>();
+  final _pendingKey = GlobalKey<State<PendingMatchesScreen>>();
+  final _profileKey = GlobalKey<State<ProfileScreen>>();
+
+  late final _screens = [
+    HomeScreen(key: _homeKey),
+    MyLeaguesScreen(key: _leaguesKey),
+    PendingMatchesScreen(key: _pendingKey),
+    ProfileScreen(key: _profileKey),
   ];
 
   @override
@@ -52,8 +59,28 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
+  // Calls refresh() on whichever screen's State currently exists.
+  // Uses `dynamic` so we don't need to make each private State class public.
+  void _refreshScreen(int i) {
+    switch (i) {
+      case 0:
+        (_homeKey.currentState as dynamic)?.refresh();
+        break;
+      case 1:
+        (_leaguesKey.currentState as dynamic)?.refresh();
+        break;
+      case 2:
+        (_pendingKey.currentState as dynamic)?.refresh();
+        break;
+      case 3:
+        (_profileKey.currentState as dynamic)?.refresh();
+        break;
+    }
+  }
+
   void _onDestinationSelected(int i) {
     setState(() => _index = i);
+    _refreshScreen(i);
     if (i == 2) {
       Future.delayed(const Duration(milliseconds: 400), _loadPendingCount);
     }

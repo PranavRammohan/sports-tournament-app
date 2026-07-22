@@ -26,6 +26,12 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     _loadMatches();
   }
 
+  // Called by MainShell whenever this tab is tapped, so the screen
+  // reflects any changes made elsewhere without needing a full reload.
+  void refresh() {
+    _loadMatches();
+  }
+
   Future<void> _loadMatches() async {
     setState(() => _loading = true);
     try {
@@ -174,9 +180,8 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     final cardColor = Theme.of(context).cardColor;
     final subtleTextColor = isDark
         ? Colors.grey.shade400
-        : Colors.grey.shade600;
-    final primaryTextColor =
-        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
+        : Colors.grey.shade700;
+    final primaryTextColor = isDark ? Colors.white : AppColors.textDark;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Pending Confirmations')),
