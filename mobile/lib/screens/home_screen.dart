@@ -36,8 +36,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadEverything();
   }
 
-  // Called by MainShell whenever this tab is tapped, so Home reflects
-  // any changes made on other screens without needing a full reload.
   void refresh() {
     _loadEverything();
   }
@@ -229,7 +227,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       Expanded(
                         child: _statCard(
                           Icons.list_alt,
-                          'Leagues',
+                          'Tournaments',
                           '$_leagueCount',
                           cardColor,
                           borderColor,
@@ -612,7 +610,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                     Text(
-                      m['area'],
+                      m['league_name'] ?? m['area'],
                       style: TextStyle(fontSize: 11, color: subtleTextColor),
                     ),
                   ],

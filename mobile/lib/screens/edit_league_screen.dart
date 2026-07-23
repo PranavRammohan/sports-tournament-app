@@ -121,7 +121,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         title: const Text('Confirm format change?'),
         content: const Text(
-          'This rebuilds the fixture list for everyone currently in the league. Confirmed results stay in history, but any pending unconfirmed reports and any existing bracket will be discarded. This takes effect immediately and closes this screen.',
+          'This rebuilds the fixture list for everyone currently in the tournament. Confirmed results stay in history, but any pending unconfirmed reports and any existing bracket will be discarded. This takes effect immediately and closes this screen.',
         ),
         actions: [
           TextButton(
@@ -175,7 +175,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
 
   Future<void> _handleSave() async {
     if (_nameController.text.trim().isEmpty) {
-      _showAlert('Missing name', 'Please enter a league name.');
+      _showAlert('Missing name', 'Please enter a tournament name.');
       return;
     }
     if (_selectedArea == null) {
@@ -223,7 +223,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
         }
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('League updated.'),
+            content: Text('Tournament updated.'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -258,7 +258,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Edit League')),
+      appBar: AppBar(title: const Text('Edit Tournament')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -267,7 +267,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
             TextField(
               controller: _nameController,
               decoration: const InputDecoration(
-                labelText: 'League Name',
+                labelText: 'Tournament Name',
                 prefixIcon: Icon(Icons.emoji_events_outlined),
               ),
             ),
@@ -363,7 +363,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                 value: _isPrivate,
                 onChanged: (v) => setState(() => _isPrivate = v),
                 title: const Text(
-                  'Private League',
+                  'Private Tournament',
                   style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
                 ),
                 subtitle: const Text(
@@ -418,7 +418,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                 ),
                 subtitle: Text(
                   widget.hasConfirmedMatches
-                      ? 'Locked — matches have already been confirmed in this league'
+                      ? 'Locked — matches have already been confirmed in this tournament'
                       : 'If on, only you can enter match results',
                   style: const TextStyle(fontSize: 12),
                 ),

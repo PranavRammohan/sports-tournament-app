@@ -14,6 +14,7 @@ import 'regenerate_schedule_dialog.dart';
 import 'add_players_screen.dart';
 import 'add_manual_match_screen.dart';
 import 'edit_league_screen.dart';
+import 'player_profile_screen.dart';
 
 class LeagueDetailScreen extends StatefulWidget {
   final int leagueId;
@@ -45,6 +46,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       _league != null && _league!['schedule_type'] == 'knockout';
   bool get _isCustom =>
       _league != null && _league!['schedule_type'] == 'custom';
+  bool get _isLeagueStyle => !_isKnockout && !_isCustom;
   bool get _hasConfirmedMatches {
     if (_isKnockout) {
       return _bracket.any((m) => m['status'] == 'confirmed');
@@ -58,11 +60,6 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     _loadAll(showFullLoading: true);
   }
 
-  // showFullLoading is only true for the very first load. Every subsequent
-  // refresh (after editing, deleting, joining, etc.) must NOT toggle _loading,
-  // because doing so swaps out the whole Scaffold for a bare spinner below —
-  // which destroys and recreates the DefaultTabController, snapping the user
-  // back to the Leaderboard tab every time.
   Future<void> _loadAll({bool showFullLoading = false}) async {
     setState(() {
       if (showFullLoading) _loading = true;
@@ -84,7 +81,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       final leagueData = jsonDecode(leagueRes.body);
       if (leagueRes.statusCode != 200) {
         setState(
-          () => _error = leagueData['error'] ?? 'Could not load league.',
+          () => _error = leagueData['error'] ?? 'Could not load tournament.',
         );
         return;
       }
@@ -137,7 +134,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       if (response.statusCode == 201) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Joined league!'),
+            content: Text('Joined tournament!'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -282,9 +279,9 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        title: const Text('Delete this league?'),
+        title: const Text('Delete this tournament?'),
         content: const Text(
-          'This permanently deletes the league, its schedule, and all match history.',
+          'This permanently deletes the tournament, its schedule, and all match history.',
         ),
         actions: [
           TextButton(
@@ -319,7 +316,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not delete league.'),
+            content: Text(data['error'] ?? 'Could not delete tournament.'),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -339,7 +336,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        title: const Text('Leave this league?'),
+        title: const Text('Leave this tournament?'),
         content: const Text('You can rejoin later if you change your mind.'),
         actions: [
           TextButton(
@@ -374,7 +371,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not leave league.'),
+            content: Text(data['error'] ?? 'Could not leave tournament.'),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -906,6 +903,14 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     return '$weekday, $month ${dt.day} · $hour12:$minute $ampm';
   }
 
+  String? _ratingFor(int? playerId) {
+    if (playerId == null) return null;
+    for (final p in _leaderboard) {
+      if (p['id'] == playerId) return '${p['rating']}';
+    }
+    return null;
+  }
+
   Widget? _buildActionButton(bool isHost) {
     if (_isKnockout) return null;
 
@@ -947,6 +952,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 leagueId: widget.leagueId,
                 sport: _league!['sport'],
                 pendingFixtures: pendingFixtures,
+                members: _leaderboard,
               ),
             ),
           );
@@ -988,7 +994,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     }
     if (_error != null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('League')),
+        appBar: AppBar(title: const Text('Tournament')),
         body: Center(child: Text(_error!)),
       );
     }
@@ -1010,7 +1016,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
             if (isHost)
               IconButton(
                 icon: const Icon(Icons.edit_outlined),
-                tooltip: 'Edit league',
+                tooltip: 'Edit tournament',
                 onPressed: () async {
                   final result = await Navigator.push(
                     context,
@@ -1052,21 +1058,6 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                       )
                     : const Icon(Icons.delete_outline),
                 onPressed: _deleting ? null : _confirmDelete,
-              )
-            else if (_isMember)
-              IconButton(
-                icon: _leaving
-                    ? const SizedBox(
-                        height: 18,
-                        width: 18,
-                        child: CircularProgressIndicator(
-                          color: Colors.white,
-                          strokeWidth: 2,
-                        ),
-                      )
-                    : const Icon(Icons.exit_to_app),
-                onPressed: _leaving ? null : _confirmLeave,
-                tooltip: 'Leave league',
               ),
           ],
           bottom: const TabBar(
@@ -1095,6 +1086,8 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   Widget _buildLeaderboardTab(bool isHost) {
     final academyName = _league!['academy_name'];
     final hostUsername = _league!['host_username'];
+    final primaryTextColor =
+        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
 
     return RefreshIndicator(
       onRefresh: _loadAll,
@@ -1113,11 +1106,20 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
+                  _league!['name'],
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: primaryTextColor,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
                   '${_formatSport(_league!['sport'])} · ${_league!['area']}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.textDark,
+                    color: primaryTextColor,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -1154,17 +1156,47 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  _isKnockout
-                      ? 'Knockout bracket'
-                      : 'Ranked by league points (win = 2, +1 for a dominant win)',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AppColors.textGrey,
-                    fontStyle: FontStyle.italic,
+                if (_league!['host_phone'] != null) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.phone_outlined,
+                        size: 14,
+                        color: AppColors.textGrey,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        _league!['host_phone'],
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textGrey,
+                        ),
+                      ),
+                    ],
                   ),
-                ),
+                ],
+                if (_isLeagueStyle) ...[
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Ranked by tournament points (win = 2, +1 for a dominant win)',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textGrey,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ] else if (_isKnockout) ...[
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Knockout bracket',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textGrey,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
                 if (_league!['is_private'] == true && isHost) ...[
                   const SizedBox(height: 8),
                   Container(
@@ -1216,10 +1248,32 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                         ),
                       )
                     : const Icon(Icons.add),
-                label: const Text('Join League'),
+                label: const Text('Join Tournament'),
+              ),
+            )
+          else if (!isHost)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: OutlinedButton.icon(
+                onPressed: _leaving ? null : _confirmLeave,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.danger,
+                  side: const BorderSide(color: AppColors.danger),
+                ),
+                icon: _leaving
+                    ? const SizedBox(
+                        height: 16,
+                        width: 16,
+                        child: CircularProgressIndicator(
+                          color: AppColors.danger,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Icon(Icons.exit_to_app),
+                label: const Text('Leave Tournament'),
               ),
             ),
-          if (_isMember && _league!['format'] == 'singles' && !_isKnockout)
+          if (_isMember && _league!['format'] == 'singles' && _isLeagueStyle)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: OutlinedButton.icon(
@@ -1291,6 +1345,15 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                       horizontal: 12,
                       vertical: 0,
                     ),
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              PlayerProfileScreen(userId: player['id']),
+                        ),
+                      );
+                    },
                     leading: CircleAvatar(
                       radius: 15,
                       backgroundColor: rankColor,
@@ -1321,19 +1384,25 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Text(
-                              '${player['points']} pts',
-                              style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.accent,
+                            if (_isLeagueStyle)
+                              Text(
+                                '${player['points']} pts',
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.accent,
+                                ),
                               ),
-                            ),
                             Text(
                               'Rating: ${player['rating']}',
-                              style: const TextStyle(
-                                fontSize: 10,
-                                color: AppColors.textGrey,
+                              style: TextStyle(
+                                fontSize: _isLeagueStyle ? 10 : 13,
+                                fontWeight: _isLeagueStyle
+                                    ? FontWeight.normal
+                                    : FontWeight.bold,
+                                color: _isLeagueStyle
+                                    ? AppColors.textGrey
+                                    : AppColors.accent,
                               ),
                             ),
                           ],
@@ -1368,7 +1437,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(
-            'Join this league to see the bracket.',
+            'Join this tournament to see the bracket.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium,
           ),
@@ -1569,7 +1638,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(
-            'Join this league to see the schedule.',
+            'Join this tournament to see the schedule.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium,
           ),
@@ -1658,7 +1727,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(
-            'Join this league to see your matches.',
+            'Join this tournament to see your matches.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium,
           ),
@@ -1763,12 +1832,18 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     bool isHost = false,
   }) {
     final isDoubles = f['player1_partner_username'] != null;
+    final p1Rating = _ratingFor(f['player1_id']);
+    final p2Rating = _ratingFor(f['player2_id']);
     final team1 = isDoubles
         ? '${f['player1_username']} & ${f['player1_partner_username']}'
-        : f['player1_username'];
+        : (p1Rating != null
+              ? '${f['player1_username']} ($p1Rating)'
+              : f['player1_username']);
     final team2 = isDoubles
         ? '${f['player2_username']} & ${f['player2_partner_username']}'
-        : f['player2_username'];
+        : (p2Rating != null
+              ? '${f['player2_username']} ($p2Rating)'
+              : f['player2_username']);
     final isCompleted = f['match_status'] == 'confirmed';
     final team1Won = isCompleted && f['winner_id'] == f['reported_player1_id'];
     final team2Won = isCompleted && f['winner_id'] == f['reported_player2_id'];
@@ -2296,7 +2371,7 @@ class _EditFixtureDialogState extends State<_EditFixtureDialog> {
         .map<DropdownMenuItem<int>>(
           (m) => DropdownMenuItem(
             value: m['id'] as int,
-            child: Text(m['username']),
+            child: Text('${m['username']} (${m['rating']})'),
           ),
         )
         .toList();

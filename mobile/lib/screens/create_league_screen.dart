@@ -92,6 +92,10 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   bool _hostPlays = true;
   bool _isPrivate = false;
 
+  bool _restrictByRating = false;
+  final TextEditingController _minRatingController = TextEditingController();
+  final TextEditingController _maxRatingController = TextEditingController();
+
   Future<void> _pickDate({required bool isStart}) async {
     final picked = await showDatePicker(
       context: context,
@@ -140,6 +144,27 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
       }
     }
 
+    double? minRating;
+    double? maxRating;
+    if (_restrictByRating) {
+      minRating = double.tryParse(_minRatingController.text.trim());
+      maxRating = double.tryParse(_maxRatingController.text.trim());
+      if (minRating == null && maxRating == null) {
+        _showAlert(
+          'Missing info',
+          'Enter at least a minimum or maximum rating, or turn off the rating restriction.',
+        );
+        return;
+      }
+      if (minRating != null && maxRating != null && minRating > maxRating) {
+        _showAlert(
+          'Invalid range',
+          'Minimum rating cannot be higher than maximum rating.',
+        );
+        return;
+      }
+    }
+
     setState(() => _loading = true);
 
     try {
@@ -170,6 +195,8 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
           'academyName': _academyNameController.text.trim().isEmpty
               ? null
               : _academyNameController.text.trim(),
+          'minRating': minRating,
+          'maxRating': maxRating,
         }),
       );
 
@@ -193,7 +220,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(10),
             ),
-            title: const Text('League created!'),
+            title: const Text('Tournament created!'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -260,12 +287,28 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   String _formatDate(DateTime? d) =>
       d == null ? 'Select date' : '${d.day}/${d.month}/${d.year}';
 
+  String? _ratingHintFor(String? sport) {
+    switch (sport) {
+      case 'Badminton':
+        return 'e.g. 6000–8500';
+      case 'Tennis':
+        return 'e.g. 2.5–13';
+      case 'Table Tennis':
+        return 'e.g. 1000–2500';
+      case 'Pickleball':
+        return 'e.g. 2.5–7';
+      default:
+        return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isSingles = _selectedFormat == 'Singles';
+    final ratingHint = _ratingHintFor(_selectedSport);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Create League')),
+      appBar: AppBar(title: const Text('Create Tournament')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
         child: Column(
@@ -274,7 +317,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
             TextField(
               controller: _nameController,
               decoration: const InputDecoration(
-                labelText: 'League Name',
+                labelText: 'Tournament Name',
                 hintText: 'e.g. Koramangala Summer Tennis League',
                 prefixIcon: Icon(Icons.badge_outlined),
               ),
@@ -426,7 +469,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               onChanged: (v) => setState(() => _hostEntersScores = v),
               title: const Text('I will enter all match scores myself'),
               subtitle: const Text(
-                'For academies or organizers running the event — scores you enter are confirmed instantly, no player confirmation needed.',
+                'For academies or organizers running the event — scores you enter are confirmed instantly, no player confirmation needed. Otherwise, players need to report and confirm their match scores amongst themselves.',
                 style: TextStyle(fontSize: 12),
               ),
             ),
@@ -444,12 +487,80 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               contentPadding: EdgeInsets.zero,
               value: _isPrivate,
               onChanged: (v) => setState(() => _isPrivate = v),
-              title: const Text('Make this league private'),
+              title: const Text('Make this tournament private'),
               subtitle: const Text(
-                "Won't show up in Browse Leagues. Only people with the join code can join.",
+                "Won't show up in Browse Tournaments. Only people with the join code can join.",
                 style: TextStyle(fontSize: 12),
               ),
             ),
+
+            const SizedBox(height: 20),
+            const Divider(),
+            const SizedBox(height: 12),
+            Text(
+              'Who Can Join',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 10),
+            RadioListTile<bool>(
+              contentPadding: EdgeInsets.zero,
+              value: false,
+              groupValue: _restrictByRating,
+              title: const Text('Open for all skill levels'),
+              onChanged: (v) => setState(() => _restrictByRating = v!),
+            ),
+            RadioListTile<bool>(
+              contentPadding: EdgeInsets.zero,
+              value: true,
+              groupValue: _restrictByRating,
+              title: const Text('Only players within a rating range'),
+              subtitle: _selectedSport == null
+                  ? const Text(
+                      'Select a sport above to see its rating scale',
+                      style: TextStyle(fontSize: 11),
+                    )
+                  : null,
+              onChanged: (v) => setState(() => _restrictByRating = v!),
+            ),
+            if (_restrictByRating) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _minRatingController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: InputDecoration(
+                        labelText: 'Min rating',
+                        hintText: ratingHint,
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      controller: _maxRatingController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: InputDecoration(
+                        labelText: 'Max rating',
+                        hintText: ratingHint,
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Leave one blank for an open-ended range (e.g. only a minimum, no upper limit).',
+                style: TextStyle(fontSize: 11),
+              ),
+            ],
 
             const SizedBox(height: 24),
             ElevatedButton(
@@ -460,7 +571,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                       width: 20,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Text('Create League'),
+                  : const Text('Create Tournament'),
             ),
           ],
         ),

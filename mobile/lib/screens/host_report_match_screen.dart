@@ -10,12 +10,14 @@ class HostReportMatchScreen extends StatefulWidget {
   final int leagueId;
   final String sport;
   final List<dynamic> pendingFixtures; // schedule entries not yet completed
+  final List<dynamic> members; // league leaderboard, used for ratings
 
   const HostReportMatchScreen({
     super.key,
     required this.leagueId,
     required this.sport,
     required this.pendingFixtures,
+    required this.members,
   });
 
   @override
@@ -37,6 +39,16 @@ class _HostReportMatchScreenState extends State<HostReportMatchScreen> {
   void _addSet() => setState(() => _sets.add(_SetScore()));
   void _removeSet(int index) {
     if (_sets.length > 1) setState(() => _sets.removeAt(index));
+  }
+
+  // #6: fixtures from the schedule endpoint don't carry rating, so look it up
+  // from the league leaderboard (widget.members) by player id.
+  String? _ratingFor(int? playerId) {
+    if (playerId == null) return null;
+    for (final m in widget.members) {
+      if (m['id'] == playerId) return '${m['rating']}';
+    }
+    return null;
   }
 
   Future<void> _handleSubmit() async {
@@ -141,12 +153,20 @@ class _HostReportMatchScreenState extends State<HostReportMatchScreen> {
 
   String _fixtureLabel(Map<String, dynamic> fixture) {
     final isDoubles = fixture['player1_partner_username'] != null;
+
+    final p1Rating = _ratingFor(fixture['player1_id']);
+    final p2Rating = _ratingFor(fixture['player2_id']);
+
     final team1 = isDoubles
         ? '${fixture['player1_username']} & ${fixture['player1_partner_username']}'
-        : fixture['player1_username'];
+        : (p1Rating != null
+              ? '${fixture['player1_username']} ($p1Rating)'
+              : fixture['player1_username']);
     final team2 = isDoubles
         ? '${fixture['player2_username']} & ${fixture['player2_partner_username']}'
-        : fixture['player2_username'];
+        : (p2Rating != null
+              ? '${fixture['player2_username']} ($p2Rating)'
+              : fixture['player2_username']);
     return '$team1 vs $team2';
   }
 

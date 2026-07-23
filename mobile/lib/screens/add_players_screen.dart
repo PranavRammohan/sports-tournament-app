@@ -115,9 +115,6 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
   }
 
   void _handleBack() {
-    // Report back whether any players were actually added, so the league
-    // screen knows to refresh its leaderboard/schedule instead of assuming
-    // nothing changed just because we didn't pop with an explicit value.
     Navigator.pop(context, _addedIds.isNotEmpty);
   }
 

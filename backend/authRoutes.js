@@ -94,7 +94,7 @@ router.post('/login', async (req, res) => {
 
 router.patch('/profile', authMiddleware, async (req, res) => {
   const userId = req.userId;
-  const { username, phoneNumber, location, gender } = req.body;
+  const { username, phoneNumber, location, gender, profilePicUrl } = req.body;
 
   if (!username || !phoneNumber || !location || !gender) {
     return res.status(400).json({ error: 'All fields are required.' });
@@ -115,11 +115,23 @@ router.patch('/profile', authMiddleware, async (req, res) => {
       return res.status(409).json({ error: 'That username or mobile number is already taken.' });
     }
 
+    // profilePicUrl is optional and tri-state:
+    // - key absent from the request body -> leave the existing photo untouched
+    // - key present with a value -> replace the photo with that value
+    // - key present but explicitly null -> clear the photo
+    const updatingPhoto = Object.prototype.hasOwnProperty.call(req.body, 'profilePicUrl');
+
     const result = await pool.query(
-      `UPDATE users SET username = $1, phone_number = $2, location = $3, gender = $4
-       WHERE id = $5
-       RETURNING id, username, phone_number, location, gender, profile_pic_url`,
-      [username, phoneNumber, location, gender, userId]
+      updatingPhoto
+        ? `UPDATE users SET username = $1, phone_number = $2, location = $3, gender = $4, profile_pic_url = $5
+           WHERE id = $6
+           RETURNING id, username, phone_number, location, gender, profile_pic_url`
+        : `UPDATE users SET username = $1, phone_number = $2, location = $3, gender = $4
+           WHERE id = $5
+           RETURNING id, username, phone_number, location, gender, profile_pic_url`,
+      updatingPhoto
+        ? [username, phoneNumber, location, gender, profilePicUrl || null, userId]
+        : [username, phoneNumber, location, gender, userId]
     );
 
     res.status(200).json({ user: result.rows[0] });

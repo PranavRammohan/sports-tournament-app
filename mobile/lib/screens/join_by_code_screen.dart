@@ -88,7 +88,7 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              'Enter the join code shared by the league host.',
+              'Enter the join code shared by the tournament host.',
               style: TextStyle(fontSize: 13, color: Colors.grey),
             ),
             const SizedBox(height: 16),
@@ -113,7 +113,7 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
                         strokeWidth: 2.5,
                       ),
                     )
-                  : const Text('Join League'),
+                  : const Text('Join Tournament'),
             ),
           ],
         ),

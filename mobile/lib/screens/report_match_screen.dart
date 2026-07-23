@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../main.dart';
 import '../config.dart';
 
 class ReportMatchScreen extends StatefulWidget {
@@ -90,6 +91,17 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
     }
   }
 
+  // #6: schedule fixtures don't carry rating info themselves, but
+  // widget.members (the league leaderboard) does — look ratings up from there
+  // by player id so we can show them next to names.
+  String? _ratingFor(int? playerId) {
+    if (playerId == null) return null;
+    for (final m in widget.members) {
+      if (m['id'] == playerId) return '${m['rating']}';
+    }
+    return null;
+  }
+
   void _selectFixture(Map<String, dynamic> fixture) {
     final iAmTeam1 =
         fixture['player1_id'] == _currentUserId ||
@@ -119,14 +131,22 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
         fixture['player1_partner_id'] == _currentUserId;
     if (iAmTeam1) {
       final isDoubles = fixture['player2_partner_username'] != null;
-      return isDoubles
+      final opponentRating = _ratingFor(fixture['player2_id']);
+      final label = isDoubles
           ? '${fixture['player2_username']} & ${fixture['player2_partner_username']}'
           : fixture['player2_username'];
+      return isDoubles || opponentRating == null
+          ? label
+          : '$label ($opponentRating)';
     } else {
       final isDoubles = fixture['player1_partner_username'] != null;
-      return isDoubles
+      final opponentRating = _ratingFor(fixture['player1_id']);
+      final label = isDoubles
           ? '${fixture['player1_username']} & ${fixture['player1_partner_username']}'
           : fixture['player1_username'];
+      return isDoubles || opponentRating == null
+          ? label
+          : '$label ($opponentRating)';
     }
   }
 
@@ -248,6 +268,18 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
     );
   }
 
+  // #6: same rating-appended label pattern as add_manual_match_screen.
+  List<DropdownMenuItem<int>> _memberItems() {
+    return widget.members
+        .map<DropdownMenuItem<int>>(
+          (m) => DropdownMenuItem(
+            value: m['id'],
+            child: Text('${m['username']} (${m['rating']})'),
+          ),
+        )
+        .toList();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loadingFixtures) {
@@ -274,6 +306,17 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
     }
 
     final isDoubles = widget.format == 'doubles';
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = Theme.of(context).cardColor;
+    final unselectedBorder = isDark
+        ? Colors.grey.shade600
+        : Colors.grey.shade300;
+    final unselectedIconColor = isDark
+        ? Colors.grey.shade500
+        : Colors.grey.shade400;
+    final titleColor =
+        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
+    final tierChipBg = isDark ? Colors.grey.shade800 : Colors.grey.shade100;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Report Match')),
@@ -301,11 +344,15 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
                         color: selected
-                            ? Colors.blue.withValues(alpha: 0.06)
-                            : Colors.white,
+                            ? AppColors.primary.withValues(
+                                alpha: isDark ? 0.18 : 0.06,
+                              )
+                            : cardColor,
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
-                          color: selected ? Colors.blue : Colors.grey.shade300,
+                          color: selected
+                              ? AppColors.primary
+                              : unselectedBorder,
                           width: selected ? 2 : 1,
                         ),
                       ),
@@ -316,15 +363,16 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                                 ? Icons.check_circle
                                 : Icons.circle_outlined,
                             color: selected
-                                ? Colors.blue
-                                : Colors.grey.shade400,
+                                ? AppColors.primary
+                                : unselectedIconColor,
                           ),
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
                               'vs ${_fixtureOpponentLabel(fixture)}',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.w600,
+                                color: titleColor,
                               ),
                             ),
                           ),
@@ -334,12 +382,12 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                               vertical: 3,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.grey.shade100,
+                              color: tierChipBg,
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: Text(
                               'Tier ${fixture['tier_number']}',
-                              style: const TextStyle(fontSize: 11),
+                              style: TextStyle(fontSize: 11, color: titleColor),
                             ),
                           ),
                         ],
@@ -358,14 +406,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                 const SizedBox(height: 8),
                 DropdownButtonFormField<int>(
                   initialValue: _partnerId,
-                  items: widget.members
-                      .map<DropdownMenuItem<int>>(
-                        (m) => DropdownMenuItem(
-                          value: m['id'],
-                          child: Text(m['username']),
-                        ),
-                      )
-                      .toList(),
+                  items: _memberItems(),
                   onChanged: (v) => setState(() => _partnerId = v),
                 ),
                 const SizedBox(height: 20),
@@ -374,14 +415,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
               const SizedBox(height: 8),
               DropdownButtonFormField<int>(
                 initialValue: _opponentId,
-                items: widget.members
-                    .map<DropdownMenuItem<int>>(
-                      (m) => DropdownMenuItem(
-                        value: m['id'],
-                        child: Text(m['username']),
-                      ),
-                    )
-                    .toList(),
+                items: _memberItems(),
                 onChanged: (v) => setState(() => _opponentId = v),
               ),
               if (isDoubles) ...[
@@ -393,14 +427,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                 const SizedBox(height: 8),
                 DropdownButtonFormField<int>(
                   initialValue: _opponentPartnerId,
-                  items: widget.members
-                      .map<DropdownMenuItem<int>>(
-                        (m) => DropdownMenuItem(
-                          value: m['id'],
-                          child: Text(m['username']),
-                        ),
-                      )
-                      .toList(),
+                  items: _memberItems(),
                   onChanged: (v) => setState(() => _opponentPartnerId = v),
                 ),
               ],
@@ -446,7 +473,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                       IconButton(
                         icon: const Icon(
                           Icons.remove_circle_outline,
-                          color: Colors.red,
+                          color: AppColors.danger,
                         ),
                         onPressed: () => _removeSet(index),
                       ),

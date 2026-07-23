@@ -6,10 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../config.dart';
 import '../widgets/sport_icon.dart';
-import 'match_history_screen.dart';
 import 'add_sport_screen.dart';
 import 'edit_profile_screen.dart';
-import 'change_password_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -125,26 +123,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ? AppColors.darkBackground
         : AppColors.background;
 
+    final profilePicUrl = _user?['profilePicUrl'];
+    final hasProfilePic = profilePicUrl != null && profilePicUrl.isNotEmpty;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Profile'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.password),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ChangePasswordScreen()),
-            ),
-            tooltip: 'Change password',
-          ),
-          IconButton(
-            icon: const Icon(Icons.history),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const MatchHistoryScreen()),
-            ),
-            tooltip: 'Match history',
-          ),
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: _handleLogout,
@@ -195,14 +180,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         CircleAvatar(
                           radius: 30,
                           backgroundColor: Colors.white,
-                          child: Text(
-                            (_user?['username'] ?? '?')[0].toUpperCase(),
-                            style: const TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.primary,
-                            ),
-                          ),
+                          backgroundImage: hasProfilePic
+                              ? NetworkImage(profilePicUrl)
+                              : null,
+                          child: !hasProfilePic
+                              ? Text(
+                                  (_user?['username'] ?? '?')[0].toUpperCase(),
+                                  style: const TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppColors.primary,
+                                  ),
+                                )
+                              : null,
                         ),
                         const SizedBox(height: 12),
                         Text(

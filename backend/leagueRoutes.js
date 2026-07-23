@@ -32,12 +32,40 @@ function generateSeedOrder(size) {
   return result;
 }
 
+// Checks whether a user's rating (for the league's sport/format) falls
+// within the league's optional min/max rating gate. Returns null if allowed,
+// or an error message string if not. Leagues with no min/max set (both null)
+// are open to everyone.
+async function checkRatingEligibility(league, userId) {
+  if (league.min_rating == null && league.max_rating == null) {
+    return null;
+  }
+
+  const ratingResult = await pool.query(
+    'SELECT rating FROM user_sports WHERE user_id = $1 AND sport = $2 AND format = $3',
+    [userId, league.sport, league.format]
+  );
+  if (ratingResult.rows.length === 0) {
+    return 'You need to add this sport to your profile before joining.';
+  }
+
+  const rating = parseFloat(ratingResult.rows[0].rating);
+  if (league.min_rating != null && rating < parseFloat(league.min_rating)) {
+    return `This league requires a rating of at least ${league.min_rating}. Your current rating is ${rating}.`;
+  }
+  if (league.max_rating != null && rating > parseFloat(league.max_rating)) {
+    return `This league requires a rating of at most ${league.max_rating}. Your current rating is ${rating}.`;
+  }
+  return null;
+}
+
 // ---------- CREATE LEAGUE ----------
 router.post('/create', async (req, res) => {
   const userId = req.userId;
   const {
     name, sport, area, seasonStart, seasonEnd, format, genderCategory,
     scheduleType, matchesPerPlayer, hostEntersScores, hostPlays, isPrivate, academyName,
+    minRating, maxRating,
   } = req.body;
 
   if (!name || !sport || !area || !seasonStart || !seasonEnd || !format || !genderCategory) {
@@ -60,6 +88,10 @@ router.post('/create', async (req, res) => {
     return res.status(400).json({ error: 'Knockout format is currently only supported for singles leagues.' });
   }
 
+  if (minRating != null && maxRating != null && parseFloat(minRating) > parseFloat(maxRating)) {
+    return res.status(400).json({ error: 'Minimum rating cannot be higher than maximum rating.' });
+  }
+
   try {
     let joinCode = null;
     if (isPrivate === true) {
@@ -73,15 +105,19 @@ router.post('/create', async (req, res) => {
 
     const result = await pool.query(
       `INSERT INTO leagues (name, sport, area, season_start, season_end, created_by, format, gender_category,
-                            schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                            schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
+                            min_rating, max_rating)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING id, name, sport, area, season_start, season_end, format, gender_category, created_by,
-                 schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name`,
+                 schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
+                 min_rating, max_rating`,
       [
         name, sport, area, seasonStart, seasonEnd, userId, format, genderCategory,
         finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null,
         hostEntersScores === true, isPrivate === true, joinCode,
         academyName && academyName.trim().length > 0 ? academyName.trim() : null,
+        minRating != null ? parseFloat(minRating) : null,
+        maxRating != null ? parseFloat(maxRating) : null,
       ]
     );
 
@@ -104,7 +140,7 @@ router.post('/create', async (req, res) => {
 // ---------- BROWSE LEAGUES (public only) ----------
 router.get('/', async (req, res) => {
   const userId = req.userId;
-  const { area, format } = req.query;
+  const { area, format, sport } = req.query;
 
   try {
     const userResult = await pool.query('SELECT gender FROM users WHERE id = $1', [userId]);
@@ -116,7 +152,11 @@ router.get('/', async (req, res) => {
     let query = `
       SELECT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
              l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.academy_name,
-             COUNT(lm.id) AS member_count
+             l.min_rating, l.max_rating,
+             COUNT(lm.id) AS member_count,
+             EXISTS (
+               SELECT 1 FROM league_members lm2 WHERE lm2.league_id = l.id AND lm2.user_id = $1
+             ) AS is_member
       FROM leagues l
       LEFT JOIN league_members lm ON lm.league_id = l.id
       WHERE EXISTS (
@@ -135,6 +175,10 @@ router.get('/', async (req, res) => {
     if (format) {
       params.push(format);
       query += ` AND l.format = $${params.length}`;
+    }
+    if (sport) {
+      params.push(sport);
+      query += ` AND l.sport = $${params.length}`;
     }
 
     query += ` GROUP BY l.id ORDER BY l.season_start ASC`;
@@ -155,6 +199,7 @@ router.get('/mine', async (req, res) => {
     const result = await pool.query(
       `SELECT DISTINCT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
               l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.join_code, l.academy_name,
+              l.min_rating, l.max_rating,
               (SELECT COUNT(*) FROM league_members lm2 WHERE lm2.league_id = l.id) AS member_count
        FROM leagues l
        LEFT JOIN league_members lm ON lm.league_id = l.id AND lm.user_id = $1
@@ -193,6 +238,11 @@ router.post('/:id/join', async (req, res) => {
     );
     if (hasSport.rows.length === 0) {
       return res.status(403).json({ error: 'You need to add this sport to your profile before joining.' });
+    }
+
+    const ratingError = await checkRatingEligibility(leagueData, userId);
+    if (ratingError) {
+      return res.status(403).json({ error: ratingError });
     }
 
     const existing = await pool.query(
@@ -246,6 +296,11 @@ router.post('/join-by-code', async (req, res) => {
     );
     if (hasSport.rows.length === 0) {
       return res.status(403).json({ error: 'You need to add this sport to your profile before joining.' });
+    }
+
+    const ratingError = await checkRatingEligibility(leagueData, userId);
+    if (ratingError) {
+      return res.status(403).json({ error: ratingError });
     }
 
     const existing = await pool.query(
@@ -312,6 +367,9 @@ router.get('/:id/search-players', async (req, res) => {
 });
 
 // ---------- ADD PLAYER DIRECTLY (host only) ----------
+// Deliberately bypasses the min/max rating gate: this is the host explicitly
+// choosing someone, not an open self-join, so the gate (which exists to let
+// hosts control who can join on their own) doesn't apply here.
 router.post('/:id/add-player', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.id;
@@ -426,9 +484,6 @@ router.delete('/:id/members/:userId', async (req, res) => {
       return res.status(404).json({ error: 'This player is not a member of this league.' });
     }
 
-    // Remove any not-yet-played fixtures involving this player — they can no
-    // longer be scheduled to play. Confirmed match history and rating changes
-    // are left untouched, since that's a permanent record.
     await pool.query(
       `DELETE FROM matches
        WHERE league_id = $1 AND status IN ('pending', 'rejected')
@@ -469,7 +524,7 @@ router.get('/:id', async (req, res) => {
 
   try {
     const league = await pool.query(
-      `SELECT l.*, u.username as host_username
+      `SELECT l.*, u.username as host_username, u.phone_number as host_phone
        FROM leagues l
        JOIN users u ON u.id = l.created_by
        WHERE l.id = $1`,

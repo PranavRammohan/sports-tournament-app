@@ -30,8 +30,6 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
     _loadLeagues();
   }
 
-  // Called by MainShell whenever this tab is tapped, so the list reflects
-  // any changes made elsewhere without needing a full reload.
   void refresh() {
     _loadLeagues();
   }
@@ -67,7 +65,7 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('My Leagues'),
+        title: const Text('My Tournaments'),
         actions: [
           IconButton(
             icon: const Icon(Icons.key_outlined),
@@ -82,7 +80,7 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.search),
-            tooltip: 'Browse leagues',
+            tooltip: 'Browse tournaments',
             onPressed: () async {
               final result = await Navigator.push(
                 context,
@@ -104,9 +102,9 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
                           height: MediaQuery.of(context).size.height * 0.6,
                           child: FriendlyEmptyState(
                             icon: Icons.emoji_events_outlined,
-                            title: "You haven't joined any leagues yet.",
+                            title: "You haven't joined any tournaments yet.",
                             subtitle: 'Find one to join, or start your own.',
-                            actionLabel: 'Browse leagues',
+                            actionLabel: 'Browse tournaments',
                             onAction: () async {
                               final result = await Navigator.push(
                                 context,

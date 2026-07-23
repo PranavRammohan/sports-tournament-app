@@ -437,7 +437,7 @@ router.get('/upcoming', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT sm.id, sm.tier_number,
-              l.id as league_id, l.sport, l.area, l.format,
+              l.id as league_id, l.name as league_name, l.sport, l.area, l.format,
               p1.username as player1_username, pp1.username as player1_partner_username,
               p2.username as player2_username, pp2.username as player2_partner_username,
               sm.player1_id, sm.player1_partner_id, sm.player2_id, sm.player2_partner_id

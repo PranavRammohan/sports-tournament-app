@@ -10,6 +10,13 @@ import '../widgets/sport_icon.dart';
 import 'create_league_screen.dart';
 import 'league_detail_screen.dart';
 
+const List<String> _browseSports = [
+  'badminton',
+  'tennis',
+  'table_tennis',
+  'pickleball',
+];
+
 class BrowseLeaguesScreen extends StatefulWidget {
   const BrowseLeaguesScreen({super.key});
 
@@ -23,6 +30,8 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
   bool _didJoinAny = false;
 
   String? _filterFormat;
+  String? _filterSport;
+  String? _filterArea;
 
   final TextEditingController _codeController = TextEditingController();
   bool _joiningByCode = false;
@@ -41,6 +50,8 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
 
       final queryParams = <String, String>{};
       if (_filterFormat != null) queryParams['format'] = _filterFormat!;
+      if (_filterSport != null) queryParams['sport'] = _filterSport!;
+      if (_filterArea != null) queryParams['area'] = _filterArea!;
 
       final uri = Uri.parse(
         '$baseApiUrl/leagues',
@@ -79,7 +90,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
         _didJoinAny = true;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Joined league!'),
+            content: Text('Joined tournament!'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -180,7 +191,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
         length: 2,
         child: Scaffold(
           appBar: AppBar(
-            title: const Text('Browse Leagues'),
+            title: const Text('Browse Tournaments'),
             leading: IconButton(
               icon: const Icon(Icons.arrow_back),
               onPressed: () => Navigator.pop(context, _didJoinAny),
@@ -234,19 +245,68 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  initialValue: _filterSport,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Sport',
+                    isDense: true,
+                  ),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('Any')),
+                    ..._browseSports.map(
+                      (s) => DropdownMenuItem(
+                        value: s,
+                        child: Text(_formatSport(s)),
+                      ),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    setState(() => _filterSport = v);
+                    _loadLeagues();
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  initialValue: _filterFormat,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Format',
+                    isDense: true,
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: null, child: Text('Any')),
+                    DropdownMenuItem(value: 'singles', child: Text('Singles')),
+                    DropdownMenuItem(value: 'doubles', child: Text('Doubles')),
+                  ],
+                  onChanged: (v) {
+                    setState(() => _filterFormat = v);
+                    _loadLeagues();
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
           child: DropdownButtonFormField<String>(
-            initialValue: _filterFormat,
-            decoration: const InputDecoration(
-              labelText: 'Format',
-              isDense: true,
-            ),
-            items: const [
-              DropdownMenuItem(value: null, child: Text('Any')),
-              DropdownMenuItem(value: 'singles', child: Text('Singles')),
-              DropdownMenuItem(value: 'doubles', child: Text('Doubles')),
+            initialValue: _filterArea,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Area', isDense: true),
+            items: [
+              const DropdownMenuItem(value: null, child: Text('Any')),
+              ...bangaloreAreas.map(
+                (a) => DropdownMenuItem(value: a, child: Text(a)),
+              ),
             ],
             onChanged: (v) {
-              setState(() => _filterFormat = v);
+              setState(() => _filterArea = v);
               _loadLeagues();
             },
           ),
@@ -263,7 +323,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                               height: MediaQuery.of(context).size.height * 0.4,
                               child: Center(
                                 child: Text(
-                                  'No leagues match these filters.',
+                                  'No tournaments match these filters.',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(color: subtleTextColor),
                                 ),
@@ -278,6 +338,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                               const SizedBox(height: 8),
                           itemBuilder: (context, index) {
                             final league = _leagues[index];
+                            final alreadyJoined = league['is_member'] == true;
                             return Container(
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(8),
@@ -356,6 +417,34 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                                         : "Women's",
                                                     subtleTextColor,
                                                   ),
+                                                  if (alreadyJoined)
+                                                    Container(
+                                                      padding:
+                                                          const EdgeInsets.symmetric(
+                                                            horizontal: 6,
+                                                            vertical: 2,
+                                                          ),
+                                                      decoration: BoxDecoration(
+                                                        color: AppColors.success
+                                                            .withValues(
+                                                              alpha: 0.12,
+                                                            ),
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              4,
+                                                            ),
+                                                      ),
+                                                      child: const Text(
+                                                        'Already Joined',
+                                                        style: TextStyle(
+                                                          fontSize: 10,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          color:
+                                                              AppColors.success,
+                                                        ),
+                                                      ),
+                                                    ),
                                                 ],
                                               ),
                                             ],
@@ -389,7 +478,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
             Icon(Icons.lock_outline, size: 44, color: Colors.grey.shade400),
             const SizedBox(height: 16),
             Text(
-              'Private leagues are invite-only.',
+              'Private tournaments are invite-only.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleMedium,
             ),
@@ -422,7 +511,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                         strokeWidth: 2.5,
                       ),
                     )
-                  : const Text('Join League'),
+                  : const Text('Join Tournament'),
             ),
           ],
         ),

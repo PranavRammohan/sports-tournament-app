@@ -111,4 +111,33 @@ router.get('/mine', async (req, res) => {
   }
 });
 
+// ---------- GET ANOTHER PLAYER'S PUBLIC PROFILE (#8) ----------
+// Deliberately excludes phone number — this is reachable by tapping any
+// player's name (e.g. on a league leaderboard), a much more casual action
+// than being paired against them in a scheduled match, where phone number
+// is already shared for coordination purposes.
+router.get('/user/:userId', async (req, res) => {
+  const targetUserId = req.params.userId;
+
+  try {
+    const userResult = await pool.query(
+      'SELECT id, username, location, gender, profile_pic_url, created_at FROM users WHERE id = $1',
+      [targetUserId]
+    );
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Player not found.' });
+    }
+
+    const sportsResult = await pool.query(
+      'SELECT sport, format, rating, matches_played, wins, losses FROM user_sports WHERE user_id = $1',
+      [targetUserId]
+    );
+
+    res.status(200).json({ user: userResult.rows[0], sports: sportsResult.rows });
+  } catch (err) {
+    console.error('Get player profile error:', err);
+    res.status(500).json({ error: "Something went wrong fetching this player's profile." });
+  }
+});
+
 module.exports = router;

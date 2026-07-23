@@ -115,7 +115,10 @@ class _AddManualMatchScreenState extends State<AddManualMatchScreen> {
   List<DropdownMenuItem<int>> _memberItems() {
     return widget.members
         .map<DropdownMenuItem<int>>(
-          (m) => DropdownMenuItem(value: m['id'], child: Text(m['username'])),
+          (m) => DropdownMenuItem(
+            value: m['id'],
+            child: Text('${m['username']} (${m['rating']})'),
+          ),
         )
         .toList();
   }

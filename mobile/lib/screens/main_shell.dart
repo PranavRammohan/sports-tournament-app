@@ -21,8 +21,6 @@ class _MainShellState extends State<MainShell> {
   int _index = 0;
   int _pendingCount = 0;
 
-  // Keys let us reach into each screen's State and call refresh(),
-  // even though IndexedStack keeps them alive in memory.
   final _homeKey = GlobalKey<State<HomeScreen>>();
   final _leaguesKey = GlobalKey<State<MyLeaguesScreen>>();
   final _pendingKey = GlobalKey<State<PendingMatchesScreen>>();
@@ -59,8 +57,6 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
-  // Calls refresh() on whichever screen's State currently exists.
-  // Uses `dynamic` so we don't need to make each private State class public.
   void _refreshScreen(int i) {
     switch (i) {
       case 0:
@@ -128,7 +124,7 @@ class _MainShellState extends State<MainShell> {
             const NavigationDestination(
               icon: Icon(Icons.list_alt_outlined),
               selectedIcon: Icon(Icons.list_alt),
-              label: 'Leagues',
+              label: 'Tournaments',
             ),
             NavigationDestination(
               icon: _pendingCount > 0
