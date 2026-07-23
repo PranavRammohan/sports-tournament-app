@@ -1,6 +1,7 @@
 // add_manual_match_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
@@ -56,6 +57,7 @@ class _AddManualMatchScreenState extends State<AddManualMatchScreen> {
       return;
     }
 
+    HapticFeedback.lightImpact();
     setState(() => _submitting = true);
 
     try {

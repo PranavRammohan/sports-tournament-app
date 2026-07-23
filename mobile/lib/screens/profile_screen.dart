@@ -1,6 +1,7 @@
 // profile_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
@@ -30,8 +31,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _loadProfile();
   }
 
-  // Called by MainShell whenever this tab is tapped, so the profile
-  // reflects any changes made elsewhere without needing a full reload.
   void refresh() {
     _loadProfile();
   }
@@ -77,6 +76,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _toggleDarkMode(bool value) async {
+    HapticFeedback.selectionClick();
     setState(() => _isDarkMode = value);
     themeModeNotifier.value = value ? ThemeMode.dark : ThemeMode.light;
     final prefs = await SharedPreferences.getInstance();
@@ -84,6 +84,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _handleLogout() async {
+    HapticFeedback.mediumImpact();
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
     if (!mounted) return;
@@ -151,6 +152,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     decoration: BoxDecoration(
                       color: AppColors.primary,
                       borderRadius: BorderRadius.circular(10),
+                      boxShadow: AppShadows.card(isDark),
                     ),
                     child: Column(
                       children: [
@@ -158,6 +160,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           alignment: Alignment.topRight,
                           child: InkWell(
                             onTap: () async {
+                              HapticFeedback.selectionClick();
                               final updated = await Navigator.push(
                                 context,
                                 MaterialPageRoute(
@@ -227,6 +230,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       color: cardColor,
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(color: borderColor),
+                      boxShadow: AppShadows.card(isDark),
                     ),
                     child: SwitchListTile(
                       value: _isDarkMode,
@@ -255,6 +259,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                       TextButton.icon(
                         onPressed: () async {
+                          HapticFeedback.selectionClick();
                           final added = await Navigator.push(
                             context,
                             MaterialPageRoute(

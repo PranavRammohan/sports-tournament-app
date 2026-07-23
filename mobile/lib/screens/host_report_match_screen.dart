@@ -1,6 +1,7 @@
 // host_report_match_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
@@ -9,8 +10,8 @@ import '../config.dart';
 class HostReportMatchScreen extends StatefulWidget {
   final int leagueId;
   final String sport;
-  final List<dynamic> pendingFixtures; // schedule entries not yet completed
-  final List<dynamic> members; // league leaderboard, used for ratings
+  final List<dynamic> pendingFixtures;
+  final List<dynamic> members;
 
   const HostReportMatchScreen({
     super.key,
@@ -36,13 +37,18 @@ class _HostReportMatchScreenState extends State<HostReportMatchScreen> {
 
   String get _unitLabel => widget.sport == 'tennis' ? 'Set' : 'Game';
 
-  void _addSet() => setState(() => _sets.add(_SetScore()));
-  void _removeSet(int index) {
-    if (_sets.length > 1) setState(() => _sets.removeAt(index));
+  void _addSet() {
+    HapticFeedback.selectionClick();
+    setState(() => _sets.add(_SetScore()));
   }
 
-  // #6: fixtures from the schedule endpoint don't carry rating, so look it up
-  // from the league leaderboard (widget.members) by player id.
+  void _removeSet(int index) {
+    if (_sets.length > 1) {
+      HapticFeedback.selectionClick();
+      setState(() => _sets.removeAt(index));
+    }
+  }
+
   String? _ratingFor(int? playerId) {
     if (playerId == null) return null;
     for (final m in widget.members) {
@@ -74,7 +80,6 @@ class _HostReportMatchScreenState extends State<HostReportMatchScreen> {
         _showAlert('Invalid score', 'A $_unitLabel cannot end in a tie.');
         return;
       }
-      // Stored from player1's perspective as "me"/"opponent" to match existing format
       setScores.add({'me': p1, 'opponent': p2});
       totalP1 += p1;
       totalP2 += p2;
@@ -90,6 +95,7 @@ class _HostReportMatchScreenState extends State<HostReportMatchScreen> {
       return;
     }
 
+    HapticFeedback.lightImpact();
     setState(() => _submitting = true);
 
     try {
@@ -219,7 +225,10 @@ class _HostReportMatchScreenState extends State<HostReportMatchScreen> {
                 margin: const EdgeInsets.only(bottom: 8),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(8),
-                  onTap: () => setState(() => _selectedFixture = fixture),
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    setState(() => _selectedFixture = fixture);
+                  },
                   child: Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
@@ -233,6 +242,7 @@ class _HostReportMatchScreenState extends State<HostReportMatchScreen> {
                         color: selected ? AppColors.primary : unselectedBorder,
                         width: selected ? 2 : 1,
                       ),
+                      boxShadow: AppShadows.card(isDark),
                     ),
                     child: Row(
                       children: [

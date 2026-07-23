@@ -1,6 +1,7 @@
 // home_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
@@ -165,7 +166,6 @@ class _HomeScreenState extends State<HomeScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
-                  // Welcome header with gradient
                   Container(
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
@@ -175,6 +175,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         end: Alignment.bottomRight,
                       ),
                       borderRadius: BorderRadius.circular(14),
+                      boxShadow: AppShadows.card(isDark),
                     ),
                     child: Row(
                       children: [
@@ -221,7 +222,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
                   const SizedBox(height: 16),
 
-                  // Stat cards
                   Row(
                     children: [
                       Expanded(
@@ -232,12 +232,16 @@ class _HomeScreenState extends State<HomeScreen> {
                           cardColor,
                           borderColor,
                           subtleTextColor,
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const MyLeaguesScreen(),
-                            ),
-                          ),
+                          isDark,
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const MyLeaguesScreen(),
+                              ),
+                            );
+                          },
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -249,12 +253,16 @@ class _HomeScreenState extends State<HomeScreen> {
                           cardColor,
                           borderColor,
                           subtleTextColor,
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const MatchHistoryScreen(),
-                            ),
-                          ),
+                          isDark,
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const MatchHistoryScreen(),
+                              ),
+                            );
+                          },
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -266,29 +274,35 @@ class _HomeScreenState extends State<HomeScreen> {
                           cardColor,
                           borderColor,
                           subtleTextColor,
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const MatchHistoryScreen(),
-                            ),
-                          ),
+                          isDark,
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const MatchHistoryScreen(),
+                              ),
+                            );
+                          },
                           smallValue: true,
                         ),
                       ),
                     ],
                   ),
 
-                  // Pending confirmations banner
                   if (_pendingMatches.isNotEmpty) ...[
                     const SizedBox(height: 20),
                     InkWell(
                       borderRadius: BorderRadius.circular(12),
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const PendingMatchesScreen(),
-                        ),
-                      ),
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const PendingMatchesScreen(),
+                          ),
+                        );
+                      },
                       child: Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
@@ -333,7 +347,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ],
 
-                  // Recent match highlight
                   if (_recentMatch != null) ...[
                     const SizedBox(height: 20),
                     Text(
@@ -341,10 +354,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     const SizedBox(height: 10),
-                    _buildRecentMatchCard(cardColor, subtleTextColor),
+                    _buildRecentMatchCard(cardColor, subtleTextColor, isDark),
                   ],
 
-                  // Your Sports summary
                   if (_sports.isNotEmpty) ...[
                     const SizedBox(height: 20),
                     Text(
@@ -353,11 +365,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     const SizedBox(height: 10),
                     ..._sports.map(
-                      (s) => _buildSportSummaryRow(s, cardColor, borderColor),
+                      (s) => _buildSportSummaryRow(
+                        s,
+                        cardColor,
+                        borderColor,
+                        isDark,
+                      ),
                     ),
                   ],
 
-                  // Upcoming matches
                   if (_upcomingMatches.isNotEmpty) ...[
                     const SizedBox(height: 20),
                     Text(
@@ -371,6 +387,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         cardColor,
                         borderColor,
                         subtleTextColor,
+                        isDark,
                       ),
                     ),
                   ],
@@ -388,7 +405,8 @@ class _HomeScreenState extends State<HomeScreen> {
     String value,
     Color cardColor,
     Color borderColor,
-    Color subtleTextColor, {
+    Color subtleTextColor,
+    bool isDark, {
     required VoidCallback onTap,
     bool smallValue = false,
   }) {
@@ -401,6 +419,7 @@ class _HomeScreenState extends State<HomeScreen> {
           color: cardColor,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: borderColor),
+          boxShadow: AppShadows.card(isDark),
         ),
         child: Column(
           children: [
@@ -425,7 +444,11 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildRecentMatchCard(Color cardColor, Color subtleTextColor) {
+  Widget _buildRecentMatchCard(
+    Color cardColor,
+    Color subtleTextColor,
+    bool isDark,
+  ) {
     final m = _recentMatch!;
     final isTeam1 =
         m['player1_id'] == _currentUserId ||
@@ -453,10 +476,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return InkWell(
       borderRadius: BorderRadius.circular(10),
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const MatchHistoryScreen()),
-      ),
+      onTap: () {
+        HapticFeedback.selectionClick();
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const MatchHistoryScreen()),
+        );
+      },
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -467,6 +493,7 @@ class _HomeScreenState extends State<HomeScreen> {
               alpha: 0.3,
             ),
           ),
+          boxShadow: AppShadows.card(isDark),
         ),
         child: Row(
           children: [
@@ -518,7 +545,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildSportSummaryRow(dynamic s, Color cardColor, Color borderColor) {
+  Widget _buildSportSummaryRow(
+    dynamic s,
+    Color cardColor,
+    Color borderColor,
+    bool isDark,
+  ) {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -526,6 +558,7 @@ class _HomeScreenState extends State<HomeScreen> {
         color: cardColor,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: borderColor),
+        boxShadow: AppShadows.card(isDark),
       ),
       child: Row(
         children: [
@@ -561,6 +594,7 @@ class _HomeScreenState extends State<HomeScreen> {
     Color cardColor,
     Color borderColor,
     Color subtleTextColor,
+    bool isDark,
   ) {
     final isTeam1 =
         m['player1_id'] == _currentUserId ||
@@ -578,18 +612,22 @@ class _HomeScreenState extends State<HomeScreen> {
       margin: const EdgeInsets.only(bottom: 8),
       child: InkWell(
         borderRadius: BorderRadius.circular(10),
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => LeagueDetailScreen(leagueId: m['league_id']),
-          ),
-        ),
+        onTap: () {
+          HapticFeedback.selectionClick();
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => LeagueDetailScreen(leagueId: m['league_id']),
+            ),
+          );
+        },
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: cardColor,
             borderRadius: BorderRadius.circular(10),
             border: Border.all(color: borderColor),
+            boxShadow: AppShadows.card(isDark),
           ),
           child: Row(
             children: [

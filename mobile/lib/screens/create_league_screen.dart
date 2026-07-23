@@ -1,6 +1,7 @@
 // create_league_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
@@ -165,6 +166,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
       }
     }
 
+    HapticFeedback.lightImpact();
     setState(() => _loading = true);
 
     try {
@@ -466,7 +468,10 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               value: _hostEntersScores,
-              onChanged: (v) => setState(() => _hostEntersScores = v),
+              onChanged: (v) {
+                HapticFeedback.selectionClick();
+                setState(() => _hostEntersScores = v);
+              },
               title: const Text('I will enter all match scores myself'),
               subtitle: const Text(
                 'For academies or organizers running the event — scores you enter are confirmed instantly, no player confirmation needed. Otherwise, players need to report and confirm their match scores amongst themselves.',
@@ -476,7 +481,10 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               value: !_hostPlays,
-              onChanged: (v) => setState(() => _hostPlays = !v),
+              onChanged: (v) {
+                HapticFeedback.selectionClick();
+                setState(() => _hostPlays = !v);
+              },
               title: const Text("I'm just organizing, not playing"),
               subtitle: const Text(
                 "You won't appear on the leaderboard or schedule as a player.",
@@ -486,7 +494,10 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               value: _isPrivate,
-              onChanged: (v) => setState(() => _isPrivate = v),
+              onChanged: (v) {
+                HapticFeedback.selectionClick();
+                setState(() => _isPrivate = v);
+              },
               title: const Text('Make this tournament private'),
               subtitle: const Text(
                 "Won't show up in Browse Tournaments. Only people with the join code can join.",

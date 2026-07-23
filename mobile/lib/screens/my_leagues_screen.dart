@@ -1,6 +1,7 @@
 // my_leagues_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
@@ -63,6 +64,8 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('My Tournaments'),
@@ -71,6 +74,7 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
             icon: const Icon(Icons.key_outlined),
             tooltip: 'Join with code',
             onPressed: () async {
+              HapticFeedback.selectionClick();
               final result = await Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const JoinByCodeScreen()),
@@ -82,6 +86,7 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
             icon: const Icon(Icons.search),
             tooltip: 'Browse tournaments',
             onPressed: () async {
+              HapticFeedback.selectionClick();
               final result = await Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const BrowseLeaguesScreen()),
@@ -106,6 +111,7 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
                             subtitle: 'Find one to join, or start your own.',
                             actionLabel: 'Browse tournaments',
                             onAction: () async {
+                              HapticFeedback.selectionClick();
                               final result = await Navigator.push(
                                 context,
                                 MaterialPageRoute(
@@ -135,6 +141,7 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(color: Colors.grey.shade200),
+                              boxShadow: AppShadows.card(isDark),
                             ),
                             child: Material(
                               color: Theme.of(context).cardColor,
@@ -177,6 +184,7 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
                                   size: 20,
                                 ),
                                 onTap: () async {
+                                  HapticFeedback.selectionClick();
                                   final result = await Navigator.push(
                                     context,
                                     MaterialPageRoute(

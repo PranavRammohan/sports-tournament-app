@@ -4,6 +4,7 @@ import 'screens/login_screen.dart';
 import 'screens/signup_screen.dart';
 import 'screens/select_sports_screen.dart';
 import 'screens/main_shell.dart';
+import 'screens/onboarding_screen.dart';
 
 class AppColors {
   static const Color primary = Color(0xFF1E293B);
@@ -22,6 +23,27 @@ class AppColors {
   static const Color darkTextGrey = Color(0xFF9CA3AF);
 }
 
+// Shared card shadow, so every custom Container-as-card across the app uses
+// the same depth instead of each screen inventing its own. Use like:
+//   decoration: BoxDecoration(
+//     color: Theme.of(context).cardColor,
+//     borderRadius: BorderRadius.circular(8),
+//     boxShadow: AppShadows.card(isDark),
+//   ),
+class AppShadows {
+  static List<BoxShadow> card(bool isDark) {
+    return [
+      BoxShadow(
+        color: isDark
+            ? Colors.black.withValues(alpha: 0.35)
+            : Colors.black.withValues(alpha: 0.06),
+        blurRadius: isDark ? 10 : 8,
+        offset: const Offset(0, 2),
+      ),
+    ];
+  }
+}
+
 // Global theme mode notifier — read at startup from SharedPreferences,
 // updated instantly from Profile's dark mode toggle.
 final ValueNotifier<ThemeMode> themeModeNotifier = ValueNotifier(
@@ -34,14 +56,22 @@ Future<void> _loadSavedThemeMode() async {
   themeModeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
 }
 
+Future<bool> _hasSeenOnboarding() async {
+  final prefs = await SharedPreferences.getInstance();
+  return prefs.getBool('hasSeenOnboarding') ?? false;
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await _loadSavedThemeMode();
-  runApp(const RallyXApp());
+  final seenOnboarding = await _hasSeenOnboarding();
+  runApp(RallyXApp(initialRoute: seenOnboarding ? '/login' : '/onboarding'));
 }
 
 class RallyXApp extends StatelessWidget {
-  const RallyXApp({super.key});
+  final String initialRoute;
+
+  const RallyXApp({super.key, required this.initialRoute});
 
   @override
   Widget build(BuildContext context) {
@@ -49,11 +79,12 @@ class RallyXApp extends StatelessWidget {
       valueListenable: themeModeNotifier,
       builder: (context, mode, _) {
         return MaterialApp(
-          initialRoute: '/login',
+          initialRoute: initialRoute,
           theme: _buildLightTheme(),
           darkTheme: _buildDarkTheme(),
           themeMode: mode,
           routes: {
+            '/onboarding': (context) => const OnboardingScreen(),
             '/login': (context) => const LoginScreen(),
             '/signup': (context) => const SignupScreen(),
             '/select-sports': (context) => const SelectSportsScreen(),

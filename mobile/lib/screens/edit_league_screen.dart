@@ -1,6 +1,7 @@
 // edit_league_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
@@ -137,6 +138,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
     );
     if (confirmed != true) return;
 
+    HapticFeedback.mediumImpact();
     setState(() => _changingFormat = true);
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -191,6 +193,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
       return;
     }
 
+    HapticFeedback.lightImpact();
     setState(() => _saving = true);
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -257,6 +260,8 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Edit Tournament')),
       body: SingleChildScrollView(
@@ -328,6 +333,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                 color: Theme.of(context).cardColor,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Colors.grey.shade400),
+                boxShadow: AppShadows.card(isDark),
               ),
               child: Row(
                 children: [
@@ -358,10 +364,14 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                 color: Theme.of(context).cardColor,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Colors.grey.shade400),
+                boxShadow: AppShadows.card(isDark),
               ),
               child: SwitchListTile(
                 value: _isPrivate,
-                onChanged: (v) => setState(() => _isPrivate = v),
+                onChanged: (v) {
+                  HapticFeedback.selectionClick();
+                  setState(() => _isPrivate = v);
+                },
                 title: const Text(
                   'Private Tournament',
                   style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
@@ -406,12 +416,16 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                 color: Theme.of(context).cardColor,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Colors.grey.shade400),
+                boxShadow: AppShadows.card(isDark),
               ),
               child: SwitchListTile(
                 value: _hostEntersScores,
                 onChanged: widget.hasConfirmedMatches
                     ? null
-                    : (v) => setState(() => _hostEntersScores = v),
+                    : (v) {
+                        HapticFeedback.selectionClick();
+                        setState(() => _hostEntersScores = v);
+                      },
                 title: const Text(
                   'Host Enters Scores',
                   style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),

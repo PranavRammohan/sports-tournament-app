@@ -1,6 +1,7 @@
 // browse_leagues_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
@@ -74,6 +75,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
   }
 
   Future<void> _joinLeague(int leagueId) async {
+    HapticFeedback.lightImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -123,6 +125,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
       return;
     }
 
+    HapticFeedback.lightImpact();
     setState(() => _joiningByCode = true);
 
     try {
@@ -213,12 +216,14 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                 borderColor,
                 subtleTextColor,
                 primaryTextColor,
+                isDark,
               ),
               _buildPrivateTab(),
             ],
           ),
           floatingActionButton: FloatingActionButton.extended(
             onPressed: () async {
+              HapticFeedback.selectionClick();
               final created = await Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -240,6 +245,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
     Color borderColor,
     Color subtleTextColor,
     Color primaryTextColor,
+    bool isDark,
   ) {
     return Column(
       children: [
@@ -343,6 +349,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(8),
                                 border: Border.all(color: borderColor),
+                                boxShadow: AppShadows.card(isDark),
                               ),
                               child: Material(
                                 color: cardColor,
@@ -350,6 +357,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                 child: InkWell(
                                   borderRadius: BorderRadius.circular(8),
                                   onTap: () async {
+                                    HapticFeedback.selectionClick();
                                     final result = await Navigator.push(
                                       context,
                                       MaterialPageRoute(

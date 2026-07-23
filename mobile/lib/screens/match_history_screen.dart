@@ -1,6 +1,7 @@
 // match_history_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
@@ -95,6 +96,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final matches = _filteredMatches;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Match History')),
@@ -206,6 +208,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                                     border: Border.all(
                                       color: Colors.grey.shade200,
                                     ),
+                                    boxShadow: AppShadows.card(isDark),
                                   ),
                                   child: Row(
                                     children: [
@@ -288,7 +291,10 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
     return ChoiceChip(
       label: Text(label, style: const TextStyle(fontSize: 12)),
       selected: selected,
-      onSelected: (_) => setState(() => _filter = value),
+      onSelected: (_) {
+        HapticFeedback.selectionClick();
+        setState(() => _filter = value);
+      },
       selectedColor: AppColors.primary.withValues(alpha: 0.15),
       labelStyle: TextStyle(
         color: selected ? AppColors.primary : Colors.grey.shade700,

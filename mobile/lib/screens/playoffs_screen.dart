@@ -1,6 +1,7 @@
 // playoffs_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
@@ -68,6 +69,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   }
 
   Future<void> _generateBracket(int qualifierCount) async {
+    HapticFeedback.lightImpact();
     setState(() => _generating = true);
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -117,6 +119,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
     );
     if (result == null) return;
 
+    HapticFeedback.lightImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -170,6 +173,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
     );
     if (result == null) return;
 
+    HapticFeedback.lightImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -210,6 +214,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   }
 
   Future<void> _confirmMatch(int matchId) async {
+    HapticFeedback.lightImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -245,6 +250,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   }
 
   Future<void> _rejectMatch(int matchId) async {
+    HapticFeedback.mediumImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -401,6 +407,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
                             ? AppColors.success.withValues(alpha: 0.4)
                             : borderColor,
                       ),
+                      boxShadow: AppShadows.card(isDark),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,

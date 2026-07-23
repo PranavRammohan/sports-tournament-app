@@ -1,6 +1,7 @@
 // report_match_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
@@ -91,9 +92,6 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
     }
   }
 
-  // #6: schedule fixtures don't carry rating info themselves, but
-  // widget.members (the league leaderboard) does — look ratings up from there
-  // by player id so we can show them next to names.
   String? _ratingFor(int? playerId) {
     if (playerId == null) return null;
     for (final m in widget.members) {
@@ -103,6 +101,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
   }
 
   void _selectFixture(Map<String, dynamic> fixture) {
+    HapticFeedback.selectionClick();
     final iAmTeam1 =
         fixture['player1_id'] == _currentUserId ||
         fixture['player1_partner_id'] == _currentUserId;
@@ -151,11 +150,13 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
   }
 
   void _addSet() {
+    HapticFeedback.selectionClick();
     setState(() => _sets.add(_SetScore()));
   }
 
   void _removeSet(int index) {
     if (_sets.length > 1) {
+      HapticFeedback.selectionClick();
       setState(() => _sets.removeAt(index));
     }
   }
@@ -208,6 +209,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
 
     final iWon = setsWonByMe > setsWonByOpponent;
 
+    HapticFeedback.lightImpact();
     setState(() => _submitting = true);
 
     try {
@@ -268,7 +270,6 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
     );
   }
 
-  // #6: same rating-appended label pattern as add_manual_match_screen.
   List<DropdownMenuItem<int>> _memberItems() {
     return widget.members
         .map<DropdownMenuItem<int>>(
@@ -355,6 +356,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                               : unselectedBorder,
                           width: selected ? 2 : 1,
                         ),
+                        boxShadow: AppShadows.card(isDark),
                       ),
                       child: Row(
                         children: [

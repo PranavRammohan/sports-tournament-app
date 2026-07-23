@@ -1,6 +1,7 @@
 // pending_matches_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
@@ -26,8 +27,6 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     _loadMatches();
   }
 
-  // Called by MainShell whenever this tab is tapped, so the screen
-  // reflects any changes made elsewhere without needing a full reload.
   void refresh() {
     _loadMatches();
   }
@@ -55,6 +54,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
   }
 
   Future<void> _confirmMatch(int matchId) async {
+    HapticFeedback.lightImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -117,6 +117,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     );
     if (confirmed != true) return;
 
+    HapticFeedback.mediumImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -233,6 +234,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                               border: Border.all(
                                 color: AppColors.warning.withValues(alpha: 0.4),
                               ),
+                              boxShadow: AppShadows.card(isDark),
                             ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,

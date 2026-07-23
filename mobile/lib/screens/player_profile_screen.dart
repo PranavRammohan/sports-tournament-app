@@ -99,7 +99,6 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
   Widget _buildContent(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = Theme.of(context).cardColor;
-    final borderColor = isDark ? Colors.grey.shade800 : Colors.grey.shade200;
     final subtleTextColor = isDark
         ? Colors.grey.shade400
         : Colors.grey.shade600;
@@ -123,6 +122,7 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
             decoration: BoxDecoration(
               color: AppColors.primary,
               borderRadius: BorderRadius.circular(10),
+              boxShadow: AppShadows.card(isDark),
             ),
             child: Column(
               children: [
@@ -202,9 +202,13 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
               final singles = formats['singles'];
               final doubles = formats['doubles'];
 
-              return Card(
+              return Container(
                 margin: const EdgeInsets.only(bottom: 10),
-                color: cardColor,
+                decoration: BoxDecoration(
+                  color: cardColor,
+                  borderRadius: BorderRadius.circular(10),
+                  boxShadow: AppShadows.card(isDark),
+                ),
                 child: Padding(
                   padding: const EdgeInsets.all(14),
                   child: Column(

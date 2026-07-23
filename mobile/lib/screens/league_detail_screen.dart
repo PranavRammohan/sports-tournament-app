@@ -1,6 +1,7 @@
 // league_detail_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
@@ -119,6 +120,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   }
 
   Future<void> _joinLeague() async {
+    HapticFeedback.lightImpact();
     setState(() => _joining = true);
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -158,6 +160,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   }
 
   Future<void> _generateSchedule() async {
+    HapticFeedback.lightImpact();
     setState(() => _generating = true);
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -229,6 +232,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
     if (confirmed != true) return;
 
+    HapticFeedback.mediumImpact();
     setState(() => _regenerating = true);
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -300,6 +304,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
     if (confirmed != true) return;
 
+    HapticFeedback.mediumImpact();
     setState(() => _deleting = true);
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -355,6 +360,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
     if (confirmed != true) return;
 
+    HapticFeedback.mediumImpact();
     setState(() => _leaving = true);
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -393,6 +399,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
     if (result == null) return;
 
+    HapticFeedback.lightImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -442,6 +449,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
     if (result == null) return;
 
+    HapticFeedback.lightImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -480,6 +488,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   }
 
   Future<void> _confirmKnockoutMatch(int matchId) async {
+    HapticFeedback.lightImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -514,6 +523,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   }
 
   Future<void> _rejectKnockoutMatch(int matchId) async {
+    HapticFeedback.mediumImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -573,6 +583,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
     if (confirmed != true) return;
 
+    HapticFeedback.mediumImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -623,6 +634,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
     if (result == null) return;
 
+    HapticFeedback.lightImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -699,6 +711,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
     if (result == null) return;
 
+    HapticFeedback.lightImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -766,6 +779,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
     if (confirmed != true) return;
 
+    HapticFeedback.mediumImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -827,6 +841,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
     if (confirmed != true) return;
 
+    HapticFeedback.mediumImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -919,6 +934,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     if (_isCustom && isHost) {
       return FloatingActionButton.extended(
         onPressed: () async {
+          HapticFeedback.lightImpact();
           final added = await Navigator.push(
             context,
             MaterialPageRoute(
@@ -945,6 +961,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
       return FloatingActionButton.extended(
         onPressed: () async {
+          HapticFeedback.lightImpact();
           final reported = await Navigator.push(
             context,
             MaterialPageRoute(
@@ -967,6 +984,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
     return FloatingActionButton.extended(
       onPressed: () async {
+        HapticFeedback.lightImpact();
         final reported = await Navigator.push(
           context,
           MaterialPageRoute(
@@ -1086,6 +1104,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   Widget _buildLeaderboardTab(bool isHost) {
     final academyName = _league!['academy_name'];
     final hostUsername = _league!['host_username'];
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final primaryTextColor =
         Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
 
@@ -1101,6 +1120,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.grey.shade200),
+              boxShadow: AppShadows.card(isDark),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1278,6 +1298,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               padding: const EdgeInsets.only(bottom: 12),
               child: OutlinedButton.icon(
                 onPressed: () {
+                  HapticFeedback.selectionClick();
                   Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -1334,11 +1355,13 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               return Container(
                 margin: const EdgeInsets.only(bottom: 6),
                 decoration: BoxDecoration(
+                  color: Theme.of(context).cardColor,
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.grey.shade200),
+                  boxShadow: AppShadows.card(isDark),
                 ),
                 child: Material(
-                  color: Theme.of(context).cardColor,
+                  color: Colors.transparent,
                   borderRadius: BorderRadius.circular(8),
                   child: ListTile(
                     contentPadding: const EdgeInsets.symmetric(
@@ -1346,6 +1369,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                       vertical: 0,
                     ),
                     onTap: () {
+                      HapticFeedback.selectionClick();
                       Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -1432,6 +1456,8 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   }
 
   Widget _buildKnockoutTab(bool isHost) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     if (!_isMember && !isHost) {
       return Center(
         child: Padding(
@@ -1507,6 +1533,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                             ? AppColors.success.withValues(alpha: 0.4)
                             : Colors.grey.shade200,
                       ),
+                      boxShadow: AppShadows.card(isDark),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1722,6 +1749,8 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   }
 
   Widget _buildMyMatchesTab(bool isHost) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     if (!_isMember) {
       return Center(
         child: Padding(
@@ -1768,6 +1797,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.grey.shade200),
+              boxShadow: AppShadows.card(isDark),
             ),
             child: Row(
               children: [
@@ -1905,6 +1935,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               ? AppColors.success.withValues(alpha: 0.4)
               : Colors.grey.shade200,
         ),
+        boxShadow: AppShadows.card(isDark),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

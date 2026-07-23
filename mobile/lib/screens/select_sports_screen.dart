@@ -1,15 +1,13 @@
 // select_sports_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../config.dart';
 import '../widgets/sport_icon.dart';
 
-// Skill levels shown per sport, in display order. The key is what gets sent
-// to the backend (must match STARTING_RATINGS in sportsRoutes.js exactly),
-// the value is the label shown to the user alongside its starting rating.
 const Map<String, Map<String, num>> sportLevels = {
   'Badminton': {
     'beginner': 6000,
@@ -70,6 +68,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
   bool _loading = false;
 
   void _toggleSport(String sport) {
+    HapticFeedback.selectionClick();
     setState(() {
       if (_selectedSports.contains(sport)) {
         _selectedSports.remove(sport);
@@ -92,6 +91,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
       return;
     }
 
+    HapticFeedback.lightImpact();
     setState(() => _loading = true);
 
     try {
@@ -214,6 +214,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
                               : unselectedBorder,
                           width: isSelected ? 1.5 : 1,
                         ),
+                        boxShadow: AppShadows.card(isDark),
                       ),
                       padding: const EdgeInsets.all(12),
                       child: Column(

@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
@@ -63,6 +64,7 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
   }
 
   Future<void> _addPlayer(int playerId) async {
+    HapticFeedback.lightImpact();
     setState(() => _addingIds.add(playerId));
 
     try {
@@ -188,6 +190,7 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
                             color: cardColor,
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(color: borderColor),
+                            boxShadow: AppShadows.card(isDark),
                           ),
                           child: ListTile(
                             contentPadding: EdgeInsets.zero,

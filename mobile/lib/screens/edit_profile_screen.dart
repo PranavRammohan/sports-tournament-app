@@ -1,6 +1,7 @@
 // edit_profile_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
@@ -100,6 +101,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   String? get _existingPhotoUrl => widget.currentUser['profilePicUrl'];
 
   Future<void> _pickProfileImage() async {
+    HapticFeedback.selectionClick();
     final picker = ImagePicker();
     final picked = await picker.pickImage(
       source: ImageSource.gallery,
@@ -118,6 +120,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 
   void _removePhoto() {
+    HapticFeedback.lightImpact();
     setState(() {
       _newProfileImageBytes = null;
       _newProfileImageBase64 = null;
@@ -141,6 +144,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       return;
     }
 
+    HapticFeedback.lightImpact();
     setState(() => _loading = true);
 
     try {
@@ -318,7 +322,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   child: _SelectChip(
                     label: 'Male',
                     selected: _selectedGender == 'M',
-                    onTap: () => setState(() => _selectedGender = 'M'),
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      setState(() => _selectedGender = 'M');
+                    },
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -326,7 +333,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   child: _SelectChip(
                     label: 'Female',
                     selected: _selectedGender == 'F',
-                    onTap: () => setState(() => _selectedGender = 'F'),
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      setState(() => _selectedGender = 'F');
+                    },
                   ),
                 ),
               ],
@@ -355,6 +365,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               title: const Text('Change Password'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
+                HapticFeedback.selectionClick();
                 Navigator.push(
                   context,
                   MaterialPageRoute(
