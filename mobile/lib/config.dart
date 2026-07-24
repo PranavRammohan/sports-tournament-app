@@ -3,4 +3,4 @@
 // Change this ONE line whenever your local IP changes, or when you deploy
 // to the cloud (just swap this for your production URL).
 
-const String baseApiUrl = 'http://192.168.0.105:3000/api';
+const String baseApiUrl = 'https://sports-tournament-app-87r1.onrender.com/api';
