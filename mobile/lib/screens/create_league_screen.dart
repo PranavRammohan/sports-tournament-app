@@ -97,6 +97,12 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   final TextEditingController _minRatingController = TextEditingController();
   final TextEditingController _maxRatingController = TextEditingController();
 
+  // Optional registration window — when null, joining has no date
+  // restriction at all (matches current behavior).
+  bool _restrictRegistration = false;
+  DateTime? _registrationStart;
+  DateTime? _registrationEnd;
+
   Future<void> _pickDate({required bool isStart}) async {
     final picked = await showDatePicker(
       context: context,
@@ -113,6 +119,62 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
         }
       });
     }
+  }
+
+  Future<void> _pickRegistrationDateTime({required bool isStart}) async {
+    final now = DateTime.now();
+    final initial = isStart
+        ? (_registrationStart ?? now)
+        : (_registrationEnd ?? now);
+    final date = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 2),
+    );
+    if (date == null) return;
+    if (!mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initial),
+    );
+    if (time == null) return;
+    setState(() {
+      final combined = DateTime(
+        date.year,
+        date.month,
+        date.day,
+        time.hour,
+        time.minute,
+      );
+      if (isStart) {
+        _registrationStart = combined;
+      } else {
+        _registrationEnd = combined;
+      }
+    });
+  }
+
+  String _formatDateTimeDisplay(DateTime? dt) {
+    if (dt == null) return 'Not set';
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final hour12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+    return '${months[dt.month - 1]} ${dt.day}, ${dt.year} · $hour12:$minute $ampm';
   }
 
   Future<void> _handleCreate() async {
@@ -166,6 +228,25 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
       }
     }
 
+    if (_restrictRegistration) {
+      if (_registrationStart == null && _registrationEnd == null) {
+        _showAlert(
+          'Missing info',
+          'Enter at least a registration start or end, or turn off the registration window.',
+        );
+        return;
+      }
+      if (_registrationStart != null &&
+          _registrationEnd != null &&
+          _registrationStart!.isAfter(_registrationEnd!)) {
+        _showAlert(
+          'Invalid window',
+          'Registration start must be before registration end.',
+        );
+        return;
+      }
+    }
+
     HapticFeedback.lightImpact();
     setState(() => _loading = true);
 
@@ -199,6 +280,12 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               : _academyNameController.text.trim(),
           'minRating': minRating,
           'maxRating': maxRating,
+          'registrationStart': _restrictRegistration
+              ? _registrationStart?.toIso8601String()
+              : null,
+          'registrationEnd': _restrictRegistration
+              ? _registrationEnd?.toIso8601String()
+              : null,
         }),
       );
 
@@ -569,6 +656,59 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               const SizedBox(height: 4),
               const Text(
                 'Leave one blank for an open-ended range (e.g. only a minimum, no upper limit).',
+                style: TextStyle(fontSize: 11),
+              ),
+            ],
+
+            const SizedBox(height: 20),
+            const Divider(),
+            const SizedBox(height: 12),
+            Text(
+              'Registration Window',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Optional — restrict when players can join, e.g. only in the days leading up to the season. Leave off to allow joining any time.',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 10),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _restrictRegistration,
+              onChanged: (v) {
+                HapticFeedback.selectionClick();
+                setState(() => _restrictRegistration = v);
+              },
+              title: const Text('Set a registration window'),
+            ),
+            if (_restrictRegistration) ...[
+              const SizedBox(height: 6),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text(
+                  'Registration opens',
+                  style: TextStyle(fontSize: 13),
+                ),
+                subtitle: Text(_formatDateTimeDisplay(_registrationStart)),
+                trailing: const Icon(Icons.event_outlined),
+                onTap: () => _pickRegistrationDateTime(isStart: true),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text(
+                  'Registration closes',
+                  style: TextStyle(fontSize: 13),
+                ),
+                subtitle: Text(_formatDateTimeDisplay(_registrationEnd)),
+                trailing: const Icon(Icons.event_outlined),
+                onTap: () => _pickRegistrationDateTime(isStart: false),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Leave one blank for an open-ended window (e.g. only a closing date, open to join right away).',
                 style: TextStyle(fontSize: 11),
               ),
             ],

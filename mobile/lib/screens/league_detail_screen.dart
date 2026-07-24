@@ -55,6 +55,52 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     return _schedule.any((f) => f['match_status'] == 'confirmed');
   }
 
+  // Returns a user-facing message if joining is currently blocked by the
+  // league's optional registration window, or null if joining is allowed
+  // (which is always the case when the host hasn't set a window at all).
+  String? get _registrationMessage {
+    if (_league == null) return null;
+    final startRaw = _league!['registration_start'];
+    final endRaw = _league!['registration_end'];
+    if (startRaw == null && endRaw == null) return null;
+
+    final now = DateTime.now();
+    if (startRaw != null) {
+      final start = DateTime.tryParse(startRaw.toString())?.toLocal();
+      if (start != null && now.isBefore(start)) {
+        return 'Registration opens ${_formatRegistrationDate(start)}.';
+      }
+    }
+    if (endRaw != null) {
+      final end = DateTime.tryParse(endRaw.toString())?.toLocal();
+      if (end != null && now.isAfter(end)) {
+        return 'Registration closed ${_formatRegistrationDate(end)}.';
+      }
+    }
+    return null;
+  }
+
+  String _formatRegistrationDate(DateTime dt) {
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final hour12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+    return 'on ${months[dt.month - 1]} ${dt.day} at $hour12:$minute $ampm';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1253,11 +1299,49 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               ],
             ),
           ),
-          if (!_isMember)
+          if (!_isMember) ...[
+            if (_registrationMessage != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.warning.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: AppColors.warning.withValues(alpha: 0.4),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.info_outline,
+                        size: 16,
+                        color: AppColors.warning,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          _registrationMessage!,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.warning,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: ElevatedButton.icon(
-                onPressed: _joining ? null : _joinLeague,
+                onPressed: (_joining || _registrationMessage != null)
+                    ? null
+                    : _joinLeague,
                 icon: _joining
                     ? const SizedBox(
                         height: 16,
@@ -1270,8 +1354,8 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                     : const Icon(Icons.add),
                 label: const Text('Join Tournament'),
               ),
-            )
-          else if (!isHost)
+            ),
+          ] else if (!isHost)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: OutlinedButton.icon(

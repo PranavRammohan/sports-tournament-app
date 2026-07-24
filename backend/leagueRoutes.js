@@ -59,13 +59,34 @@ async function checkRatingEligibility(league, userId) {
   return null;
 }
 
+// Checks whether right now falls within the league's optional registration
+// window. Returns null if joining is currently allowed, or an error message
+// string if not. A league with both dates null has no restriction at all.
+function checkRegistrationWindow(league) {
+  const now = new Date();
+
+  if (league.registration_start != null) {
+    const start = new Date(league.registration_start);
+    if (now < start) {
+      return `Registration opens on ${start.toLocaleString()}.`;
+    }
+  }
+  if (league.registration_end != null) {
+    const end = new Date(league.registration_end);
+    if (now > end) {
+      return `Registration closed on ${end.toLocaleString()}.`;
+    }
+  }
+  return null;
+}
+
 // ---------- CREATE LEAGUE ----------
 router.post('/create', async (req, res) => {
   const userId = req.userId;
   const {
     name, sport, area, seasonStart, seasonEnd, format, genderCategory,
     scheduleType, matchesPerPlayer, hostEntersScores, hostPlays, isPrivate, academyName,
-    minRating, maxRating,
+    minRating, maxRating, registrationStart, registrationEnd,
   } = req.body;
 
   if (!name || !sport || !area || !seasonStart || !seasonEnd || !format || !genderCategory) {
@@ -92,6 +113,11 @@ router.post('/create', async (req, res) => {
     return res.status(400).json({ error: 'Minimum rating cannot be higher than maximum rating.' });
   }
 
+  if (registrationStart != null && registrationEnd != null &&
+      new Date(registrationStart) > new Date(registrationEnd)) {
+    return res.status(400).json({ error: 'Registration start must be before registration end.' });
+  }
+
   try {
     let joinCode = null;
     if (isPrivate === true) {
@@ -106,11 +132,11 @@ router.post('/create', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO leagues (name, sport, area, season_start, season_end, created_by, format, gender_category,
                             schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
-                            min_rating, max_rating)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                            min_rating, max_rating, registration_start, registration_end)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING id, name, sport, area, season_start, season_end, format, gender_category, created_by,
                  schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
-                 min_rating, max_rating`,
+                 min_rating, max_rating, registration_start, registration_end`,
       [
         name, sport, area, seasonStart, seasonEnd, userId, format, genderCategory,
         finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null,
@@ -118,6 +144,8 @@ router.post('/create', async (req, res) => {
         academyName && academyName.trim().length > 0 ? academyName.trim() : null,
         minRating != null ? parseFloat(minRating) : null,
         maxRating != null ? parseFloat(maxRating) : null,
+        registrationStart || null,
+        registrationEnd || null,
       ]
     );
 
@@ -152,7 +180,7 @@ router.get('/', async (req, res) => {
     let query = `
       SELECT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
              l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.academy_name,
-             l.min_rating, l.max_rating,
+             l.min_rating, l.max_rating, l.registration_start, l.registration_end,
              COUNT(lm.id) AS member_count,
              EXISTS (
                SELECT 1 FROM league_members lm2 WHERE lm2.league_id = l.id AND lm2.user_id = $1
@@ -199,7 +227,7 @@ router.get('/mine', async (req, res) => {
     const result = await pool.query(
       `SELECT DISTINCT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
               l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.join_code, l.academy_name,
-              l.min_rating, l.max_rating,
+              l.min_rating, l.max_rating, l.registration_start, l.registration_end,
               (SELECT COUNT(*) FROM league_members lm2 WHERE lm2.league_id = l.id) AS member_count
        FROM leagues l
        LEFT JOIN league_members lm ON lm.league_id = l.id AND lm.user_id = $1
@@ -225,6 +253,11 @@ router.post('/:id/join', async (req, res) => {
       return res.status(404).json({ error: 'League not found.' });
     }
     const leagueData = league.rows[0];
+
+    const registrationError = checkRegistrationWindow(leagueData);
+    if (registrationError) {
+      return res.status(403).json({ error: registrationError });
+    }
 
     const userResult = await pool.query('SELECT gender FROM users WHERE id = $1', [userId]);
     const userGenderCategory = userResult.rows[0].gender === 'M' ? 'mens' : 'womens';
@@ -283,6 +316,11 @@ router.post('/join-by-code', async (req, res) => {
       return res.status(404).json({ error: 'Invalid join code.' });
     }
     const leagueData = league.rows[0];
+
+    const registrationError = checkRegistrationWindow(leagueData);
+    if (registrationError) {
+      return res.status(403).json({ error: registrationError });
+    }
 
     const userResult = await pool.query('SELECT gender FROM users WHERE id = $1', [userId]);
     const userGenderCategory = userResult.rows[0].gender === 'M' ? 'mens' : 'womens';
@@ -367,9 +405,8 @@ router.get('/:id/search-players', async (req, res) => {
 });
 
 // ---------- ADD PLAYER DIRECTLY (host only) ----------
-// Deliberately bypasses the min/max rating gate: this is the host explicitly
-// choosing someone, not an open self-join, so the gate (which exists to let
-// hosts control who can join on their own) doesn't apply here.
+// Deliberately bypasses both the rating gate and the registration window:
+// this is the host explicitly choosing someone, not an open self-join.
 router.post('/:id/add-player', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.id;
@@ -1069,7 +1106,10 @@ router.delete('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.id;
-  const { name, area, seasonStart, seasonEnd, academyName, isPrivate, hostEntersScores } = req.body;
+  const {
+    name, area, seasonStart, seasonEnd, academyName, isPrivate, hostEntersScores,
+    registrationStart, registrationEnd,
+  } = req.body;
 
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
@@ -1093,6 +1133,19 @@ router.put('/:id', async (req, res) => {
     if (academyName !== undefined) {
       updates.push(`academy_name = $${idx++}`);
       params.push(academyName && academyName.trim().length > 0 ? academyName.trim() : null);
+    }
+
+    if (registrationStart !== undefined) {
+      updates.push(`registration_start = $${idx++}`);
+      params.push(registrationStart || null);
+    }
+    if (registrationEnd !== undefined) {
+      updates.push(`registration_end = $${idx++}`);
+      params.push(registrationEnd || null);
+    }
+    if (registrationStart != null && registrationEnd != null &&
+        new Date(registrationStart) > new Date(registrationEnd)) {
+      return res.status(400).json({ error: 'Registration start must be before registration end.' });
     }
 
     if (hostEntersScores !== undefined) {
