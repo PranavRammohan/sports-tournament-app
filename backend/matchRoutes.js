@@ -430,6 +430,32 @@ router.get('/pending', async (req, res) => {
   }
 });
 
+// ---------- MATCHES I REPORTED THAT ARE STILL PENDING (for the reporter's own edit access) ----------
+router.get('/pending-reported-by-me', async (req, res) => {
+  const userId = req.userId;
+
+  try {
+    const result = await pool.query(
+      `SELECT m.*, l.sport, l.format as league_format,
+              p1.username as player1_username, p2.username as player2_username,
+              pp1.username as player1_partner_username, pp2.username as player2_partner_username
+       FROM matches m
+       JOIN leagues l ON l.id = m.league_id
+       JOIN users p1 ON p1.id = m.player1_id
+       JOIN users p2 ON p2.id = m.player2_id
+       LEFT JOIN users pp1 ON pp1.id = m.player1_partner_id
+       LEFT JOIN users pp2 ON pp2.id = m.player2_partner_id
+       WHERE m.status = 'pending' AND m.reported_by = $1
+       ORDER BY m.created_at DESC`,
+      [userId]
+    );
+    res.status(200).json({ matches: result.rows });
+  } catch (err) {
+    console.error('Get my pending reports error:', err);
+    res.status(500).json({ error: 'Something went wrong fetching your pending reports.' });
+  }
+});
+
 // ---------- UPCOMING SCHEDULED MATCHES (across all leagues) ----------
 router.get('/upcoming', async (req, res) => {
   const userId = req.userId;
@@ -558,6 +584,54 @@ router.post('/:id/reject', async (req, res) => {
   } catch (err) {
     console.error('Reject match error:', err);
     res.status(500).json({ error: 'Something went wrong rejecting the match.' });
+  }
+});
+
+// ---------- REPORTER EDITS THEIR OWN PENDING REPORT ----------
+// Lets the person who reported a result fix a mistake themselves, before
+// their opponent has confirmed or rejected it — an alternative to having
+// the opponent reject and forcing a full re-report. No rating/points impact
+// since the match isn't confirmed yet.
+router.put('/:id/edit-report', async (req, res) => {
+  const userId = req.userId;
+  const matchId = req.params.id;
+  const { myUnits, opponentUnits, iWon, setScores } = req.body;
+
+  if (myUnits == null || opponentUnits == null || iWon == null) {
+    return res.status(400).json({ error: 'Missing required fields.' });
+  }
+
+  try {
+    const matchResult = await pool.query('SELECT * FROM matches WHERE id = $1', [matchId]);
+    if (matchResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Match not found.' });
+    }
+    const match = matchResult.rows[0];
+
+    if (match.status !== 'pending') {
+      return res.status(409).json({ error: 'This match has no pending report to edit.' });
+    }
+    if (match.reported_by !== userId) {
+      return res.status(403).json({ error: 'Only the player who reported this result can edit it.' });
+    }
+
+    const iAmPlayer1 = userId === match.player1_id || userId === match.player1_partner_id;
+    const winnerId = iWon
+      ? (iAmPlayer1 ? match.player1_id : match.player2_id)
+      : (iAmPlayer1 ? match.player2_id : match.player1_id);
+    const player1Units = iAmPlayer1 ? myUnits : opponentUnits;
+    const player2Units = iAmPlayer1 ? opponentUnits : myUnits;
+
+    await pool.query(
+      `UPDATE matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4
+       WHERE id = $5`,
+      [player1Units, player2Units, winnerId, JSON.stringify(setScores || []), matchId]
+    );
+
+    res.status(200).json({ message: 'Report updated, still waiting for confirmation.' });
+  } catch (err) {
+    console.error('Edit match report error:', err);
+    res.status(500).json({ error: 'Something went wrong updating the report.' });
   }
 });
 
