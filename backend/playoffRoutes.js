@@ -101,6 +101,38 @@ router.post('/:leagueId/generate', async (req, res) => {
   }
 });
 
+// ---------- CANCEL/REMOVE PLAYOFF BRACKET (host only) ----------
+// Lets the host undo starting playoffs by mistake (e.g. before the regular
+// season is actually finished). Since playoff matches don't affect ratings —
+// they only track bracket progress — this is a simple, safe delete with no
+// rating/points reversal needed.
+router.delete('/:leagueId', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.leagueId;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can remove the playoff bracket.' });
+    }
+
+    const result = await pool.query('DELETE FROM playoff_matches WHERE league_id = $1', [leagueId]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'No playoff bracket exists for this league.' });
+    }
+
+    res.status(200).json({ message: 'Playoff bracket removed.' });
+  } catch (err) {
+    console.error('Remove playoffs error:', err);
+    res.status(500).json({ error: 'Something went wrong removing the bracket.' });
+  }
+});
+
 // ---------- GET BRACKET ----------
 router.get('/:leagueId', async (req, res) => {
   const leagueId = req.params.leagueId;
@@ -196,6 +228,50 @@ router.post('/match/:matchId/report', async (req, res) => {
   }
 });
 
+// ---------- REPORTER EDITS THEIR OWN PENDING PLAYOFF REPORT ----------
+// Lets the person who reported a result fix a mistake themselves, before
+// their opponent has confirmed or rejected it — an alternative to having
+// the opponent reject and forcing a full re-report.
+router.put('/match/:matchId/edit-report', async (req, res) => {
+  const userId = req.userId;
+  const matchId = req.params.matchId;
+  const { myUnits, opponentUnits, iWon, setScores } = req.body;
+
+  if (myUnits == null || opponentUnits == null || iWon == null) {
+    return res.status(400).json({ error: 'Missing required fields.' });
+  }
+
+  try {
+    const matchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
+    if (matchResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Match not found.' });
+    }
+    const match = matchResult.rows[0];
+
+    if (match.status !== 'reported') {
+      return res.status(409).json({ error: 'This match has no pending report to edit.' });
+    }
+    if (match.reported_by !== userId) {
+      return res.status(403).json({ error: 'Only the player who reported this result can edit it.' });
+    }
+
+    const winnerId = iWon ? userId : (userId === match.player1_id ? match.player2_id : match.player1_id);
+    const player1Units = userId === match.player1_id ? myUnits : opponentUnits;
+    const player2Units = userId === match.player1_id ? opponentUnits : myUnits;
+
+    await pool.query(
+      `UPDATE playoff_matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4
+       WHERE id = $5`,
+      [player1Units, player2Units, winnerId, JSON.stringify(setScores || []), matchId]
+    );
+
+    res.status(200).json({ message: 'Report updated, still waiting for confirmation.' });
+  } catch (err) {
+    console.error('Edit playoff report error:', err);
+    res.status(500).json({ error: 'Something went wrong updating the report.' });
+  }
+});
+
 // ---------- HOST ENTERS A PLAYOFF MATCH RESULT DIRECTLY (auto-confirmed) ----------
 router.post('/match/:matchId/report-as-host', async (req, res) => {
   const userId = req.userId;
@@ -243,6 +319,92 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
   } catch (err) {
     console.error('Host report playoff match error:', err);
     res.status(500).json({ error: 'Something went wrong entering the score.' });
+  }
+});
+
+// ---------- HOST EDITS A CONFIRMED PLAYOFF MATCH SCORE ----------
+// Since playoff results don't affect ratings, this is simpler than the
+// regular tournament version — but if the winner changes, and that winner
+// has already advanced into the next round, we need to update that slot too.
+// If the next round match has already been reported/confirmed, we block the
+// edit rather than risk silently corrupting the bracket — the host should
+// use "Cancel Playoffs" and restart in that case.
+router.put('/match/:matchId/edit-score', async (req, res) => {
+  const userId = req.userId;
+  const matchId = req.params.matchId;
+  const { player1Units, player2Units, player1Won, setScores } = req.body;
+
+  if (player1Units == null || player2Units == null || player1Won == null) {
+    return res.status(400).json({ error: 'Missing required fields.' });
+  }
+
+  try {
+    const matchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
+    if (matchResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Match not found.' });
+    }
+    const match = matchResult.rows[0];
+
+    if (match.status !== 'confirmed') {
+      return res.status(400).json({ error: 'Only confirmed matches can be edited.' });
+    }
+
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+    const league = leagueResult.rows[0];
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can edit match scores.' });
+    }
+
+    const newWinnerId = player1Won ? match.player1_id : match.player2_id;
+    const winnerChanged = newWinnerId !== match.winner_id;
+
+    if (winnerChanged) {
+      const nextRound = match.round_number + 1;
+      const nextPosition = Math.ceil(match.position / 2);
+      const nextMatchResult = await pool.query(
+        'SELECT * FROM playoff_matches WHERE league_id = $1 AND round_number = $2 AND position = $3',
+        [match.league_id, nextRound, nextPosition]
+      );
+
+      if (nextMatchResult.rows.length > 0) {
+        const nextMatch = nextMatchResult.rows[0];
+        if (nextMatch.status === 'reported' || nextMatch.status === 'confirmed') {
+          return res.status(400).json({
+            error: 'The next round has already been played with the old winner. Cancel and restart the playoffs to fix this.',
+          });
+        }
+
+        const isUpperSlot = match.position % 2 === 1;
+        if (isUpperSlot) {
+          await pool.query('UPDATE playoff_matches SET player1_id = $1 WHERE id = $2', [newWinnerId, nextMatch.id]);
+        } else {
+          await pool.query('UPDATE playoff_matches SET player2_id = $1 WHERE id = $2', [newWinnerId, nextMatch.id]);
+        }
+
+        const refreshedNext = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [nextMatch.id]);
+        const rn = refreshedNext.rows[0];
+        await pool.query(
+          `UPDATE playoff_matches SET status = $1 WHERE id = $2`,
+          [rn.player1_id && rn.player2_id ? 'ready' : 'pending', nextMatch.id]
+        );
+      }
+    }
+
+    await pool.query(
+      `UPDATE playoff_matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4
+       WHERE id = $5`,
+      [player1Units, player2Units, newWinnerId, JSON.stringify(setScores || []), matchId]
+    );
+
+    res.status(200).json({
+      message: 'Score updated.',
+      warning: winnerChanged
+        ? 'The winner changed — the next round fixture has been updated accordingly.'
+        : null,
+    });
+  } catch (err) {
+    console.error('Edit playoff score error:', err);
+    res.status(500).json({ error: 'Something went wrong updating the score.' });
   }
 });
 

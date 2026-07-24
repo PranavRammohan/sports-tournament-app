@@ -26,6 +26,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   int? _currentUserId;
   bool _loading = true;
   bool _generating = false;
+  bool _cancelling = false;
   bool _hostEntersScores = false;
 
   @override
@@ -112,6 +113,70 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
     }
   }
 
+  Future<void> _confirmCancelPlayoffs() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Cancel playoffs?'),
+        content: const Text(
+          'This removes the entire bracket, including any confirmed results. You can start a new bracket afterward once the regular season is actually finished.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep bracket'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Cancel playoffs',
+              style: TextStyle(color: AppColors.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    HapticFeedback.mediumImpact();
+    setState(() => _cancelling = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final response = await http.delete(
+        Uri.parse('$baseApiUrl/playoffs/${widget.leagueId}'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      final data = jsonDecode(response.body);
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Playoff bracket removed.'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadBracket();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not remove bracket.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _cancelling = false);
+    }
+  }
+
   Future<void> _reportMatch(int matchId) async {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -147,6 +212,70 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(data['error'] ?? 'Could not report.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    }
+  }
+
+  Future<void> _editMyReport(dynamic m) async {
+    List<Map<String, int>>? initialSets;
+    try {
+      if (m['set_scores'] != null) {
+        final List raw = jsonDecode(m['set_scores']);
+        initialSets = raw
+            .map<Map<String, int>>(
+              (s) => {'me': s['me'] as int, 'opponent': s['opponent'] as int},
+            )
+            .toList();
+      }
+    } catch (err) {
+      initialSets = null;
+    }
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => _PlayoffReportDialog(
+        title: 'Edit My Report',
+        initialSets: initialSets,
+      ),
+    );
+    if (result == null) return;
+
+    HapticFeedback.lightImpact();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+
+      final response = await http.put(
+        Uri.parse('$baseApiUrl/playoffs/match/${m['id']}/edit-report'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode(result),
+      );
+      final data = jsonDecode(response.body);
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Report updated.'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadBracket();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not update report.'),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -201,6 +330,77 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(data['error'] ?? 'Could not enter score.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    }
+  }
+
+  Future<void> _hostEditScore(dynamic m) async {
+    final p1Name = m['player1_username'] ?? 'TBD';
+    final p2Name = m['player2_username'] ?? 'TBD';
+
+    List<Map<String, int>>? initialSets;
+    try {
+      if (m['set_scores'] != null) {
+        final List raw = jsonDecode(m['set_scores']);
+        initialSets = raw
+            .map<Map<String, int>>(
+              (s) => {'me': s['me'] as int, 'opponent': s['opponent'] as int},
+            )
+            .toList();
+      }
+    } catch (err) {
+      initialSets = null;
+    }
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => _HostPlayoffReportDialog(
+        player1Name: p1Name,
+        player2Name: p2Name,
+        title: 'Edit Score',
+        initialSets: initialSets,
+      ),
+    );
+    if (result == null) return;
+
+    HapticFeedback.lightImpact();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+
+      final response = await http.put(
+        Uri.parse('$baseApiUrl/playoffs/match/${m['id']}/edit-score'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode(result),
+      );
+      final data = jsonDecode(response.body);
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['warning'] ?? 'Score updated.'),
+            backgroundColor: data['warning'] != null
+                ? AppColors.warning
+                : AppColors.success,
+          ),
+        );
+        _loadBracket();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not update score.'),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -299,7 +499,26 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Playoffs')),
+      appBar: AppBar(
+        title: const Text('Playoffs'),
+        actions: [
+          if (widget.isHost && _bracket.isNotEmpty)
+            IconButton(
+              icon: _cancelling
+                  ? const SizedBox(
+                      height: 18,
+                      width: 18,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : const Icon(Icons.delete_outline),
+              tooltip: 'Cancel playoffs',
+              onPressed: _cancelling ? null : _confirmCancelPlayoffs,
+            ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _bracket.isEmpty
@@ -512,9 +731,11 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
                             ],
                           ),
                         ],
-                        if (!_hostEntersScores && isReported && reportedByMe)
+                        if (!_hostEntersScores &&
+                            isReported &&
+                            reportedByMe) ...[
                           Padding(
-                            padding: const EdgeInsets.only(top: 6),
+                            padding: const EdgeInsets.only(top: 6, bottom: 6),
                             child: Text(
                               'Waiting for opponent to confirm...',
                               style: TextStyle(
@@ -523,6 +744,41 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
                               ),
                             ),
                           ),
+                          TextButton.icon(
+                            onPressed: () => _editMyReport(m),
+                            icon: const Icon(Icons.edit_outlined, size: 15),
+                            label: const Text(
+                              'Edit My Report',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                              ),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          ),
+                        ],
+                        if (widget.isHost && isConfirmed) ...[
+                          const SizedBox(height: 6),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton.icon(
+                              onPressed: () => _hostEditScore(m),
+                              icon: const Icon(Icons.edit_outlined, size: 15),
+                              label: const Text(
+                                'Edit Score',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                              style: TextButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                ),
+                                visualDensity: VisualDensity.compact,
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   );
@@ -537,6 +793,11 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
 }
 
 class _PlayoffReportDialog extends StatefulWidget {
+  final String title;
+  final List<Map<String, int>>? initialSets;
+
+  const _PlayoffReportDialog({this.title = 'Report Result', this.initialSets});
+
   @override
   State<_PlayoffReportDialog> createState() => _PlayoffReportDialogState();
 }
@@ -547,13 +808,28 @@ class _SetScore {
 }
 
 class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
-  final List<_SetScore> _sets = [_SetScore()];
+  late List<_SetScore> _sets;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialSets != null && widget.initialSets!.isNotEmpty) {
+      _sets = widget.initialSets!.map((s) {
+        final set = _SetScore();
+        set.myScore.text = '${s['me']}';
+        set.opponentScore.text = '${s['opponent']}';
+        return set;
+      }).toList();
+    } else {
+      _sets = [_SetScore()];
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      title: const Text('Report Result'),
+      title: Text(widget.title),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -589,6 +865,14 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
                         ),
                       ),
                     ),
+                    if (_sets.length > 1)
+                      IconButton(
+                        icon: const Icon(
+                          Icons.remove_circle_outline,
+                          color: AppColors.danger,
+                        ),
+                        onPressed: () => setState(() => _sets.removeAt(index)),
+                      ),
                   ],
                 ),
               );
@@ -646,10 +930,14 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
 class _HostPlayoffReportDialog extends StatefulWidget {
   final String player1Name;
   final String player2Name;
+  final String title;
+  final List<Map<String, int>>? initialSets;
 
   const _HostPlayoffReportDialog({
     required this.player1Name,
     required this.player2Name,
+    this.title = 'Enter Score',
+    this.initialSets,
   });
 
   @override
@@ -658,13 +946,28 @@ class _HostPlayoffReportDialog extends StatefulWidget {
 }
 
 class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
-  final List<_SetScore> _sets = [_SetScore()];
+  late List<_SetScore> _sets;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialSets != null && widget.initialSets!.isNotEmpty) {
+      _sets = widget.initialSets!.map((s) {
+        final set = _SetScore();
+        set.myScore.text = '${s['me']}';
+        set.opponentScore.text = '${s['opponent']}';
+        return set;
+      }).toList();
+    } else {
+      _sets = [_SetScore()];
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      title: const Text('Enter Score'),
+      title: Text(widget.title),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -700,6 +1003,14 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
                         ),
                       ),
                     ),
+                    if (_sets.length > 1)
+                      IconButton(
+                        icon: const Icon(
+                          Icons.remove_circle_outline,
+                          color: AppColors.danger,
+                        ),
+                        onPressed: () => setState(() => _sets.removeAt(index)),
+                      ),
                   ],
                 ),
               );
