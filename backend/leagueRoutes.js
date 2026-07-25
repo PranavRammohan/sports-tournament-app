@@ -1047,6 +1047,13 @@ function generateNearestRatingSchedule(members, matchesPerPlayer) {
 }
 
 // ---------- GET SCHEDULE (with completion status + contact info) ----------
+// The join now includes 'pending' matches too, not just 'confirmed' — so a
+// reported-but-not-yet-confirmed score shows up on the fixture card (as
+// "Pending" with the reporter's submitted score), and the reporter can edit
+// their own report before their opponent confirms/rejects it. Rejected
+// matches are excluded, since the app already deletes those once a new
+// report is submitted for the same fixture, so at most one non-rejected
+// match exists per scheduled_match_id at any time.
 router.get('/:id/schedule', async (req, res) => {
   const leagueId = req.params.id;
 
@@ -1058,10 +1065,10 @@ router.get('/:id/schedule', async (req, res) => {
               pp1.username as player1_partner_username, pp1.phone_number as player1_partner_phone,
               p2.username as player2_username, p2.phone_number as player2_phone,
               pp2.username as player2_partner_username, pp2.phone_number as player2_partner_phone,
-              m.id as match_id, m.status as match_status, m.set_scores, m.winner_id,
+              m.id as match_id, m.status as match_status, m.set_scores, m.winner_id, m.reported_by,
               m.player1_id as reported_player1_id, m.player2_id as reported_player2_id
        FROM scheduled_matches sm
-       LEFT JOIN matches m ON m.scheduled_match_id = sm.id AND m.status = 'confirmed'
+       LEFT JOIN matches m ON m.scheduled_match_id = sm.id AND m.status != 'rejected'
        JOIN users p1 ON p1.id = sm.player1_id
        JOIN users p2 ON p2.id = sm.player2_id
        LEFT JOIN users pp1 ON pp1.id = sm.player1_partner_id

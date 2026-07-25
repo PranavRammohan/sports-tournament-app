@@ -745,6 +745,81 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     } catch (err) {
       initialSets = null;
     }
+    Future<void> _editMyReport(dynamic f) async {
+      final iAmTeam1 =
+          f['player1_id'] == _currentUserId ||
+          f['player1_partner_id'] == _currentUserId;
+      final team2Name = f['player2_partner_username'] != null
+          ? '${f['player2_username']} & ${f['player2_partner_username']}'
+          : f['player2_username'];
+      final team1Name = f['player1_partner_username'] != null
+          ? '${f['player1_username']} & ${f['player1_partner_username']}'
+          : f['player1_username'];
+      final opponentName = iAmTeam1 ? team2Name : team1Name;
+
+      List<Map<String, int>>? initialSets;
+      try {
+        if (f['set_scores'] != null) {
+          final List raw = jsonDecode(f['set_scores']);
+          initialSets = raw
+              .map<Map<String, int>>(
+                (s) => {
+                  'me': iAmTeam1 ? s['me'] as int : s['opponent'] as int,
+                  'opponent': iAmTeam1 ? s['opponent'] as int : s['me'] as int,
+                },
+              )
+              .toList();
+        }
+      } catch (err) {
+        initialSets = null;
+      }
+
+      final result = await showDialog<Map<String, dynamic>>(
+        context: context,
+        builder: (ctx) => _SelfReportSetsDialog(
+          title: 'Edit My Report',
+          opponentName: opponentName,
+          initialSets: initialSets,
+        ),
+      );
+      if (result == null) return;
+
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final token = prefs.getString('authToken');
+        final response = await http.put(
+          Uri.parse('$baseApiUrl/matches/${f['match_id']}/edit-report'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: jsonEncode(result),
+        );
+        final data = jsonDecode(response.body);
+        if (!mounted) return;
+        if (response.statusCode == 200) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Report updated.'),
+              backgroundColor: AppColors.success,
+            ),
+          );
+          _loadAll();
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(data['error'] ?? 'Could not update report.'),
+              backgroundColor: AppColors.danger,
+            ),
+          );
+        }
+      } catch (err) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Network error.')));
+      }
+    }
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -2130,6 +2205,27 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                       ),
                     ),
                   ],
+                ),
+              ),
+            ),
+          ],
+          if (!isCompleted &&
+              f['match_id'] != null &&
+              f['reported_player1_id'] != null &&
+              involvesMe) ...[
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => _editMyReport(f),
+                icon: const Icon(Icons.edit_outlined, size: 15),
+                label: const Text(
+                  'Edit My Report',
+                  style: TextStyle(fontSize: 12),
+                ),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  visualDensity: VisualDensity.compact,
                 ),
               ),
             ),
