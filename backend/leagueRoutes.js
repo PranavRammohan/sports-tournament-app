@@ -73,13 +73,15 @@ function checkRegistrationWindow(league) {
   return null;
 }
 
+const VALID_PARTNER_MODES = ['host_auto', 'self_select', 'host_manual'];
+
 // ---------- CREATE LEAGUE ----------
 router.post('/create', async (req, res) => {
   const userId = req.userId;
   const {
     name, sport, area, seasonStart, seasonEnd, format, genderCategory,
     scheduleType, matchesPerPlayer, hostEntersScores, hostPlays, isPrivate, academyName,
-    minRating, maxRating, registrationStart, registrationEnd,
+    minRating, maxRating, registrationStart, registrationEnd, partnerMode,
   } = req.body;
 
   if (!name || !sport || !area || !seasonStart || !seasonEnd || !format || !genderCategory) {
@@ -92,15 +94,17 @@ router.post('/create', async (req, res) => {
     return res.status(400).json({ error: 'Gender category must be mens or womens.' });
   }
 
+  const finalPartnerMode = VALID_PARTNER_MODES.includes(partnerMode) ? partnerMode : 'host_auto';
+
   const validScheduleTypes = ['round_robin', 'matches_per_player', 'knockout', 'custom'];
   const finalScheduleType = validScheduleTypes.includes(scheduleType) ? scheduleType : 'round_robin';
 
   if (finalScheduleType === 'matches_per_player' && (!matchesPerPlayer || matchesPerPlayer < 1)) {
     return res.status(400).json({ error: 'Please specify how many matches each player should play.' });
   }
-  if (finalScheduleType === 'knockout' && format !== 'singles') {
-    return res.status(400).json({ error: 'Knockout format is currently only supported for singles leagues.' });
-  }
+  // NOTE: Knockout is now supported for doubles as well as singles — the
+  // singles-only restriction has been removed. (Fixed-matches-per-player
+  // was already available to both formats via the schedule generator.)
 
   if (minRating != null && maxRating != null && parseFloat(minRating) > parseFloat(maxRating)) {
     return res.status(400).json({ error: 'Minimum rating cannot be higher than maximum rating.' });
@@ -125,11 +129,11 @@ router.post('/create', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO leagues (name, sport, area, season_start, season_end, created_by, format, gender_category,
                             schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
-                            min_rating, max_rating, registration_start, registration_end)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                            min_rating, max_rating, registration_start, registration_end, partner_mode)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
        RETURNING id, name, sport, area, season_start, season_end, format, gender_category, created_by,
                  schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
-                 min_rating, max_rating, registration_start, registration_end`,
+                 min_rating, max_rating, registration_start, registration_end, partner_mode`,
       [
         name, sport, area, seasonStart, seasonEnd, userId, format, genderCategory,
         finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null,
@@ -139,6 +143,7 @@ router.post('/create', async (req, res) => {
         maxRating != null ? parseFloat(maxRating) : null,
         registrationStart || null,
         registrationEnd || null,
+        format === 'doubles' ? finalPartnerMode : 'host_auto',
       ]
     );
 
@@ -173,7 +178,7 @@ router.get('/', async (req, res) => {
     let query = `
       SELECT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
              l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.academy_name,
-             l.min_rating, l.max_rating, l.registration_start, l.registration_end,
+             l.min_rating, l.max_rating, l.registration_start, l.registration_end, l.partner_mode,
              COUNT(lm.id) AS member_count,
              EXISTS (
                SELECT 1 FROM league_members lm2 WHERE lm2.league_id = l.id AND lm2.user_id = $1
@@ -220,7 +225,7 @@ router.get('/mine', async (req, res) => {
     const result = await pool.query(
       `SELECT DISTINCT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
               l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.join_code, l.academy_name,
-              l.min_rating, l.max_rating, l.registration_start, l.registration_end,
+              l.min_rating, l.max_rating, l.registration_start, l.registration_end, l.partner_mode,
               (SELECT COUNT(*) FROM league_members lm2 WHERE lm2.league_id = l.id) AS member_count
        FROM leagues l
        LEFT JOIN league_members lm ON lm.league_id = l.id AND lm.user_id = $1
@@ -354,6 +359,241 @@ router.post('/join-by-code', async (req, res) => {
   }
 });
 
+// ---------- SELF-SELECT PARTNER: send a partner request ----------
+// Only valid when the league's partner_mode is 'self_select'. The requester
+// must already be a member with no confirmed partner. Creates a pending
+// invite; the target must accept via /respond-partner before it's locked in.
+router.post('/:id/select-partner', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { partnerId } = req.body;
+
+  if (!partnerId) {
+    return res.status(400).json({ error: 'Please choose a partner.' });
+  }
+  if (parseInt(partnerId, 10) === userId) {
+    return res.status(400).json({ error: 'You cannot partner with yourself.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.format !== 'doubles') {
+      return res.status(400).json({ error: 'Partner selection only applies to doubles leagues.' });
+    }
+    if (league.partner_mode !== 'self_select') {
+      return res.status(400).json({ error: 'This league does not allow players to pick their own partner.' });
+    }
+
+    const myMembership = await pool.query(
+      'SELECT * FROM league_members WHERE league_id = $1 AND user_id = $2',
+      [leagueId, userId]
+    );
+    if (myMembership.rows.length === 0) {
+      return res.status(403).json({ error: 'You must join the league before selecting a partner.' });
+    }
+    if (myMembership.rows[0].partner_status === 'confirmed') {
+      return res.status(409).json({ error: 'You already have a confirmed partner.' });
+    }
+
+    const partnerMembership = await pool.query(
+      'SELECT * FROM league_members WHERE league_id = $1 AND user_id = $2',
+      [leagueId, partnerId]
+    );
+    if (partnerMembership.rows.length === 0) {
+      return res.status(400).json({ error: 'That player has not joined this league yet.' });
+    }
+    if (partnerMembership.rows[0].partner_status === 'confirmed') {
+      return res.status(409).json({ error: 'That player already has a confirmed partner.' });
+    }
+
+    await pool.query(
+      `UPDATE league_members SET partner_id = $1, partner_status = 'pending'
+       WHERE league_id = $2 AND user_id = $3`,
+      [partnerId, leagueId, userId]
+    );
+
+    res.status(200).json({ message: 'Partner request sent. Waiting for them to accept.' });
+  } catch (err) {
+    console.error('Select partner error:', err);
+    res.status(500).json({ error: 'Something went wrong sending the partner request.' });
+  }
+});
+
+// ---------- SELF-SELECT PARTNER: respond to a pending request ----------
+router.post('/:id/respond-partner', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { accept } = req.body;
+
+  try {
+    const requestResult = await pool.query(
+      `SELECT * FROM league_members WHERE league_id = $1 AND partner_id = $2 AND partner_status = 'pending'`,
+      [leagueId, userId]
+    );
+    if (requestResult.rows.length === 0) {
+      return res.status(404).json({ error: 'No pending partner request found for you in this league.' });
+    }
+    const requesterId = requestResult.rows[0].user_id;
+
+    if (accept !== true) {
+      await pool.query(
+        `UPDATE league_members SET partner_id = NULL, partner_status = NULL
+         WHERE league_id = $1 AND user_id = $2`,
+        [leagueId, requesterId]
+      );
+      return res.status(200).json({ message: 'Partner request declined.' });
+    }
+
+    await pool.query(
+      `UPDATE league_members SET partner_id = $1, partner_status = 'confirmed'
+       WHERE league_id = $2 AND user_id = $3`,
+      [requesterId, leagueId, userId]
+    );
+    await pool.query(
+      `UPDATE league_members SET partner_status = 'confirmed'
+       WHERE league_id = $1 AND user_id = $2`,
+      [leagueId, requesterId]
+    );
+
+    res.status(200).json({ message: 'Partner confirmed!' });
+  } catch (err) {
+    console.error('Respond partner error:', err);
+    res.status(500).json({ error: 'Something went wrong responding to the partner request.' });
+  }
+});
+
+// ---------- HOST-MANUAL PARTNER ASSIGNMENT (host only) ----------
+router.post('/:id/assign-partner', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { player1Id, player2Id } = req.body;
+
+  if (!player1Id || !player2Id || player1Id === player2Id) {
+    return res.status(400).json({ error: 'Please select two different players to pair.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can assign partners.' });
+    }
+    if (league.format !== 'doubles' || league.partner_mode !== 'host_manual') {
+      return res.status(400).json({ error: 'This league is not set up for host-manual partner assignment.' });
+    }
+
+    const membersResult = await pool.query(
+      `SELECT user_id, partner_status FROM league_members WHERE league_id = $1 AND user_id = ANY($2::int[])`,
+      [leagueId, [player1Id, player2Id]]
+    );
+    if (membersResult.rows.length !== 2) {
+      return res.status(400).json({ error: 'Both players must be members of this league.' });
+    }
+    if (membersResult.rows.some((m) => m.partner_status === 'confirmed')) {
+      return res.status(409).json({ error: 'One of these players already has a confirmed partner. Unpair them first.' });
+    }
+
+    await pool.query(
+      `UPDATE league_members SET partner_id = $1, partner_status = 'confirmed'
+       WHERE league_id = $2 AND user_id = $3`,
+      [player2Id, leagueId, player1Id]
+    );
+    await pool.query(
+      `UPDATE league_members SET partner_id = $1, partner_status = 'confirmed'
+       WHERE league_id = $2 AND user_id = $3`,
+      [player1Id, leagueId, player2Id]
+    );
+
+    res.status(200).json({ message: 'Partners paired.' });
+  } catch (err) {
+    console.error('Assign partner error:', err);
+    res.status(500).json({ error: 'Something went wrong pairing these players.' });
+  }
+});
+
+// ---------- UNPAIR (self, or host for any pair) ----------
+router.post('/:id/unpair', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { userId: targetUserId } = req.body;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+    const isHost = league.created_by === userId;
+    const subjectId = isHost && targetUserId ? targetUserId : userId;
+
+    if (!isHost && subjectId !== userId) {
+      return res.status(403).json({ error: 'You can only unpair yourself.' });
+    }
+
+    const memberResult = await pool.query(
+      'SELECT * FROM league_members WHERE league_id = $1 AND user_id = $2',
+      [leagueId, subjectId]
+    );
+    if (memberResult.rows.length === 0 || memberResult.rows[0].partner_id == null) {
+      return res.status(404).json({ error: 'No partner pairing found to remove.' });
+    }
+    const partnerId = memberResult.rows[0].partner_id;
+
+    await pool.query(
+      `UPDATE league_members SET partner_id = NULL, partner_status = NULL
+       WHERE league_id = $1 AND user_id = $2`,
+      [leagueId, subjectId]
+    );
+    await pool.query(
+      `UPDATE league_members SET partner_id = NULL, partner_status = NULL
+       WHERE league_id = $1 AND user_id = $2`,
+      [leagueId, partnerId]
+    );
+
+    res.status(200).json({ message: 'Partnership removed.' });
+  } catch (err) {
+    console.error('Unpair error:', err);
+    res.status(500).json({ error: 'Something went wrong removing the partnership.' });
+  }
+});
+
+// ---------- GET PARTNER STATUS LIST (for self-select/host-manual UI) ----------
+router.get('/:id/partners', async (req, res) => {
+  const leagueId = req.params.id;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    const result = await pool.query(
+      `SELECT u.id, u.username, lm.partner_id, lm.partner_status, p.username as partner_username
+       FROM league_members lm
+       JOIN users u ON u.id = lm.user_id
+       LEFT JOIN users p ON p.id = lm.partner_id
+       WHERE lm.league_id = $1
+       ORDER BY u.username ASC`,
+      [leagueId]
+    );
+
+    res.status(200).json({ partnerMode: league.partner_mode, members: result.rows });
+  } catch (err) {
+    console.error('Get partners error:', err);
+    res.status(500).json({ error: 'Something went wrong fetching partner status.' });
+  }
+});
+
 // ---------- SEARCH USERS TO ADD (host only) ----------
 router.get('/:id/search-players', async (req, res) => {
   const userId = req.userId;
@@ -469,12 +709,23 @@ router.post('/:id/leave', async (req, res) => {
       return res.status(400).json({ error: 'As the host, you cannot leave — you can delete the league instead.' });
     }
 
-    const result = await pool.query(
-      'DELETE FROM league_members WHERE league_id = $1 AND user_id = $2 RETURNING id',
+    const memberResult = await pool.query(
+      'SELECT * FROM league_members WHERE league_id = $1 AND user_id = $2',
       [leagueId, userId]
     );
-    if (result.rows.length === 0) {
+    if (memberResult.rows.length === 0) {
       return res.status(404).json({ error: "You aren't a member of this league." });
+    }
+    const partnerId = memberResult.rows[0].partner_id;
+
+    await pool.query('DELETE FROM league_members WHERE league_id = $1 AND user_id = $2', [leagueId, userId]);
+
+    if (partnerId) {
+      await pool.query(
+        `UPDATE league_members SET partner_id = NULL, partner_status = NULL
+         WHERE league_id = $1 AND user_id = $2`,
+        [leagueId, partnerId]
+      );
     }
 
     res.status(200).json({ message: 'You left the league.' });
@@ -505,12 +756,13 @@ router.delete('/:id/members/:userId', async (req, res) => {
     }
 
     const memberCheck = await pool.query(
-      'SELECT id FROM league_members WHERE league_id = $1 AND user_id = $2',
+      'SELECT * FROM league_members WHERE league_id = $1 AND user_id = $2',
       [leagueId, targetUserId]
     );
     if (memberCheck.rows.length === 0) {
       return res.status(404).json({ error: 'This player is not a member of this league.' });
     }
+    const partnerId = memberCheck.rows[0].partner_id;
 
     await pool.query(
       `DELETE FROM matches
@@ -530,7 +782,7 @@ router.delete('/:id/members/:userId', async (req, res) => {
     await pool.query(
       `DELETE FROM playoff_matches
        WHERE league_id = $1 AND status != 'confirmed'
-         AND (player1_id = $2 OR player2_id = $2)`,
+         AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)`,
       [leagueId, targetUserId]
     );
 
@@ -539,6 +791,14 @@ router.delete('/:id/members/:userId', async (req, res) => {
       [leagueId, targetUserId]
     );
 
+    if (partnerId) {
+      await pool.query(
+        `UPDATE league_members SET partner_id = NULL, partner_status = NULL
+         WHERE league_id = $1 AND user_id = $2`,
+        [leagueId, partnerId]
+      );
+    }
+
     res.status(200).json({ message: 'Player removed from league.' });
   } catch (err) {
     console.error('Remove player error:', err);
@@ -546,10 +806,9 @@ router.delete('/:id/members/:userId', async (req, res) => {
   }
 });
 
-// ---------- LEAGUE DETAIL + DUAL LEADERBOARD ----------
-// match_stats now includes confirmed playoff matches too (previously only
-// the "matches" table), so knockout leagues show accurate matches-played /
-// wins / losses on the leaderboard instead of always showing 0.
+// ---------- LEAGUE DETAIL + LEADERBOARD(S) ----------
+// For doubles leagues, also returns a `pairLeaderboard`, grouping confirmed
+// matches (round-robin/custom + knockout) by unordered partner pair.
 router.get('/:id', async (req, res) => {
   const leagueId = req.params.id;
 
@@ -591,6 +850,10 @@ router.get('/:id', async (req, res) => {
            SELECT id, league_id, winner_id, player1_id AS player_id FROM playoff_matches WHERE status = 'confirmed'
            UNION ALL
            SELECT id, league_id, winner_id, player2_id AS player_id FROM playoff_matches WHERE status = 'confirmed'
+           UNION ALL
+           SELECT id, league_id, winner_id, player1_partner_id AS player_id FROM playoff_matches WHERE status = 'confirmed' AND player1_partner_id IS NOT NULL
+           UNION ALL
+           SELECT id, league_id, winner_id, player2_partner_id AS player_id FROM playoff_matches WHERE status = 'confirmed' AND player2_partner_id IS NOT NULL
          ) all_participants
          WHERE league_id = $3
          GROUP BY player_id
@@ -600,12 +863,119 @@ router.get('/:id', async (req, res) => {
       [leagueData.sport, leagueData.format, leagueId]
     );
 
-    res.status(200).json({ league: leagueData, leaderboard: leaderboard.rows });
+    let pairLeaderboard = null;
+    if (leagueData.format === 'doubles') {
+      const pairResult = await pool.query(
+        `SELECT p_a AS player_a_id, p_b AS player_b_id,
+                ua.username AS player_a_username, ub.username AS player_b_username,
+                COUNT(*) AS matches_played,
+                SUM(win) AS wins,
+                SUM(1 - win) AS losses,
+                ROUND((COALESCE(ra.rating, 0) + COALESCE(rb.rating, 0)) / 2, 1) AS avg_rating
+         FROM (
+           SELECT LEAST(player1_id, player1_partner_id) AS p_a, GREATEST(player1_id, player1_partner_id) AS p_b,
+                  CASE WHEN winner_id = player1_id THEN 1 ELSE 0 END AS win
+           FROM matches
+           WHERE league_id = $3 AND status = 'confirmed' AND player1_partner_id IS NOT NULL
+           UNION ALL
+           SELECT LEAST(player2_id, player2_partner_id), GREATEST(player2_id, player2_partner_id),
+                  CASE WHEN winner_id = player2_id THEN 1 ELSE 0 END
+           FROM matches
+           WHERE league_id = $3 AND status = 'confirmed' AND player2_partner_id IS NOT NULL
+           UNION ALL
+           SELECT LEAST(player1_id, player1_partner_id), GREATEST(player1_id, player1_partner_id),
+                  CASE WHEN winner_id = player1_id THEN 1 ELSE 0 END
+           FROM playoff_matches
+           WHERE league_id = $3 AND status = 'confirmed' AND player1_partner_id IS NOT NULL
+           UNION ALL
+           SELECT LEAST(player2_id, player2_partner_id), GREATEST(player2_id, player2_partner_id),
+                  CASE WHEN winner_id = player2_id THEN 1 ELSE 0 END
+           FROM playoff_matches
+           WHERE league_id = $3 AND status = 'confirmed' AND player2_partner_id IS NOT NULL
+         ) pair_results
+         JOIN users ua ON ua.id = p_a
+         JOIN users ub ON ub.id = p_b
+         LEFT JOIN user_sports ra ON ra.user_id = p_a AND ra.sport = $1 AND ra.format = $2
+         LEFT JOIN user_sports rb ON rb.user_id = p_b AND rb.sport = $1 AND rb.format = $2
+         GROUP BY p_a, p_b, ua.username, ub.username, ra.rating, rb.rating
+         ORDER BY wins DESC, avg_rating DESC`,
+        [leagueData.sport, leagueData.format, leagueId]
+      );
+      pairLeaderboard = pairResult.rows;
+    }
+
+    res.status(200).json({ league: leagueData, leaderboard: leaderboard.rows, pairLeaderboard });
   } catch (err) {
     console.error('League detail error:', err);
     res.status(500).json({ error: 'Something went wrong fetching league details.' });
   }
 });
+
+// ---------- Doubles team-building helpers ----------
+
+// Global (non-tiered) zig-zag pairing across the whole field, used for
+// host_auto knockout brackets: highest rated with lowest, 2nd-highest with
+// 2nd-lowest, etc. — same balancing idea as the round-robin tier algorithm,
+// just applied across the entire qualifying pool instead of per-tier.
+function zigZagPairTeams(sortedMembersDesc) {
+  const teams = [];
+  let lo = 0;
+  let hi = sortedMembersDesc.length - 1;
+  while (lo < hi) {
+    const a = sortedMembersDesc[lo];
+    const b = sortedMembersDesc[hi];
+    teams.push({
+      player1: a,
+      player2: b,
+      avgRating: (parseFloat(a.rating) + parseFloat(b.rating)) / 2,
+    });
+    lo++;
+    hi--;
+  }
+  return teams;
+}
+
+// Builds teams from confirmed league_members partnerships. Throws a
+// user-facing error string if any member lacks a confirmed partner.
+function buildTeamsFromConfirmedPairs(members) {
+  const byId = new Map(members.map((m) => [m.id, m]));
+  const seen = new Set();
+  const teams = [];
+  const unpaired = [];
+
+  for (const m of members) {
+    if (seen.has(m.id)) continue;
+    if (m.partner_status !== 'confirmed' || !m.partner_id || !byId.has(m.partner_id)) {
+      unpaired.push(m.id);
+      continue;
+    }
+    const partner = byId.get(m.partner_id);
+    seen.add(m.id);
+    seen.add(partner.id);
+    teams.push({
+      player1: m,
+      player2: partner,
+      avgRating: (parseFloat(m.rating) + parseFloat(partner.rating)) / 2,
+    });
+  }
+
+  if (unpaired.length > 0) {
+    const err = new Error('Not everyone has a confirmed partner yet. All players must be paired before the schedule/bracket can be generated.');
+    err.code = 'UNPAIRED_MEMBERS';
+    throw err;
+  }
+
+  return teams;
+}
+
+// Resolves the doubles teams for a league, branching on partner_mode.
+function resolveDoublesTeams(league, members) {
+  if (league.partner_mode === 'host_auto') {
+    const sorted = [...members].sort((a, b) => parseFloat(b.rating) - parseFloat(a.rating));
+    return zigZagPairTeams(sorted);
+  }
+  return buildTeamsFromConfirmedPairs(members);
+}
 
 // ---------- GENERATE SCHEDULE (host only, once, unless schedule was cleared) ----------
 router.post('/:id/generate-schedule', async (req, res) => {
@@ -640,7 +1010,7 @@ router.post('/:id/generate-schedule', async (req, res) => {
     }
 
     const membersResult = await pool.query(
-      `SELECT u.id, us.rating
+      `SELECT u.id, us.rating, lm.partner_id, lm.partner_status
        FROM league_members lm
        JOIN users u ON u.id = lm.user_id
        JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
@@ -661,10 +1031,17 @@ router.post('/:id/generate-schedule', async (req, res) => {
 
     let scheduledMatches = [];
 
-    if (league.schedule_type === 'matches_per_player' && league.format === 'singles') {
-      scheduledMatches = generateNearestRatingSchedule(members, league.matches_per_player);
-    } else {
-      scheduledMatches = generateRoundRobinSchedule(members, league.format);
+    try {
+      if (league.schedule_type === 'matches_per_player' && league.format === 'singles') {
+        scheduledMatches = generateNearestRatingSchedule(members, league.matches_per_player);
+      } else {
+        scheduledMatches = generateRoundRobinSchedule(league, members);
+      }
+    } catch (buildErr) {
+      if (buildErr.code === 'UNPAIRED_MEMBERS') {
+        return res.status(400).json({ error: buildErr.message });
+      }
+      throw buildErr;
     }
 
     for (const m of scheduledMatches) {
@@ -692,7 +1069,7 @@ async function generateKnockoutBracket(req, res, league) {
   }
 
   const membersResult = await pool.query(
-    `SELECT u.id, us.rating
+    `SELECT u.id, us.rating, lm.partner_id, lm.partner_status
      FROM league_members lm
      JOIN users u ON u.id = lm.user_id
      JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
@@ -702,23 +1079,75 @@ async function generateKnockoutBracket(req, res, league) {
   );
   const members = membersResult.rows;
 
-  if (!isPowerOfTwo(members.length) || members.length < 2) {
+  if (league.format === 'singles') {
+    if (!isPowerOfTwo(members.length) || members.length < 2) {
+      return res.status(400).json({
+        error: `Knockout leagues need an exact power-of-two number of players (2, 4, 8, 16...). Currently has ${members.length}.`,
+      });
+    }
+
+    const size = members.length;
+    const seedOrder = generateSeedOrder(size);
+    const totalRounds = Math.log2(size);
+
+    for (let i = 0; i < seedOrder.length; i += 2) {
+      const seedA = seedOrder[i];
+      const seedB = seedOrder[i + 1];
+      await pool.query(
+        `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, player2_id, status)
+         VALUES ($1, 1, $2, $3, $4, 'ready')`,
+        [leagueId, i / 2 + 1, members[seedA - 1].id, members[seedB - 1].id]
+      );
+    }
+
+    for (let round = 2; round <= totalRounds; round++) {
+      const matchesInRound = size / Math.pow(2, round);
+      for (let pos = 1; pos <= matchesInRound; pos++) {
+        await pool.query(
+          `INSERT INTO playoff_matches (league_id, round_number, position, status)
+           VALUES ($1, $2, $3, 'pending')`,
+          [leagueId, round, pos]
+        );
+      }
+    }
+
+    return res.status(201).json({ message: 'Bracket generated.', matchCount: seedOrder.length / 2 });
+  }
+
+  // Doubles: resolve teams first, then bracket them exactly like singles but
+  // with each "seed" being a team (player + partner).
+  let teams;
+  try {
+    teams = resolveDoublesTeams(league, members);
+  } catch (buildErr) {
+    if (buildErr.code === 'UNPAIRED_MEMBERS') {
+      return res.status(400).json({ error: buildErr.message });
+    }
+    throw buildErr;
+  }
+
+  teams.sort((a, b) => b.avgRating - a.avgRating);
+
+  if (!isPowerOfTwo(teams.length) || teams.length < 2) {
     return res.status(400).json({
-      error: `Knockout leagues need an exact power-of-two number of players (2, 4, 8, 16...). Currently has ${members.length}.`,
+      error: `Knockout doubles leagues need an exact power-of-two number of teams (2, 4, 8, 16...). Currently has ${teams.length} team(s) — ${members.length} player(s).`,
     });
   }
 
-  const size = members.length;
+  const size = teams.length;
   const seedOrder = generateSeedOrder(size);
   const totalRounds = Math.log2(size);
 
   for (let i = 0; i < seedOrder.length; i += 2) {
     const seedA = seedOrder[i];
     const seedB = seedOrder[i + 1];
+    const teamA = teams[seedA - 1];
+    const teamB = teams[seedB - 1];
     await pool.query(
-      `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, player2_id, status)
-       VALUES ($1, 1, $2, $3, $4, 'ready')`,
-      [leagueId, i / 2 + 1, members[seedA - 1].id, members[seedB - 1].id]
+      `INSERT INTO playoff_matches
+        (league_id, round_number, position, player1_id, player1_partner_id, player2_id, player2_partner_id, status)
+       VALUES ($1, 1, $2, $3, $4, $5, $6, 'ready')`,
+      [leagueId, i / 2 + 1, teamA.player1.id, teamA.player2.id, teamB.player1.id, teamB.player2.id]
     );
   }
 
@@ -812,9 +1241,6 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
       if (finalScheduleType === 'matches_per_player' && (!matchesPerPlayer || matchesPerPlayer < 1)) {
         return res.status(400).json({ error: 'Please specify how many matches each player should play.' });
       }
-      if (finalScheduleType === 'knockout' && league.format !== 'singles') {
-        return res.status(400).json({ error: 'Knockout format is currently only supported for singles leagues.' });
-      }
       await pool.query(
         'UPDATE leagues SET schedule_type = $1, matches_per_player = $2 WHERE id = $3',
         [finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null, leagueId]
@@ -843,7 +1269,7 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
     }
 
     const membersResult = await pool.query(
-      `SELECT u.id, us.rating
+      `SELECT u.id, us.rating, lm.partner_id, lm.partner_status
        FROM league_members lm
        JOIN users u ON u.id = lm.user_id
        JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
@@ -863,10 +1289,17 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
     }
 
     let scheduledMatches = [];
-    if (refreshedLeague.schedule_type === 'matches_per_player' && refreshedLeague.format === 'singles') {
-      scheduledMatches = generateNearestRatingSchedule(members, refreshedLeague.matches_per_player);
-    } else {
-      scheduledMatches = generateRoundRobinSchedule(members, refreshedLeague.format);
+    try {
+      if (refreshedLeague.schedule_type === 'matches_per_player' && refreshedLeague.format === 'singles') {
+        scheduledMatches = generateNearestRatingSchedule(members, refreshedLeague.matches_per_player);
+      } else {
+        scheduledMatches = generateRoundRobinSchedule(refreshedLeague, members);
+      }
+    } catch (buildErr) {
+      if (buildErr.code === 'UNPAIRED_MEMBERS') {
+        return res.status(400).json({ error: buildErr.message });
+      }
+      throw buildErr;
     }
 
     for (const m of scheduledMatches) {
@@ -885,13 +1318,90 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
   }
 });
 
-function generateRoundRobinSchedule(members, format) {
+// NOTE: signature changed from (members, format) to (league, members) so it
+// has access to partner_mode for doubles leagues.
+function generateRoundRobinSchedule(league, members) {
+  const format = league.format;
+
+  if (format === 'singles') {
+    return generateSinglesRoundRobin(members);
+  }
+
+  // Doubles: resolve teams (host_auto -> zig-zag by rating tier; otherwise
+  // -> confirmed partner pairs), then tier the TEAMS the same way singles
+  // tiers players, and round-robin within each tier.
+  let teams;
+  if (league.partner_mode === 'host_auto') {
+    // Preserve original behavior exactly: tier players first (groups of 4),
+    // then zig-zag pair within each tier, then round-robin the resulting
+    // teams within that same tier.
+    return generateHostAutoDoublesRoundRobin(members);
+  }
+  teams = buildTeamsFromConfirmedPairs(members);
+  teams.sort((a, b) => b.avgRating - a.avgRating);
+
+  const tiers = [];
+  for (let i = 0; i < teams.length; i += TIER_SIZE) {
+    tiers.push(teams.slice(i, i + TIER_SIZE));
+  }
+  while (tiers.length > 1 && tiers[tiers.length - 1].length < 2) {
+    const leftover = tiers.pop();
+    tiers[tiers.length - 1] = tiers[tiers.length - 1].concat(leftover);
+  }
+
+  const scheduledMatches = [];
+  tiers.forEach((tier, tierIndex) => {
+    const tierNumber = tierIndex + 1;
+    for (let i = 0; i < tier.length; i++) {
+      for (let j = i + 1; j < tier.length; j++) {
+        scheduledMatches.push({
+          tierNumber,
+          player1Id: tier[i].player1.id,
+          player1PartnerId: tier[i].player2.id,
+          player2Id: tier[j].player1.id,
+          player2PartnerId: tier[j].player2.id,
+        });
+      }
+    }
+  });
+
+  return scheduledMatches;
+}
+
+function generateSinglesRoundRobin(members) {
   const tiers = [];
   for (let i = 0; i < members.length; i += TIER_SIZE) {
     tiers.push(members.slice(i, i + TIER_SIZE));
   }
 
-  const minTierSize = format === 'doubles' ? 4 : 2;
+  const scheduledMatches = [];
+  tiers.forEach((tier, tierIndex) => {
+    const tierNumber = tierIndex + 1;
+    for (let i = 0; i < tier.length; i++) {
+      for (let j = i + 1; j < tier.length; j++) {
+        scheduledMatches.push({
+          tierNumber,
+          player1Id: tier[i].id,
+          player1PartnerId: null,
+          player2Id: tier[j].id,
+          player2PartnerId: null,
+        });
+      }
+    }
+  });
+
+  return scheduledMatches;
+}
+
+// Original host_auto doubles behavior, unchanged from before this feature:
+// tier by TIER_SIZE, zig-zag pair within tier, round-robin the two teams.
+function generateHostAutoDoublesRoundRobin(members) {
+  const tiers = [];
+  for (let i = 0; i < members.length; i += TIER_SIZE) {
+    tiers.push(members.slice(i, i + TIER_SIZE));
+  }
+
+  const minTierSize = 4;
   while (tiers.length > 1 && tiers[tiers.length - 1].length < minTierSize) {
     const leftover = tiers.pop();
     tiers[tiers.length - 1] = tiers[tiers.length - 1].concat(leftover);
@@ -901,41 +1411,26 @@ function generateRoundRobinSchedule(members, format) {
 
   tiers.forEach((tier, tierIndex) => {
     const tierNumber = tierIndex + 1;
+    if (tier.length < 4) return;
 
-    if (format === 'singles') {
-      for (let i = 0; i < tier.length; i++) {
-        for (let j = i + 1; j < tier.length; j++) {
-          scheduledMatches.push({
-            tierNumber,
-            player1Id: tier[i].id,
-            player1PartnerId: null,
-            player2Id: tier[j].id,
-            player2PartnerId: null,
-          });
-        }
-      }
-    } else {
-      if (tier.length < 4) return;
+    const teams = [];
+    let lo = 0;
+    let hi = tier.length - 1;
+    while (lo < hi) {
+      teams.push([tier[lo], tier[hi]]);
+      lo++;
+      hi--;
+    }
 
-      const teams = [];
-      let lo = 0;
-      let hi = tier.length - 1;
-      while (lo < hi) {
-        teams.push([tier[lo], tier[hi]]);
-        lo++;
-        hi--;
-      }
-
-      for (let i = 0; i < teams.length; i++) {
-        for (let j = i + 1; j < teams.length; j++) {
-          scheduledMatches.push({
-            tierNumber,
-            player1Id: teams[i][0].id,
-            player1PartnerId: teams[i][1].id,
-            player2Id: teams[j][0].id,
-            player2PartnerId: teams[j][1].id,
-          });
-        }
+    for (let i = 0; i < teams.length; i++) {
+      for (let j = i + 1; j < teams.length; j++) {
+        scheduledMatches.push({
+          tierNumber,
+          player1Id: teams[i][0].id,
+          player1PartnerId: teams[i][1].id,
+          player2Id: teams[j][0].id,
+          player2PartnerId: teams[j][1].id,
+        });
       }
     }
   });
@@ -1106,7 +1601,7 @@ router.put('/:id', async (req, res) => {
   const leagueId = req.params.id;
   const {
     name, area, seasonStart, seasonEnd, academyName, isPrivate, hostEntersScores,
-    registrationStart, registrationEnd,
+    registrationStart, registrationEnd, partnerMode,
   } = req.body;
 
   try {
@@ -1144,6 +1639,24 @@ router.put('/:id', async (req, res) => {
     if (registrationStart != null && registrationEnd != null &&
         new Date(registrationStart) > new Date(registrationEnd)) {
       return res.status(400).json({ error: 'Registration start must be before registration end.' });
+    }
+
+    if (partnerMode !== undefined) {
+      if (league.format !== 'doubles') {
+        return res.status(400).json({ error: 'Partner mode only applies to doubles leagues.' });
+      }
+      if (!VALID_PARTNER_MODES.includes(partnerMode)) {
+        return res.status(400).json({ error: 'Invalid partner mode.' });
+      }
+      const anyPaired = await pool.query(
+        `SELECT id FROM league_members WHERE league_id = $1 AND partner_status IS NOT NULL LIMIT 1`,
+        [leagueId]
+      );
+      if (anyPaired.rows.length > 0) {
+        return res.status(400).json({ error: 'Cannot change partner mode after partnerships have started forming. Unpair everyone first.' });
+      }
+      updates.push(`partner_mode = $${idx++}`);
+      params.push(partnerMode);
     }
 
     if (hostEntersScores !== undefined) {
