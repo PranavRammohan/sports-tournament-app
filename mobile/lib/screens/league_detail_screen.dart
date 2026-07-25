@@ -55,6 +55,12 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     return _schedule.any((f) => f['match_status'] == 'confirmed');
   }
 
+  // Tennis is scored in "Sets"; everything else in this app (badminton,
+  // table tennis, pickleball) is scored in "Games" — used to label the
+  // report/edit-score dialogs correctly per sport.
+  String get _unitLabel =>
+      (_league != null && _league!['sport'] == 'tennis') ? 'Set' : 'Game';
+
   // Returns a user-facing message if joining is currently blocked by the
   // league's optional registration window, or null if joining is allowed
   // (which is always the case when the host hasn't set a window at all).
@@ -441,7 +447,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   Future<void> _reportKnockoutMatch(int matchId) async {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (ctx) => const _SelfReportSetsDialog(),
+      builder: (ctx) => _SelfReportSetsDialog(unitLabel: _unitLabel),
     );
     if (result == null) return;
 
@@ -490,8 +496,11 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   ) async {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (ctx) =>
-          _HostReportSetsDialog(player1Name: p1Name, player2Name: p2Name),
+      builder: (ctx) => _HostReportSetsDialog(
+        player1Name: p1Name,
+        player2Name: p2Name,
+        unitLabel: _unitLabel,
+      ),
     );
     if (result == null) return;
 
@@ -745,81 +754,6 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     } catch (err) {
       initialSets = null;
     }
-    Future<void> _editMyReport(dynamic f) async {
-      final iAmTeam1 =
-          f['player1_id'] == _currentUserId ||
-          f['player1_partner_id'] == _currentUserId;
-      final team2Name = f['player2_partner_username'] != null
-          ? '${f['player2_username']} & ${f['player2_partner_username']}'
-          : f['player2_username'];
-      final team1Name = f['player1_partner_username'] != null
-          ? '${f['player1_username']} & ${f['player1_partner_username']}'
-          : f['player1_username'];
-      final opponentName = iAmTeam1 ? team2Name : team1Name;
-
-      List<Map<String, int>>? initialSets;
-      try {
-        if (f['set_scores'] != null) {
-          final List raw = jsonDecode(f['set_scores']);
-          initialSets = raw
-              .map<Map<String, int>>(
-                (s) => {
-                  'me': iAmTeam1 ? s['me'] as int : s['opponent'] as int,
-                  'opponent': iAmTeam1 ? s['opponent'] as int : s['me'] as int,
-                },
-              )
-              .toList();
-        }
-      } catch (err) {
-        initialSets = null;
-      }
-
-      final result = await showDialog<Map<String, dynamic>>(
-        context: context,
-        builder: (ctx) => _SelfReportSetsDialog(
-          title: 'Edit My Report',
-          opponentName: opponentName,
-          initialSets: initialSets,
-        ),
-      );
-      if (result == null) return;
-
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        final token = prefs.getString('authToken');
-        final response = await http.put(
-          Uri.parse('$baseApiUrl/matches/${f['match_id']}/edit-report'),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $token',
-          },
-          body: jsonEncode(result),
-        );
-        final data = jsonDecode(response.body);
-        if (!mounted) return;
-        if (response.statusCode == 200) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Report updated.'),
-              backgroundColor: AppColors.success,
-            ),
-          );
-          _loadAll();
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(data['error'] ?? 'Could not update report.'),
-              backgroundColor: AppColors.danger,
-            ),
-          );
-        }
-      } catch (err) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Network error.')));
-      }
-    }
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -827,6 +761,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         player1Name: team1Name,
         player2Name: team2Name,
         title: 'Edit Score',
+        unitLabel: _unitLabel,
         initialSets: initialSets,
       ),
     );
@@ -862,6 +797,83 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(data['error'] ?? 'Could not update score.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    }
+  }
+
+  Future<void> _editMyReport(dynamic f) async {
+    final iAmTeam1 =
+        f['player1_id'] == _currentUserId ||
+        f['player1_partner_id'] == _currentUserId;
+    final team2Name = f['player2_partner_username'] != null
+        ? '${f['player2_username']} & ${f['player2_partner_username']}'
+        : f['player2_username'];
+    final team1Name = f['player1_partner_username'] != null
+        ? '${f['player1_username']} & ${f['player1_partner_username']}'
+        : f['player1_username'];
+    final opponentName = iAmTeam1 ? team2Name : team1Name;
+
+    List<Map<String, int>>? initialSets;
+    try {
+      if (f['set_scores'] != null) {
+        final List raw = jsonDecode(f['set_scores']);
+        initialSets = raw
+            .map<Map<String, int>>(
+              (s) => {
+                'me': iAmTeam1 ? s['me'] as int : s['opponent'] as int,
+                'opponent': iAmTeam1 ? s['opponent'] as int : s['me'] as int,
+              },
+            )
+            .toList();
+      }
+    } catch (err) {
+      initialSets = null;
+    }
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => _SelfReportSetsDialog(
+        title: 'Edit My Report',
+        opponentName: opponentName,
+        unitLabel: _unitLabel,
+        initialSets: initialSets,
+      ),
+    );
+    if (result == null) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final response = await http.put(
+        Uri.parse('$baseApiUrl/matches/${f['match_id']}/edit-report'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode(result),
+      );
+      final data = jsonDecode(response.body);
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Report updated.'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadAll();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not update report.'),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -2309,20 +2321,45 @@ class _SetScore {
 }
 
 class _SelfReportSetsDialog extends StatefulWidget {
-  const _SelfReportSetsDialog();
+  final String title;
+  final String opponentName;
+  final String unitLabel;
+  final List<Map<String, int>>? initialSets;
+
+  const _SelfReportSetsDialog({
+    this.title = 'Report Result',
+    this.opponentName = 'Opponent',
+    this.unitLabel = 'Set',
+    this.initialSets,
+  });
 
   @override
   State<_SelfReportSetsDialog> createState() => _SelfReportSetsDialogState();
 }
 
 class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
-  final List<_SetScore> _sets = [_SetScore()];
+  late List<_SetScore> _sets;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialSets != null && widget.initialSets!.isNotEmpty) {
+      _sets = widget.initialSets!.map((s) {
+        final set = _SetScore();
+        set.myScore.text = '${s['me']}';
+        set.opponentScore.text = '${s['opponent']}';
+        return set;
+      }).toList();
+    } else {
+      _sets = [_SetScore()];
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      title: const Text('Report Result'),
+      title: Text(widget.title),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -2339,7 +2376,7 @@ class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
                         controller: set.myScore,
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
-                          labelText: 'Set ${index + 1} — You',
+                          labelText: '${widget.unitLabel} ${index + 1} — You',
                           isDense: true,
                         ),
                       ),
@@ -2352,12 +2389,20 @@ class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
                       child: TextField(
                         controller: set.opponentScore,
                         keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                          labelText: 'Opponent',
+                        decoration: InputDecoration(
+                          labelText: widget.opponentName,
                           isDense: true,
                         ),
                       ),
                     ),
+                    if (_sets.length > 1)
+                      IconButton(
+                        icon: const Icon(
+                          Icons.remove_circle_outline,
+                          color: AppColors.danger,
+                        ),
+                        onPressed: () => setState(() => _sets.removeAt(index)),
+                      ),
                   ],
                 ),
               );
@@ -2365,7 +2410,7 @@ class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
             TextButton.icon(
               onPressed: () => setState(() => _sets.add(_SetScore())),
               icon: const Icon(Icons.add),
-              label: const Text('Add Set'),
+              label: Text('Add ${widget.unitLabel}'),
             ),
           ],
         ),
@@ -2411,12 +2456,14 @@ class _HostReportSetsDialog extends StatefulWidget {
   final String player1Name;
   final String player2Name;
   final String title;
+  final String unitLabel;
   final List<Map<String, int>>? initialSets;
 
   const _HostReportSetsDialog({
     required this.player1Name,
     required this.player2Name,
     this.title = 'Enter Score',
+    this.unitLabel = 'Set',
     this.initialSets,
   });
 
@@ -2463,7 +2510,8 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
                         controller: set.myScore,
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
-                          labelText: 'Set ${index + 1} — ${widget.player1Name}',
+                          labelText:
+                              '${widget.unitLabel} ${index + 1} — ${widget.player1Name}',
                           isDense: true,
                         ),
                       ),
@@ -2482,6 +2530,14 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
                         ),
                       ),
                     ),
+                    if (_sets.length > 1)
+                      IconButton(
+                        icon: const Icon(
+                          Icons.remove_circle_outline,
+                          color: AppColors.danger,
+                        ),
+                        onPressed: () => setState(() => _sets.removeAt(index)),
+                      ),
                   ],
                 ),
               );
@@ -2489,7 +2545,7 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
             TextButton.icon(
               onPressed: () => setState(() => _sets.add(_SetScore())),
               icon: const Icon(Icons.add),
-              label: const Text('Add Set'),
+              label: Text('Add ${widget.unitLabel}'),
             ),
           ],
         ),

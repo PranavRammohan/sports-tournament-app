@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('./db');
+const { calculateNewRatings } = require('./ratingEngine');
 
 // Generates standard tournament bracket seed order for any power-of-two size,
 // e.g. size=8 -> [1,8,4,5,2,7,3,6] (grouped in pairs: 1v8, 4v5, 2v7, 3v6),
@@ -22,6 +23,94 @@ function generateSeedOrder(size) {
 
 function isPowerOfTwo(n) {
   return n > 0 && (n & (n - 1)) === 0;
+}
+
+async function getRating(userId, sport, format) {
+  const result = await pool.query(
+    'SELECT rating FROM user_sports WHERE user_id = $1 AND sport = $2 AND format = $3',
+    [userId, sport, format]
+  );
+  if (result.rows.length === 0) return null;
+  return parseFloat(result.rows[0].rating);
+}
+
+async function updateUserSportsRow(userId, sport, format, newRating, won) {
+  if (sport === 'table_tennis') {
+    await pool.query(
+      `UPDATE user_sports SET rating = $1, matches_played = matches_played + 1,
+       wins = wins + $2, losses = losses + $3
+       WHERE user_id = $4 AND sport = $5`,
+      [newRating, won ? 1 : 0, won ? 0 : 1, userId, sport]
+    );
+  } else {
+    await pool.query(
+      `UPDATE user_sports SET rating = $1, matches_played = matches_played + 1,
+       wins = wins + $2, losses = losses + $3
+       WHERE user_id = $4 AND sport = $5 AND format = $6`,
+      [newRating, won ? 1 : 0, won ? 0 : 1, userId, sport, format]
+    );
+  }
+}
+
+// Applies rating changes for a confirmed playoff match (singles only — no
+// partners), stores the applied changes on the row for future
+// reversal/editing, then advances the winner into the next round.
+async function finalizePlayoffMatch(match, league) {
+  const { sport, format } = league;
+
+  const rating1 = await getRating(match.player1_id, sport, format);
+  const rating2 = await getRating(match.player2_id, sport, format);
+  const team1Won = match.winner_id === match.player1_id;
+
+  const { newRating1, newRating2 } = calculateNewRatings(
+    sport, rating1, rating2, team1Won, match.player1_units, match.player2_units
+  );
+
+  const updatedRating1 = Math.round(newRating1 * 10) / 10;
+  const updatedRating2 = Math.round(newRating2 * 10) / 10;
+  const change1 = Math.round((updatedRating1 - rating1) * 100) / 100;
+  const change2 = Math.round((updatedRating2 - rating2) * 100) / 100;
+
+  await updateUserSportsRow(match.player1_id, sport, format, updatedRating1, team1Won);
+  await updateUserSportsRow(match.player2_id, sport, format, updatedRating2, !team1Won);
+
+  await pool.query(
+    `UPDATE playoff_matches SET status = 'confirmed',
+      player1_rating_change = $1, player2_rating_change = $2
+     WHERE id = $3`,
+    [change1, change2, match.id]
+  );
+
+  await advanceWinner({ ...match, status: 'confirmed' });
+}
+
+// Undoes the rating/stat effects of a previously confirmed playoff match —
+// used when the host edits a confirmed score, or cancels the whole bracket.
+async function reversePlayoffEffects(match, league) {
+  const { sport, format } = league;
+  const team1Won = match.winner_id === match.player1_id;
+
+  const reverseOne = async (playerId, ratingChange, won) => {
+    if (playerId == null || ratingChange == null) return;
+    if (sport === 'table_tennis') {
+      await pool.query(
+        `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
+         wins = wins - $2, losses = losses - $3
+         WHERE user_id = $4 AND sport = $5`,
+        [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport]
+      );
+    } else {
+      await pool.query(
+        `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
+         wins = wins - $2, losses = losses - $3
+         WHERE user_id = $4 AND sport = $5 AND format = $6`,
+        [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport, format]
+      );
+    }
+  };
+
+  await reverseOne(match.player1_id, match.player1_rating_change, team1Won);
+  await reverseOne(match.player2_id, match.player2_rating_change, !team1Won);
 }
 
 // ---------- GENERATE PLAYOFF BRACKET (host only, once, singles only) ----------
@@ -72,7 +161,6 @@ router.post('/:leagueId/generate', async (req, res) => {
     const seedOrder = generateSeedOrder(qualifierCount);
     const totalRounds = Math.log2(qualifierCount);
 
-    // Group seedOrder into round-1 pairs: [s1,s2, s3,s4, ...] -> (s1 vs s2), (s3 vs s4), ...
     for (let i = 0; i < seedOrder.length; i += 2) {
       const seedA = seedOrder[i];
       const seedB = seedOrder[i + 1];
@@ -102,10 +190,8 @@ router.post('/:leagueId/generate', async (req, res) => {
 });
 
 // ---------- CANCEL/REMOVE PLAYOFF BRACKET (host only) ----------
-// Lets the host undo starting playoffs by mistake (e.g. before the regular
-// season is actually finished). Since playoff matches don't affect ratings —
-// they only track bracket progress — this is a simple, safe delete with no
-// rating/points reversal needed.
+// Reverses rating effects from any already-confirmed matches first, so
+// cancelling a mistakenly-started bracket cleanly undoes everything.
 router.delete('/:leagueId', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.leagueId;
@@ -119,6 +205,14 @@ router.delete('/:leagueId', async (req, res) => {
 
     if (league.created_by !== userId) {
       return res.status(403).json({ error: 'Only the league host can remove the playoff bracket.' });
+    }
+
+    const confirmedMatches = await pool.query(
+      `SELECT * FROM playoff_matches WHERE league_id = $1 AND status = 'confirmed'`,
+      [leagueId]
+    );
+    for (const match of confirmedMatches.rows) {
+      await reversePlayoffEffects(match, league);
     }
 
     const result = await pool.query('DELETE FROM playoff_matches WHERE league_id = $1', [leagueId]);
@@ -229,9 +323,6 @@ router.post('/match/:matchId/report', async (req, res) => {
 });
 
 // ---------- REPORTER EDITS THEIR OWN PENDING PLAYOFF REPORT ----------
-// Lets the person who reported a result fix a mistake themselves, before
-// their opponent has confirmed or rejected it — an alternative to having
-// the opponent reject and forcing a full re-report.
 router.put('/match/:matchId/edit-report', async (req, res) => {
   const userId = req.userId;
   const matchId = req.params.matchId;
@@ -306,14 +397,14 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
     const winnerId = player1Won ? match.player1_id : match.player2_id;
 
     await pool.query(
-      `UPDATE playoff_matches SET status = 'confirmed', reported_by = $1,
+      `UPDATE playoff_matches SET reported_by = $1,
         player1_units = $2, player2_units = $3, winner_id = $4, set_scores = $5
        WHERE id = $6`,
       [userId, player1Units, player2Units, winnerId, JSON.stringify(setScores || []), matchId]
     );
 
-    const updatedMatch = { ...match, winner_id: winnerId };
-    await advanceWinner(updatedMatch);
+    const updatedMatchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
+    await finalizePlayoffMatch(updatedMatchResult.rows[0], league);
 
     res.status(200).json({ message: 'Match confirmed.' });
   } catch (err) {
@@ -323,12 +414,10 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
 });
 
 // ---------- HOST EDITS A CONFIRMED PLAYOFF MATCH SCORE ----------
-// Since playoff results don't affect ratings, this is simpler than the
-// regular tournament version — but if the winner changes, and that winner
-// has already advanced into the next round, we need to update that slot too.
-// If the next round match has already been reported/confirmed, we block the
-// edit rather than risk silently corrupting the bracket — the host should
-// use "Cancel Playoffs" and restart in that case.
+// Reverses the old rating/stat effects, updates the score, then reapplies
+// ratings fresh from current standings. If the winner changes and the next
+// round has already been played, editing is blocked — the host should
+// cancel and restart the bracket instead of risking a corrupted cascade.
 router.put('/match/:matchId/edit-score', async (req, res) => {
   const userId = req.userId;
   const matchId = req.params.matchId;
@@ -373,14 +462,33 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
             error: 'The next round has already been played with the old winner. Cancel and restart the playoffs to fix this.',
           });
         }
+      }
+    }
 
+    // Reverse the old rating effects before touching anything else.
+    await reversePlayoffEffects(match, league);
+
+    await pool.query(
+      `UPDATE playoff_matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4
+       WHERE id = $5`,
+      [player1Units, player2Units, newWinnerId, JSON.stringify(setScores || []), matchId]
+    );
+
+    if (winnerChanged) {
+      const nextRound = match.round_number + 1;
+      const nextPosition = Math.ceil(match.position / 2);
+      const nextMatchResult = await pool.query(
+        'SELECT * FROM playoff_matches WHERE league_id = $1 AND round_number = $2 AND position = $3',
+        [match.league_id, nextRound, nextPosition]
+      );
+      if (nextMatchResult.rows.length > 0) {
+        const nextMatch = nextMatchResult.rows[0];
         const isUpperSlot = match.position % 2 === 1;
         if (isUpperSlot) {
           await pool.query('UPDATE playoff_matches SET player1_id = $1 WHERE id = $2', [newWinnerId, nextMatch.id]);
         } else {
           await pool.query('UPDATE playoff_matches SET player2_id = $1 WHERE id = $2', [newWinnerId, nextMatch.id]);
         }
-
         const refreshedNext = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [nextMatch.id]);
         const rn = refreshedNext.rows[0];
         await pool.query(
@@ -390,14 +498,30 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
       }
     }
 
+    // Reapply ratings fresh, based on current (post-reversal) standings.
+    const updatedMatchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
+    const updatedMatch = updatedMatchResult.rows[0];
+
+    const rating1 = await getRating(updatedMatch.player1_id, league.sport, league.format);
+    const rating2 = await getRating(updatedMatch.player2_id, league.sport, league.format);
+    const team1Won = updatedMatch.winner_id === updatedMatch.player1_id;
+    const { newRating1, newRating2 } = calculateNewRatings(
+      league.sport, rating1, rating2, team1Won, updatedMatch.player1_units, updatedMatch.player2_units
+    );
+    const updatedRating1 = Math.round(newRating1 * 10) / 10;
+    const updatedRating2 = Math.round(newRating2 * 10) / 10;
+    const change1 = Math.round((updatedRating1 - rating1) * 100) / 100;
+    const change2 = Math.round((updatedRating2 - rating2) * 100) / 100;
+
+    await updateUserSportsRow(updatedMatch.player1_id, league.sport, league.format, updatedRating1, team1Won);
+    await updateUserSportsRow(updatedMatch.player2_id, league.sport, league.format, updatedRating2, !team1Won);
     await pool.query(
-      `UPDATE playoff_matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4
-       WHERE id = $5`,
-      [player1Units, player2Units, newWinnerId, JSON.stringify(setScores || []), matchId]
+      `UPDATE playoff_matches SET player1_rating_change = $1, player2_rating_change = $2 WHERE id = $3`,
+      [change1, change2, matchId]
     );
 
     res.status(200).json({
-      message: 'Score updated.',
+      message: 'Score updated and ratings recalculated.',
       warning: winnerChanged
         ? 'The winner changed — the next round fixture has been updated accordingly.'
         : null,
@@ -430,9 +554,10 @@ router.post('/match/:matchId/confirm', async (req, res) => {
       return res.status(400).json({ error: 'You cannot confirm your own report.' });
     }
 
-    await pool.query(`UPDATE playoff_matches SET status = 'confirmed' WHERE id = $1`, [matchId]);
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+    const league = leagueResult.rows[0];
 
-    await advanceWinner(match);
+    await finalizePlayoffMatch(match, league);
 
     res.status(200).json({ message: 'Match confirmed.' });
   } catch (err) {

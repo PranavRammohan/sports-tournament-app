@@ -32,10 +32,6 @@ function generateSeedOrder(size) {
   return result;
 }
 
-// Checks whether a user's rating (for the league's sport/format) falls
-// within the league's optional min/max rating gate. Returns null if allowed,
-// or an error message string if not. Leagues with no min/max set (both null)
-// are open to everyone.
 async function checkRatingEligibility(league, userId) {
   if (league.min_rating == null && league.max_rating == null) {
     return null;
@@ -59,9 +55,6 @@ async function checkRatingEligibility(league, userId) {
   return null;
 }
 
-// Checks whether right now falls within the league's optional registration
-// window. Returns null if joining is currently allowed, or an error message
-// string if not. A league with both dates null has no restriction at all.
 function checkRegistrationWindow(league) {
   const now = new Date();
 
@@ -405,8 +398,6 @@ router.get('/:id/search-players', async (req, res) => {
 });
 
 // ---------- ADD PLAYER DIRECTLY (host only) ----------
-// Deliberately bypasses both the rating gate and the registration window:
-// this is the host explicitly choosing someone, not an open self-join.
 router.post('/:id/add-player', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.id;
@@ -556,6 +547,9 @@ router.delete('/:id/members/:userId', async (req, res) => {
 });
 
 // ---------- LEAGUE DETAIL + DUAL LEADERBOARD ----------
+// match_stats now includes confirmed playoff matches too (previously only
+// the "matches" table), so knockout leagues show accurate matches-played /
+// wins / losses on the leaderboard instead of always showing 0.
 router.get('/:id', async (req, res) => {
   const leagueId = req.params.id;
 
@@ -593,6 +587,10 @@ router.get('/:id', async (req, res) => {
            SELECT id, league_id, winner_id, player1_partner_id AS player_id FROM matches WHERE status = 'confirmed' AND player1_partner_id IS NOT NULL
            UNION ALL
            SELECT id, league_id, winner_id, player2_partner_id AS player_id FROM matches WHERE status = 'confirmed' AND player2_partner_id IS NOT NULL
+           UNION ALL
+           SELECT id, league_id, winner_id, player1_id AS player_id FROM playoff_matches WHERE status = 'confirmed'
+           UNION ALL
+           SELECT id, league_id, winner_id, player2_id AS player_id FROM playoff_matches WHERE status = 'confirmed'
          ) all_participants
          WHERE league_id = $3
          GROUP BY player_id
@@ -1047,13 +1045,6 @@ function generateNearestRatingSchedule(members, matchesPerPlayer) {
 }
 
 // ---------- GET SCHEDULE (with completion status + contact info) ----------
-// The join now includes 'pending' matches too, not just 'confirmed' — so a
-// reported-but-not-yet-confirmed score shows up on the fixture card (as
-// "Pending" with the reporter's submitted score), and the reporter can edit
-// their own report before their opponent confirms/rejects it. Rejected
-// matches are excluded, since the app already deletes those once a new
-// report is submitted for the same fixture, so at most one non-rejected
-// match exists per scheduled_match_id at any time.
 router.get('/:id/schedule', async (req, res) => {
   const leagueId = req.params.id;
 

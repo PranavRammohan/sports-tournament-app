@@ -28,6 +28,10 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   bool _generating = false;
   bool _cancelling = false;
   bool _hostEntersScores = false;
+  String _sport = '';
+
+  // Tennis is scored in "Sets"; everything else in this app is "Games".
+  String get _unitLabel => _sport == 'tennis' ? 'Set' : 'Game';
 
   @override
   void initState() {
@@ -52,6 +56,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
       final leagueData = jsonDecode(leagueRes.body);
       if (leagueRes.statusCode == 200) {
         _hostEntersScores = leagueData['league']['host_enters_scores'] == true;
+        _sport = leagueData['league']['sport'] ?? '';
       }
 
       final response = await http.get(
@@ -180,7 +185,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   Future<void> _reportMatch(int matchId) async {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (ctx) => _PlayoffReportDialog(),
+      builder: (ctx) => _PlayoffReportDialog(unitLabel: _unitLabel),
     );
     if (result == null) return;
 
@@ -243,6 +248,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
       context: context,
       builder: (ctx) => _PlayoffReportDialog(
         title: 'Edit My Report',
+        unitLabel: _unitLabel,
         initialSets: initialSets,
       ),
     );
@@ -298,6 +304,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
       builder: (ctx) => _HostPlayoffReportDialog(
         player1Name: player1Name,
         player2Name: player2Name,
+        unitLabel: _unitLabel,
       ),
     );
     if (result == null) return;
@@ -366,6 +373,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
         player1Name: p1Name,
         player2Name: p2Name,
         title: 'Edit Score',
+        unitLabel: _unitLabel,
         initialSets: initialSets,
       ),
     );
@@ -794,9 +802,14 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
 
 class _PlayoffReportDialog extends StatefulWidget {
   final String title;
+  final String unitLabel;
   final List<Map<String, int>>? initialSets;
 
-  const _PlayoffReportDialog({this.title = 'Report Result', this.initialSets});
+  const _PlayoffReportDialog({
+    this.title = 'Report Result',
+    this.unitLabel = 'Set',
+    this.initialSets,
+  });
 
   @override
   State<_PlayoffReportDialog> createState() => _PlayoffReportDialogState();
@@ -846,7 +859,7 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
                         controller: set.myScore,
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
-                          labelText: 'Set ${index + 1} — You',
+                          labelText: '${widget.unitLabel} ${index + 1} — You',
                           isDense: true,
                         ),
                       ),
@@ -880,7 +893,7 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
             TextButton.icon(
               onPressed: () => setState(() => _sets.add(_SetScore())),
               icon: const Icon(Icons.add),
-              label: const Text('Add Set'),
+              label: Text('Add ${widget.unitLabel}'),
             ),
           ],
         ),
@@ -931,12 +944,14 @@ class _HostPlayoffReportDialog extends StatefulWidget {
   final String player1Name;
   final String player2Name;
   final String title;
+  final String unitLabel;
   final List<Map<String, int>>? initialSets;
 
   const _HostPlayoffReportDialog({
     required this.player1Name,
     required this.player2Name,
     this.title = 'Enter Score',
+    this.unitLabel = 'Set',
     this.initialSets,
   });
 
@@ -984,7 +999,8 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
                         controller: set.myScore,
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
-                          labelText: 'Set ${index + 1} — ${widget.player1Name}',
+                          labelText:
+                              '${widget.unitLabel} ${index + 1} — ${widget.player1Name}',
                           isDense: true,
                         ),
                       ),
@@ -1018,7 +1034,7 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
             TextButton.icon(
               onPressed: () => setState(() => _sets.add(_SetScore())),
               icon: const Icon(Icons.add),
-              label: const Text('Add Set'),
+              label: Text('Add ${widget.unitLabel}'),
             ),
           ],
         ),
