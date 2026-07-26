@@ -251,7 +251,7 @@ router.get('/mine', async (req, res) => {
        FROM leagues l
        LEFT JOIN league_members lm ON lm.league_id = l.id AND lm.user_id = $1
        WHERE lm.user_id = $1 OR l.created_by = $1
-       ORDER BY (l.status = 'completed') ASC, l.season_start ASC`,
+       ORDER BY l.status ASC, l.season_start ASC`,
       [userId]
     );
     res.status(200).json({ leagues: result.rows });
