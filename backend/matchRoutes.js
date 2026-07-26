@@ -406,21 +406,46 @@ router.get('/pending', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT m.*, l.sport, l.format as league_format,
-              p1.username as player1_username, p1.phone_number as player1_phone,
-              p2.username as player2_username, p2.phone_number as player2_phone,
-              pp1.username as player1_partner_username, pp1.phone_number as player1_partner_phone,
-              pp2.username as player2_partner_username, pp2.phone_number as player2_partner_phone
-       FROM matches m
-       JOIN leagues l ON l.id = m.league_id
-       JOIN users p1 ON p1.id = m.player1_id
-       JOIN users p2 ON p2.id = m.player2_id
-       LEFT JOIN users pp1 ON pp1.id = m.player1_partner_id
-       LEFT JOIN users pp2 ON pp2.id = m.player2_partner_id
-       WHERE m.status = 'pending'
-         AND m.reported_by != $1
-         AND (m.player2_id = $1 OR m.player2_partner_id = $1 OR m.player1_id = $1 OR m.player1_partner_id = $1)
-       ORDER BY m.created_at DESC`,
+      `SELECT * FROM (
+         SELECT m.id, m.league_id, NULL::int as round_number,
+                m.player1_id, m.player2_id, m.player1_partner_id, m.player2_partner_id,
+                m.player1_units, m.player2_units, m.winner_id, m.reported_by, m.set_scores, m.created_at,
+                l.sport, l.format as league_format, l.name as league_name,
+                p1.username as player1_username, p1.phone_number as player1_phone,
+                p2.username as player2_username, p2.phone_number as player2_phone,
+                pp1.username as player1_partner_username, pp1.phone_number as player1_partner_phone,
+                pp2.username as player2_partner_username, pp2.phone_number as player2_partner_phone,
+                'regular' as match_type
+         FROM matches m
+         JOIN leagues l ON l.id = m.league_id
+         JOIN users p1 ON p1.id = m.player1_id
+         JOIN users p2 ON p2.id = m.player2_id
+         LEFT JOIN users pp1 ON pp1.id = m.player1_partner_id
+         LEFT JOIN users pp2 ON pp2.id = m.player2_partner_id
+         WHERE m.status = 'pending'
+           AND m.reported_by != $1
+           AND (m.player2_id = $1 OR m.player2_partner_id = $1 OR m.player1_id = $1 OR m.player1_partner_id = $1)
+         UNION ALL
+         SELECT pm.id, pm.league_id, pm.round_number,
+                pm.player1_id, pm.player2_id, pm.player1_partner_id, pm.player2_partner_id,
+                pm.player1_units, pm.player2_units, pm.winner_id, pm.reported_by, pm.set_scores, pm.created_at,
+                l.sport, l.format as league_format, l.name as league_name,
+                p1.username as player1_username, p1.phone_number as player1_phone,
+                p2.username as player2_username, p2.phone_number as player2_phone,
+                pp1.username as player1_partner_username, pp1.phone_number as player1_partner_phone,
+                pp2.username as player2_partner_username, pp2.phone_number as player2_partner_phone,
+                'playoff' as match_type
+         FROM playoff_matches pm
+         JOIN leagues l ON l.id = pm.league_id
+         JOIN users p1 ON p1.id = pm.player1_id
+         JOIN users p2 ON p2.id = pm.player2_id
+         LEFT JOIN users pp1 ON pp1.id = pm.player1_partner_id
+         LEFT JOIN users pp2 ON pp2.id = pm.player2_partner_id
+         WHERE pm.status = 'reported'
+           AND pm.reported_by != $1
+           AND (pm.player2_id = $1 OR pm.player2_partner_id = $1 OR pm.player1_id = $1 OR pm.player1_partner_id = $1)
+       ) combined
+       ORDER BY created_at DESC`,
       [userId]
     );
     res.status(200).json({ matches: result.rows });
@@ -436,17 +461,38 @@ router.get('/pending-reported-by-me', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT m.*, l.sport, l.format as league_format,
-              p1.username as player1_username, p2.username as player2_username,
-              pp1.username as player1_partner_username, pp2.username as player2_partner_username
-       FROM matches m
-       JOIN leagues l ON l.id = m.league_id
-       JOIN users p1 ON p1.id = m.player1_id
-       JOIN users p2 ON p2.id = m.player2_id
-       LEFT JOIN users pp1 ON pp1.id = m.player1_partner_id
-       LEFT JOIN users pp2 ON pp2.id = m.player2_partner_id
-       WHERE m.status = 'pending' AND m.reported_by = $1
-       ORDER BY m.created_at DESC`,
+      `SELECT * FROM (
+         SELECT m.id, m.league_id, NULL::int as round_number,
+                m.player1_id, m.player2_id, m.player1_partner_id, m.player2_partner_id,
+                m.player1_units, m.player2_units, m.winner_id, m.set_scores, m.created_at,
+                l.sport, l.format as league_format,
+                p1.username as player1_username, p2.username as player2_username,
+                pp1.username as player1_partner_username, pp2.username as player2_partner_username,
+                'regular' as match_type
+         FROM matches m
+         JOIN leagues l ON l.id = m.league_id
+         JOIN users p1 ON p1.id = m.player1_id
+         JOIN users p2 ON p2.id = m.player2_id
+         LEFT JOIN users pp1 ON pp1.id = m.player1_partner_id
+         LEFT JOIN users pp2 ON pp2.id = m.player2_partner_id
+         WHERE m.status = 'pending' AND m.reported_by = $1
+         UNION ALL
+         SELECT pm.id, pm.league_id, pm.round_number,
+                pm.player1_id, pm.player2_id, pm.player1_partner_id, pm.player2_partner_id,
+                pm.player1_units, pm.player2_units, pm.winner_id, pm.set_scores, pm.created_at,
+                l.sport, l.format as league_format,
+                p1.username as player1_username, p2.username as player2_username,
+                pp1.username as player1_partner_username, pp2.username as player2_partner_username,
+                'playoff' as match_type
+         FROM playoff_matches pm
+         JOIN leagues l ON l.id = pm.league_id
+         JOIN users p1 ON p1.id = pm.player1_id
+         JOIN users p2 ON p2.id = pm.player2_id
+         LEFT JOIN users pp1 ON pp1.id = pm.player1_partner_id
+         LEFT JOIN users pp2 ON pp2.id = pm.player2_partner_id
+         WHERE pm.status = 'reported' AND pm.reported_by = $1
+       ) combined
+       ORDER BY created_at DESC`,
       [userId]
     );
     res.status(200).json({ matches: result.rows });
@@ -493,22 +539,42 @@ router.get('/history', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT m.id, m.player1_id, m.player2_id, m.player1_partner_id, m.player2_partner_id,
-              m.player1_units, m.player2_units, m.set_scores, m.winner_id, m.created_at,
-              m.player1_rating_change, m.player2_rating_change,
-              m.player1_partner_rating_change, m.player2_partner_rating_change,
-              l.sport, l.format as league_format, l.area,
-              p1.username as player1_username, p2.username as player2_username,
-              pp1.username as player1_partner_username, pp2.username as player2_partner_username
-       FROM matches m
-       JOIN leagues l ON l.id = m.league_id
-       JOIN users p1 ON p1.id = m.player1_id
-       JOIN users p2 ON p2.id = m.player2_id
-       LEFT JOIN users pp1 ON pp1.id = m.player1_partner_id
-       LEFT JOIN users pp2 ON pp2.id = m.player2_partner_id
-       WHERE m.status = 'confirmed'
-         AND (m.player1_id = $1 OR m.player2_id = $1 OR m.player1_partner_id = $1 OR m.player2_partner_id = $1)
-       ORDER BY m.created_at DESC`,
+      `SELECT * FROM (
+         SELECT m.id, m.player1_id, m.player2_id, m.player1_partner_id, m.player2_partner_id,
+                m.player1_units, m.player2_units, m.set_scores, m.winner_id, m.created_at,
+                m.player1_rating_change, m.player2_rating_change,
+                m.player1_partner_rating_change, m.player2_partner_rating_change,
+                l.sport, l.format as league_format, l.area, l.name as league_name,
+                p1.username as player1_username, p2.username as player2_username,
+                pp1.username as player1_partner_username, pp2.username as player2_partner_username,
+                'regular' as match_type
+         FROM matches m
+         JOIN leagues l ON l.id = m.league_id
+         JOIN users p1 ON p1.id = m.player1_id
+         JOIN users p2 ON p2.id = m.player2_id
+         LEFT JOIN users pp1 ON pp1.id = m.player1_partner_id
+         LEFT JOIN users pp2 ON pp2.id = m.player2_partner_id
+         WHERE m.status = 'confirmed'
+           AND (m.player1_id = $1 OR m.player2_id = $1 OR m.player1_partner_id = $1 OR m.player2_partner_id = $1)
+         UNION ALL
+         SELECT pm.id, pm.player1_id, pm.player2_id, pm.player1_partner_id, pm.player2_partner_id,
+                pm.player1_units, pm.player2_units, pm.set_scores, pm.winner_id, pm.created_at,
+                pm.player1_rating_change, pm.player2_rating_change,
+                pm.player1_partner_rating_change, pm.player2_partner_rating_change,
+                l.sport, l.format as league_format, l.area, l.name as league_name,
+                p1.username as player1_username, p2.username as player2_username,
+                pp1.username as player1_partner_username, pp2.username as player2_partner_username,
+                'playoff' as match_type
+         FROM playoff_matches pm
+         JOIN leagues l ON l.id = pm.league_id
+         JOIN users p1 ON p1.id = pm.player1_id
+         JOIN users p2 ON p2.id = pm.player2_id
+         LEFT JOIN users pp1 ON pp1.id = pm.player1_partner_id
+         LEFT JOIN users pp2 ON pp2.id = pm.player2_partner_id
+         WHERE pm.status = 'confirmed'
+           AND (pm.player1_id = $1 OR pm.player2_id = $1 OR pm.player1_partner_id = $1 OR pm.player2_partner_id = $1)
+       ) combined
+       ORDER BY created_at DESC`,
       [userId]
     );
     res.status(200).json({ matches: result.rows });
