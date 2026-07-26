@@ -276,7 +276,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         title: const Text('Confirm regeneration?'),
         content: const Text(
-          'This replaces the current fixture list. Confirmed results stay in history, but any pending unconfirmed reports will be discarded.',
+          'This wipes ALL match history for this tournament — every confirmed result, rating change, and point awarded so far will be reversed — and replaces it with a fresh, all-pending fixture list. This cannot be undone.',
         ),
         actions: [
           TextButton(
@@ -285,7 +285,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Regenerate'),
+            child: const Text(
+              'Wipe & Regenerate',
+              style: TextStyle(color: AppColors.danger),
+            ),
           ),
         ],
       ),

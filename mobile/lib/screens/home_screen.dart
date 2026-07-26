@@ -68,16 +68,24 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       final sportsData = jsonDecode(sportsRes.body);
       if (sportsRes.statusCode == 200) {
-        final Map<String, dynamic> seenSports = {};
-        for (final row in sportsData['sports']) {
-          seenSports[row['sport']] = row;
-        }
-        _sports = seenSports.values.toList();
-        _matchesPlayed = _sports.fold<int>(
+        // IMPORTANT: aggregate matches/wins from the RAW rows, before any
+        // deduping. A sport like badminton can have both a singles row and
+        // a doubles row — deduping by sport name alone (below) is only for
+        // picking one representative rating to show in "Your Sports"; doing
+        // the totals off the deduped list would silently drop whichever
+        // format's row got overwritten.
+        final List rawSports = sportsData['sports'];
+        _matchesPlayed = rawSports.fold<int>(
           0,
           (sum, r) => sum + (r['matches_played'] as int),
         );
-        _wins = _sports.fold<int>(0, (sum, r) => sum + (r['wins'] as int));
+        _wins = rawSports.fold<int>(0, (sum, r) => sum + (r['wins'] as int));
+
+        final Map<String, dynamic> seenSports = {};
+        for (final row in rawSports) {
+          seenSports[row['sport']] = row;
+        }
+        _sports = seenSports.values.toList();
       }
 
       final pendingRes = await http.get(

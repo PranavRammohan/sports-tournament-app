@@ -55,8 +55,7 @@ class _RegenerateScheduleDialogState extends State<RegenerateScheduleDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'This creates a fresh schedule with everyone currently in the tournament (including new joiners). '
-              'Already-confirmed match results and rating changes are kept — only the fixture list itself is rebuilt.',
+              'This wipes all match history for this tournament — every confirmed result, rating change, and point awarded so far will be reversed — and builds a fresh, all-pending fixture list with everyone currently in the tournament (including new joiners). This cannot be undone.',
               style: TextStyle(fontSize: 13),
             ),
             const SizedBox(height: 16),

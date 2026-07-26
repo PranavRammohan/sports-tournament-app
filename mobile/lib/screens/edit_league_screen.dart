@@ -211,7 +211,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         title: const Text('Confirm format change?'),
         content: const Text(
-          'This rebuilds the fixture list for everyone currently in the tournament. Confirmed results stay in history, but any pending unconfirmed reports and any existing bracket will be discarded. This takes effect immediately and closes this screen.',
+          'This wipes ALL match history for this tournament — every confirmed result, rating change, and point awarded so far will be reversed — and rebuilds the fixture list from scratch. This cannot be undone, takes effect immediately, and closes this screen.',
         ),
         actions: [
           TextButton(
@@ -220,7 +220,10 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Continue'),
+            child: const Text(
+              'Wipe & Continue',
+              style: TextStyle(color: AppColors.danger),
+            ),
           ),
         ],
       ),

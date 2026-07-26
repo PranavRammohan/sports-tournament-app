@@ -53,14 +53,24 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     }
   }
 
-  Future<void> _confirmMatch(int matchId) async {
+  // matchType is 'regular' (round-robin/custom matches) or 'playoff'
+  // (knockout bracket matches) — the backend now returns both kinds merged
+  // together in /matches/pending, tagged with this field, since knockout
+  // reports live in a separate table with separate confirm/reject endpoints.
+  bool _isPlayoff(dynamic m) => m['match_type'] == 'playoff';
+
+  Future<void> _confirmMatch(dynamic m) async {
     HapticFeedback.lightImpact();
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
 
+      final url = _isPlayoff(m)
+          ? '$baseApiUrl/playoffs/match/${m['id']}/confirm'
+          : '$baseApiUrl/matches/${m['id']}/confirm';
+
       final response = await http.post(
-        Uri.parse('$baseApiUrl/matches/$matchId/confirm'),
+        Uri.parse(url),
         headers: {'Authorization': 'Bearer $token'},
       );
 
@@ -91,7 +101,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     }
   }
 
-  Future<void> _rejectMatch(int matchId) async {
+  Future<void> _rejectMatch(dynamic m) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -122,8 +132,12 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
 
+      final url = _isPlayoff(m)
+          ? '$baseApiUrl/playoffs/match/${m['id']}/reject'
+          : '$baseApiUrl/matches/${m['id']}/reject';
+
       final response = await http.post(
-        Uri.parse('$baseApiUrl/matches/$matchId/reject'),
+        Uri.parse(url),
         headers: {'Authorization': 'Bearer $token'},
       );
 
@@ -210,6 +224,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                       itemBuilder: (context, index) {
                         final m = _matches[index];
                         final isDoubles = m['league_format'] == 'doubles';
+                        final isPlayoff = _isPlayoff(m);
                         final team1 = isDoubles
                             ? '${m['player1_username']} & ${m['player1_partner_username'] ?? '?'}'
                             : m['player1_username'];
@@ -218,6 +233,9 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                             : m['player2_username'];
                         final reportedByPlayer1 =
                             m['reported_by'] == m['player1_id'];
+                        final sportLabel = isPlayoff
+                            ? '${_formatSport(m['sport'])} · Knockout${m['round_number'] != null ? ' · Round ${m['round_number']}' : ''}'
+                            : _formatSport(m['sport']);
 
                         return TweenAnimationBuilder<double>(
                           tween: Tween(begin: 0, end: 1),
@@ -249,7 +267,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                                             CrossAxisAlignment.start,
                                         children: [
                                           Text(
-                                            _formatSport(m['sport']),
+                                            sportLabel,
                                             style: TextStyle(
                                               fontSize: 10,
                                               color: subtleTextColor,
@@ -292,7 +310,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                                             vertical: 10,
                                           ),
                                         ),
-                                        onPressed: () => _rejectMatch(m['id']),
+                                        onPressed: () => _rejectMatch(m),
                                         child: const Text(
                                           'Reject',
                                           style: TextStyle(fontSize: 13),
@@ -307,7 +325,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                                             vertical: 10,
                                           ),
                                         ),
-                                        onPressed: () => _confirmMatch(m['id']),
+                                        onPressed: () => _confirmMatch(m),
                                         child: const Text(
                                           'Confirm',
                                           style: TextStyle(fontSize: 13),
