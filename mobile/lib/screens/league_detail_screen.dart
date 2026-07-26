@@ -38,6 +38,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   bool _loading = true;
   bool _deleting = false;
   bool _leaving = false;
+  bool _completing = false;
   bool _joining = false;
   bool _generating = false;
   bool _regenerating = false;
@@ -55,6 +56,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       _league != null && _league!['format'] == 'doubles';
   String get _partnerMode =>
       _league != null ? (_league!['partner_mode'] ?? 'host_auto') : 'host_auto';
+  bool get _isCompleted => _league != null && _league!['status'] == 'completed';
   bool get _hasConfirmedMatches {
     if (_isKnockout) {
       return _bracket.any((m) => m['status'] == 'confirmed');
@@ -452,6 +454,128 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       ).showSnackBar(const SnackBar(content: Text('Network error.')));
     } finally {
       if (mounted) setState(() => _leaving = false);
+    }
+  }
+
+  Future<void> _confirmCompleteTournament() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Mark tournament completed?'),
+        content: const Text(
+          'This makes the tournament read-only — no new joins, partner requests, schedule/bracket changes, or new match reports. Everything already recorded (matches, ratings, points) stays exactly as it is. You can reactivate it later if needed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Mark Completed'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    HapticFeedback.mediumImpact();
+    setState(() => _completing = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final response = await http.post(
+        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/complete'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      final data = jsonDecode(response.body);
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Tournament marked completed.'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadAll();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not mark completed.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _completing = false);
+    }
+  }
+
+  Future<void> _confirmReactivateTournament() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Reactivate this tournament?'),
+        content: const Text(
+          'This makes the tournament active again — players can rejoin, and you can resume schedule and match activity.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Reactivate'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    HapticFeedback.mediumImpact();
+    setState(() => _completing = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final response = await http.post(
+        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/reactivate'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      final data = jsonDecode(response.body);
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Tournament reactivated.'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadAll();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not reactivate.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _completing = false);
     }
   }
 
@@ -1072,6 +1196,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
   Widget? _buildActionButton(bool isHost) {
     if (_isKnockout) return null;
+    if (_isCompleted) return null;
 
     final hostEntersScores = _league!['host_enters_scores'] == true;
 
@@ -1269,13 +1394,41 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  _league!['name'],
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: primaryTextColor,
-                  ),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _league!['name'],
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: primaryTextColor,
+                        ),
+                      ),
+                    ),
+                    if (_isCompleted)
+                      Container(
+                        margin: const EdgeInsets.only(left: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade600,
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        child: const Text(
+                          'COMPLETED',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -1397,8 +1550,51 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               ],
             ),
           ),
+          if (isHost)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: OutlinedButton.icon(
+                onPressed: _completing
+                    ? null
+                    : (_isCompleted
+                          ? _confirmReactivateTournament
+                          : _confirmCompleteTournament),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _isCompleted
+                      ? AppColors.accent
+                      : Colors.grey.shade700,
+                  side: BorderSide(
+                    color: _isCompleted
+                        ? AppColors.accent
+                        : Colors.grey.shade400,
+                  ),
+                ),
+                icon: _completing
+                    ? SizedBox(
+                        height: 16,
+                        width: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: _isCompleted
+                              ? AppColors.accent
+                              : Colors.grey.shade700,
+                        ),
+                      )
+                    : Icon(
+                        _isCompleted
+                            ? Icons.refresh
+                            : Icons.check_circle_outline,
+                      ),
+                label: Text(
+                  _isCompleted
+                      ? 'Reactivate Tournament'
+                      : 'Mark Tournament Completed',
+                ),
+              ),
+            ),
           if (_isDoublesLeague &&
               _partnerMode != 'host_auto' &&
+              !_isCompleted &&
               (_isMember || isHost))
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
@@ -1426,7 +1622,40 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 ),
               ),
             ),
-          if (!_isMember) ...[
+          if (!_isMember && _isCompleted) ...[
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade200,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 16,
+                      color: Colors.grey.shade700,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'This tournament has ended and is no longer accepting new players.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ] else if (!_isMember) ...[
             if (_registrationMessage != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
@@ -1526,6 +1755,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
             ),
           if (isHost &&
               !_isCustom &&
+              !_isCompleted &&
               ((_isKnockout && _bracket.isEmpty) ||
                   (!_isKnockout && _schedule.isEmpty)))
             Padding(
@@ -2014,7 +2244,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          if (isHost && !_isCustom)
+          if (isHost && !_isCustom && !_isCompleted)
             Padding(
               padding: const EdgeInsets.only(bottom: 16),
               child: OutlinedButton.icon(
