@@ -1232,6 +1232,99 @@ router.post('/:id/add-manual-match', async (req, res) => {
 });
 
 // ---------- REGENERATE SCHEDULE (host only) ----------
+// Reverses rating + league-points effects for every CONFIRMED regular match
+// in a league. Used by regenerate-schedule, which now wipes match history
+// entirely rather than preserving it (a deliberate product decision — see
+// the regenerate-schedule handler below).
+async function reverseAllConfirmedMatchesForLeague(leagueId, league) {
+  const { sport, format } = league;
+
+  const matchesResult = await pool.query(
+    `SELECT * FROM matches WHERE league_id = $1 AND status = 'confirmed'`,
+    [leagueId]
+  );
+
+  for (const match of matchesResult.rows) {
+    const team1Won = match.winner_id === match.player1_id;
+
+    const reverseOne = async (playerId, ratingChange, won) => {
+      if (playerId == null || ratingChange == null) return;
+      if (sport === 'table_tennis') {
+        await pool.query(
+          `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
+           wins = wins - $2, losses = losses - $3
+           WHERE user_id = $4 AND sport = $5`,
+          [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport]
+        );
+      } else {
+        await pool.query(
+          `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
+           wins = wins - $2, losses = losses - $3
+           WHERE user_id = $4 AND sport = $5 AND format = $6`,
+          [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport, format]
+        );
+      }
+    };
+
+    await reverseOne(match.player1_id, match.player1_rating_change, team1Won);
+    await reverseOne(match.player2_id, match.player2_rating_change, !team1Won);
+    await reverseOne(match.player1_partner_id, match.player1_partner_rating_change, team1Won);
+    await reverseOne(match.player2_partner_id, match.player2_partner_rating_change, !team1Won);
+
+    if (match.league_points_awarded != null) {
+      const winnerIds = [match.winner_id];
+      if (match.winner_id === match.player1_id && match.player1_partner_id) winnerIds.push(match.player1_partner_id);
+      if (match.winner_id === match.player2_id && match.player2_partner_id) winnerIds.push(match.player2_partner_id);
+      for (const wId of winnerIds) {
+        await pool.query(
+          'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+          [match.league_points_awarded, leagueId, wId]
+        );
+      }
+    }
+  }
+}
+
+// Same idea, for confirmed knockout (playoff_matches) rows. Playoff matches
+// don't award league points in this app, so only rating/stat reversal
+// applies here.
+async function reverseAllConfirmedPlayoffMatchesForLeague(leagueId, league) {
+  const { sport, format } = league;
+
+  const matchesResult = await pool.query(
+    `SELECT * FROM playoff_matches WHERE league_id = $1 AND status = 'confirmed'`,
+    [leagueId]
+  );
+
+  for (const match of matchesResult.rows) {
+    const team1Won = match.winner_id === match.player1_id;
+
+    const reverseOne = async (playerId, ratingChange, won) => {
+      if (playerId == null || ratingChange == null) return;
+      if (sport === 'table_tennis') {
+        await pool.query(
+          `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
+           wins = wins - $2, losses = losses - $3
+           WHERE user_id = $4 AND sport = $5`,
+          [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport]
+        );
+      } else {
+        await pool.query(
+          `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
+           wins = wins - $2, losses = losses - $3
+           WHERE user_id = $4 AND sport = $5 AND format = $6`,
+          [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport, format]
+        );
+      }
+    };
+
+    await reverseOne(match.player1_id, match.player1_rating_change, team1Won);
+    await reverseOne(match.player2_id, match.player2_rating_change, !team1Won);
+    await reverseOne(match.player1_partner_id, match.player1_partner_rating_change, team1Won);
+    await reverseOne(match.player2_partner_id, match.player2_partner_rating_change, !team1Won);
+  }
+}
+
 router.post('/:id/regenerate-schedule', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.id;
@@ -1260,14 +1353,13 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
       );
     }
 
-    await pool.query(
-      `DELETE FROM matches WHERE league_id = $1 AND status IN ('pending', 'rejected')`,
-      [leagueId]
-    );
-    await pool.query(
-      `UPDATE matches SET scheduled_match_id = NULL WHERE league_id = $1 AND status = 'confirmed'`,
-      [leagueId]
-    );
+    // Regenerating the schedule wipes this league's match history entirely —
+    // reverse every confirmed match's rating/points effects first, then
+    // delete everything, before building the fresh schedule below.
+    await reverseAllConfirmedMatchesForLeague(leagueId, league);
+    await reverseAllConfirmedPlayoffMatchesForLeague(leagueId, league);
+
+    await pool.query('DELETE FROM matches WHERE league_id = $1', [leagueId]);
     await pool.query('DELETE FROM scheduled_matches WHERE league_id = $1', [leagueId]);
     await pool.query('DELETE FROM playoff_matches WHERE league_id = $1', [leagueId]);
 
@@ -1275,7 +1367,7 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
     const refreshedLeague = refreshedLeagueResult.rows[0];
 
     if (refreshedLeague.schedule_type === 'custom') {
-      return res.status(200).json({ message: 'Schedule cleared. Add matches manually.', matchCount: 0 });
+      return res.status(200).json({ message: 'Schedule cleared and previous match history reversed. Add matches manually.', matchCount: 0 });
     }
     if (refreshedLeague.schedule_type === 'knockout') {
       return generateKnockoutBracket(req, res, refreshedLeague);
@@ -1329,7 +1421,7 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
       );
     }
 
-    res.status(201).json({ message: 'Schedule regenerated.', matchCount: scheduledMatches.length });
+    res.status(201).json({ message: 'Schedule regenerated. All previous match history and rating changes for this tournament have been reversed.', matchCount: scheduledMatches.length });
   } catch (err) {
     console.error('Regenerate schedule error:', err);
     res.status(500).json({ error: 'Something went wrong regenerating the schedule.' });
