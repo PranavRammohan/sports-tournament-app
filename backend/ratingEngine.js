@@ -11,8 +11,24 @@ const K_FRACTION = 0.042;
 // underlying real-world system).
 const SCALE_CONSTANTS = {
   tennis: 3,        // real range ~2.5–16.5, unchanged
-  badminton: 286,   // real range ~6000–8500 (recalibrated from 800, tuned for 1000–8000)
-  pickleball: 1.125, // real range ~2.5–7.0 (recalibrated from 1.5, tuned for 2.0–8.0)
+  badminton: 1000,  // real range ~6000–8500. Previously 286, derived by
+                     // proportionally shrinking the original full-UBR-range
+                     // constant (800, for a 1000–8000 span) down to this
+                     // app's narrower practical span (6000–8500) — which
+                     // made the curve too steep: a 500-point gap between two
+                     // solid intermediates predicted a ~98% blowout. 1000
+                     // predicts ~76% for that same 500-point gap instead,
+                     // while still predicting near-total domination (~99.7%)
+                     // for a full-range (2500-point) gap.
+  pickleball: 1.8,  // real range ~2.5–7.0. Previously 1.125, derived the same
+                     // flawed way as badminton was — proportionally shrinking
+                     // an original full-range constant (1.5, for a 2.0–8.0
+                     // span) down to this app's narrower practical span
+                     // (2.5–7.0). Recalibrated using the same benchmark as
+                     // badminton: a gap equal to 20% of the practical range
+                     // (0.9 here) now predicts a ~76% favorite instead of
+                     // ~86%, while a full-range gap still predicts near-total
+                     // domination (~99.7%).
 };
 
 const MAX_RANGE = {
