@@ -195,8 +195,16 @@ router.get('/', async (req, res) => {
     const params = [userId, userGenderCategory];
 
     if (area) {
-      params.push(area);
-      query += ` AND l.area = $${params.length}`;
+      // Accepts either a single area or a comma-separated list, so the
+      // Browse Tournaments screen can filter by multiple areas at once.
+      const areaList = String(area)
+        .split(',')
+        .map((a) => a.trim())
+        .filter(Boolean);
+      if (areaList.length > 0) {
+        params.push(areaList);
+        query += ` AND l.area = ANY($${params.length}::text[])`;
+      }
     }
     if (format) {
       params.push(format);
@@ -1032,8 +1040,13 @@ router.post('/:id/generate-schedule', async (req, res) => {
     let scheduledMatches = [];
 
     try {
-      if (league.schedule_type === 'matches_per_player' && league.format === 'singles') {
-        scheduledMatches = generateNearestRatingSchedule(members, league.matches_per_player);
+      if (league.schedule_type === 'matches_per_player') {
+        if (league.format === 'singles') {
+          scheduledMatches = generateNearestRatingSchedule(members, league.matches_per_player);
+        } else {
+          const teams = resolveDoublesTeams(league, members);
+          scheduledMatches = generateNearestRatingScheduleForTeams(teams, league.matches_per_player);
+        }
       } else {
         scheduledMatches = generateRoundRobinSchedule(league, members);
       }
@@ -1290,8 +1303,13 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
 
     let scheduledMatches = [];
     try {
-      if (refreshedLeague.schedule_type === 'matches_per_player' && refreshedLeague.format === 'singles') {
-        scheduledMatches = generateNearestRatingSchedule(members, refreshedLeague.matches_per_player);
+      if (refreshedLeague.schedule_type === 'matches_per_player') {
+        if (refreshedLeague.format === 'singles') {
+          scheduledMatches = generateNearestRatingSchedule(members, refreshedLeague.matches_per_player);
+        } else {
+          const teams = resolveDoublesTeams(refreshedLeague, members);
+          scheduledMatches = generateNearestRatingScheduleForTeams(teams, refreshedLeague.matches_per_player);
+        }
       } else {
         scheduledMatches = generateRoundRobinSchedule(refreshedLeague, members);
       }
@@ -1537,6 +1555,31 @@ function generateNearestRatingSchedule(members, matchesPerPlayer) {
   }
 
   return scheduledMatches;
+}
+
+// Doubles equivalent of generateNearestRatingSchedule: treats each resolved
+// team as a single "player" (pseudo id = array index, rating = team average),
+// reuses the same nearest-rating matching algorithm, then maps the resulting
+// pseudo-fixtures back to real player/partner ids.
+function generateNearestRatingScheduleForTeams(teams, matchesPerTeam) {
+  const pseudoMembers = teams.map((team, idx) => ({
+    id: idx,
+    rating: team.avgRating,
+  }));
+
+  const pseudoMatches = generateNearestRatingSchedule(pseudoMembers, matchesPerTeam);
+
+  return pseudoMatches.map((m) => {
+    const teamA = teams[m.player1Id];
+    const teamB = teams[m.player2Id];
+    return {
+      tierNumber: m.tierNumber,
+      player1Id: teamA.player1.id,
+      player1PartnerId: teamA.player2.id,
+      player2Id: teamB.player1.id,
+      player2PartnerId: teamB.player2.id,
+    };
+  });
 }
 
 // ---------- GET SCHEDULE (with completion status + contact info) ----------

@@ -518,6 +518,80 @@ router.get('/history', async (req, res) => {
   }
 });
 
+// ---------- HEAD-TO-HEAD RECORD AGAINST ANOTHER PLAYER ----------
+// Aggregates confirmed matches (regular + knockout) between the requester and
+// the given player, per sport/format, from the requester's own perspective
+// ("my_wins"/"my_losses"). Counts doubles matches where either side was a
+// partner too, not just the exact two "representative" ids.
+router.get('/head-to-head/:otherUserId', async (req, res) => {
+  const userId = req.userId;
+  const otherUserId = parseInt(req.params.otherUserId, 10);
+
+  if (!otherUserId || Number.isNaN(otherUserId)) {
+    return res.status(400).json({ error: 'Invalid player id.' });
+  }
+  if (otherUserId === userId) {
+    return res.status(400).json({ error: 'Cannot compute head-to-head against yourself.' });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT sport, format,
+              COUNT(*) AS matches_played,
+              SUM(CASE WHEN my_side_won THEN 1 ELSE 0 END) AS my_wins,
+              SUM(CASE WHEN my_side_won THEN 0 ELSE 1 END) AS my_losses
+       FROM (
+         SELECT l.sport, l.format,
+                (m.winner_id = $1
+                  OR (m.player1_partner_id = $1 AND m.winner_id = m.player1_id)
+                  OR (m.player2_partner_id = $1 AND m.winner_id = m.player2_id)
+                ) AS my_side_won
+         FROM matches m
+         JOIN leagues l ON l.id = m.league_id
+         WHERE m.status = 'confirmed'
+           AND (
+             (
+               (m.player1_id = $1 OR m.player1_partner_id = $1)
+               AND (m.player2_id = $2 OR m.player2_partner_id = $2)
+             )
+             OR
+             (
+               (m.player2_id = $1 OR m.player2_partner_id = $1)
+               AND (m.player1_id = $2 OR m.player1_partner_id = $2)
+             )
+           )
+         UNION ALL
+         SELECT l.sport, l.format,
+                (pm.winner_id = $1
+                  OR (pm.player1_partner_id = $1 AND pm.winner_id = pm.player1_id)
+                  OR (pm.player2_partner_id = $1 AND pm.winner_id = pm.player2_id)
+                ) AS my_side_won
+         FROM playoff_matches pm
+         JOIN leagues l ON l.id = pm.league_id
+         WHERE pm.status = 'confirmed'
+           AND (
+             (
+               (pm.player1_id = $1 OR pm.player1_partner_id = $1)
+               AND (pm.player2_id = $2 OR pm.player2_partner_id = $2)
+             )
+             OR
+             (
+               (pm.player2_id = $1 OR pm.player2_partner_id = $1)
+               AND (pm.player1_id = $2 OR pm.player1_partner_id = $2)
+             )
+           )
+       ) h2h
+       GROUP BY sport, format
+       ORDER BY sport, format`,
+      [userId, otherUserId]
+    );
+    res.status(200).json({ headToHead: result.rows });
+  } catch (err) {
+    console.error('Head-to-head error:', err);
+    res.status(500).json({ error: 'Something went wrong fetching the head-to-head record.' });
+  }
+});
+
 // ---------- CONFIRM A MATCH ----------
 router.post('/:id/confirm', async (req, res) => {
   const userId = req.userId;
