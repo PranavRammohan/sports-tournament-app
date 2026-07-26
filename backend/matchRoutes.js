@@ -245,6 +245,9 @@ router.post('/report', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
+    if (league.status === 'completed') {
+      return res.status(400).json({ error: 'This tournament has been marked completed and is now read-only.' });
+    }
     if (league.host_enters_scores) {
       return res.status(403).json({ error: 'This league requires the host to enter all scores.' });
     }
@@ -346,6 +349,9 @@ router.post('/report-as-host', async (req, res) => {
 
     if (!league.host_enters_scores || league.created_by !== userId) {
       return res.status(403).json({ error: 'Only the host can enter scores directly for this league.' });
+    }
+    if (league.status === 'completed') {
+      return res.status(400).json({ error: 'This tournament has been marked completed and is now read-only.' });
     }
 
     const winnerId = player1Won ? player1Id : player2Id;

@@ -244,6 +244,9 @@ router.post('/:leagueId/generate', async (req, res) => {
     if (league.created_by !== userId) {
       return res.status(403).json({ error: 'Only the league host can start playoffs.' });
     }
+    if (league.status === 'completed') {
+      return res.status(400).json({ error: 'This tournament has been marked completed and is now read-only.' });
+    }
 
     const existing = await pool.query('SELECT id FROM playoff_matches WHERE league_id = $1 LIMIT 1', [leagueId]);
     if (existing.rows.length > 0) {
@@ -473,6 +476,9 @@ router.post('/match/:matchId/report', async (req, res) => {
 
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
     const league = leagueResult.rows[0];
+    if (league.status === 'completed') {
+      return res.status(400).json({ error: 'This tournament has been marked completed and is now read-only.' });
+    }
     if (league.host_enters_scores) {
       return res.status(403).json({ error: 'This league requires the host to enter all scores.' });
     }
@@ -570,6 +576,9 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
 
     if (!league.host_enters_scores || league.created_by !== userId) {
       return res.status(403).json({ error: 'Only the host can enter scores directly for this league.' });
+    }
+    if (league.status === 'completed') {
+      return res.status(400).json({ error: 'This tournament has been marked completed and is now read-only.' });
     }
 
     if (match.status !== 'ready') {

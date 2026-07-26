@@ -55,6 +55,18 @@ async function checkRatingEligibility(league, userId) {
   return null;
 }
 
+// Returns a user-facing error string if the league has been marked
+// completed (read-only for new joins/reports/schedule changes), or null if
+// it's still active. Hosts can still edit/delete individual matches or the
+// league itself for corrections — this only blocks new player-facing
+// activity and schedule/bracket changes.
+function checkNotCompleted(league) {
+  if (league.status === 'completed') {
+    return 'This tournament has been marked completed and is now read-only.';
+  }
+  return null;
+}
+
 function checkRegistrationWindow(league) {
   const now = new Date();
 
@@ -178,7 +190,7 @@ router.get('/', async (req, res) => {
     let query = `
       SELECT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
              l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.academy_name,
-             l.min_rating, l.max_rating, l.registration_start, l.registration_end, l.partner_mode,
+             l.min_rating, l.max_rating, l.registration_start, l.registration_end, l.partner_mode, l.status,
              COUNT(lm.id) AS member_count,
              EXISTS (
                SELECT 1 FROM league_members lm2 WHERE lm2.league_id = l.id AND lm2.user_id = $1
@@ -191,6 +203,7 @@ router.get('/', async (req, res) => {
       )
       AND l.gender_category = $2
       AND l.is_private = false
+      AND l.status = 'active'
     `;
     const params = [userId, userGenderCategory];
 
@@ -233,12 +246,12 @@ router.get('/mine', async (req, res) => {
     const result = await pool.query(
       `SELECT DISTINCT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
               l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.join_code, l.academy_name,
-              l.min_rating, l.max_rating, l.registration_start, l.registration_end, l.partner_mode,
+              l.min_rating, l.max_rating, l.registration_start, l.registration_end, l.partner_mode, l.status,
               (SELECT COUNT(*) FROM league_members lm2 WHERE lm2.league_id = l.id) AS member_count
        FROM leagues l
        LEFT JOIN league_members lm ON lm.league_id = l.id AND lm.user_id = $1
        WHERE lm.user_id = $1 OR l.created_by = $1
-       ORDER BY l.season_start ASC`,
+       ORDER BY (l.status = 'completed') ASC, l.season_start ASC`,
       [userId]
     );
     res.status(200).json({ leagues: result.rows });
@@ -259,6 +272,11 @@ router.post('/:id/join', async (req, res) => {
       return res.status(404).json({ error: 'League not found.' });
     }
     const leagueData = league.rows[0];
+
+    const completedError = checkNotCompleted(leagueData);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
+    }
 
     const registrationError = checkRegistrationWindow(leagueData);
     if (registrationError) {
@@ -322,6 +340,11 @@ router.post('/join-by-code', async (req, res) => {
       return res.status(404).json({ error: 'Invalid join code.' });
     }
     const leagueData = league.rows[0];
+
+    const completedError = checkNotCompleted(leagueData);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
+    }
 
     const registrationError = checkRegistrationWindow(leagueData);
     if (registrationError) {
@@ -390,6 +413,10 @@ router.post('/:id/select-partner', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
+    const completedError = checkNotCompleted(league);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
+    }
     if (league.format !== 'doubles') {
       return res.status(400).json({ error: 'Partner selection only applies to doubles leagues.' });
     }
@@ -494,6 +521,10 @@ router.post('/:id/assign-partner', async (req, res) => {
 
     if (league.created_by !== userId) {
       return res.status(403).json({ error: 'Only the league host can assign partners.' });
+    }
+    const completedError = checkNotCompleted(league);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
     }
     if (league.format !== 'doubles' || league.partner_mode !== 'host_manual') {
       return res.status(400).json({ error: 'This league is not set up for host-manual partner assignment.' });
@@ -664,6 +695,10 @@ router.post('/:id/add-player', async (req, res) => {
 
     if (league.created_by !== userId) {
       return res.status(403).json({ error: 'Only the league host can add players.' });
+    }
+    const completedError = checkNotCompleted(league);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
     }
 
     const genderChar = league.gender_category === 'mens' ? 'M' : 'F';
@@ -1000,6 +1035,10 @@ router.post('/:id/generate-schedule', async (req, res) => {
     if (league.created_by !== userId) {
       return res.status(403).json({ error: 'Only the league host can generate the schedule.' });
     }
+    const completedError = checkNotCompleted(league);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
+    }
 
     if (league.schedule_type === 'custom') {
       return res.status(400).json({ error: 'Custom leagues do not use auto-generated schedules. Add matches manually instead.' });
@@ -1198,6 +1237,10 @@ router.post('/:id/add-manual-match', async (req, res) => {
     if (league.created_by !== userId) {
       return res.status(403).json({ error: 'Only the league host can add matches.' });
     }
+    const completedError = checkNotCompleted(league);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
+    }
     if (league.schedule_type !== 'custom') {
       return res.status(400).json({ error: 'This league does not use manual match building.' });
     }
@@ -1339,6 +1382,10 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
 
     if (league.created_by !== userId) {
       return res.status(403).json({ error: 'Only the league host can regenerate the schedule.' });
+    }
+    const completedError = checkNotCompleted(league);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
     }
 
     if (scheduleType) {
@@ -1730,6 +1777,73 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// ---------- MARK TOURNAMENT COMPLETED (host only) ----------
+// Read-only from this point on: no new joins, partner requests, schedule/
+// bracket generation, or new match reports. History, ratings, and points
+// already recorded stay exactly as they are. The host can still edit or
+// delete individual matches for corrections, and can reactivate if this was
+// done by mistake — see /:id/reactivate below.
+router.post('/:id/complete', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can mark this tournament completed.' });
+    }
+    if (league.status === 'completed') {
+      return res.status(409).json({ error: 'This tournament is already marked completed.' });
+    }
+
+    const result = await pool.query(
+      `UPDATE leagues SET status = 'completed' WHERE id = $1 RETURNING *`,
+      [leagueId]
+    );
+
+    res.status(200).json({ message: 'Tournament marked completed.', league: result.rows[0] });
+  } catch (err) {
+    console.error('Complete league error:', err);
+    res.status(500).json({ error: 'Something went wrong marking the tournament completed.' });
+  }
+});
+
+// ---------- REACTIVATE A COMPLETED TOURNAMENT (host only) ----------
+router.post('/:id/reactivate', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can reactivate this tournament.' });
+    }
+    if (league.status !== 'completed') {
+      return res.status(409).json({ error: 'This tournament is not marked completed.' });
+    }
+
+    const result = await pool.query(
+      `UPDATE leagues SET status = 'active' WHERE id = $1 RETURNING *`,
+      [leagueId]
+    );
+
+    res.status(200).json({ message: 'Tournament reactivated.', league: result.rows[0] });
+  } catch (err) {
+    console.error('Reactivate league error:', err);
+    res.status(500).json({ error: 'Something went wrong reactivating the tournament.' });
+  }
+});
+
 // ---------- EDIT LEAGUE PARAMETERS (host only) ----------
 router.put('/:id', async (req, res) => {
   const userId = req.userId;
@@ -1858,6 +1972,10 @@ router.put('/:id/schedule/:scheduledMatchId', async (req, res) => {
 
     if (league.created_by !== userId) {
       return res.status(403).json({ error: 'Only the league host can edit the schedule.' });
+    }
+    const completedError = checkNotCompleted(league);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
     }
 
     const fixtureResult = await pool.query(
