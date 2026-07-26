@@ -73,45 +73,49 @@ class _RegenerateScheduleDialogState extends State<RegenerateScheduleDialog> {
               ),
               onChanged: (v) => setState(() => _scheduleType = v!),
             ),
-            if (widget.isSingles)
-              RadioListTile<String>(
-                contentPadding: EdgeInsets.zero,
-                value: 'matches_per_player',
-                groupValue: _scheduleType,
-                title: const Text(
-                  'Fixed matches per player',
-                  style: TextStyle(fontSize: 14),
-                ),
-                subtitle: const Text(
-                  'Good for larger groups.',
-                  style: TextStyle(fontSize: 11),
-                ),
-                onChanged: (v) => setState(() => _scheduleType = v!),
+            RadioListTile<String>(
+              contentPadding: EdgeInsets.zero,
+              value: 'matches_per_player',
+              groupValue: _scheduleType,
+              title: Text(
+                widget.isSingles
+                    ? 'Fixed matches per player'
+                    : 'Fixed matches per team',
+                style: const TextStyle(fontSize: 14),
               ),
-            if (widget.isSingles && _scheduleType == 'matches_per_player')
+              subtitle: const Text(
+                'Good for larger groups.',
+                style: TextStyle(fontSize: 11),
+              ),
+              onChanged: (v) => setState(() => _scheduleType = v!),
+            ),
+            if (_scheduleType == 'matches_per_player')
               Padding(
                 padding: const EdgeInsets.only(top: 8, bottom: 4),
                 child: TextField(
                   controller: _matchesPerPlayerController,
                   keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Matches per player',
+                  decoration: InputDecoration(
+                    labelText: widget.isSingles
+                        ? 'Matches per player'
+                        : 'Matches per team',
                     isDense: true,
                   ),
                 ),
               ),
-            if (widget.isSingles)
-              RadioListTile<String>(
-                contentPadding: EdgeInsets.zero,
-                value: 'knockout',
-                groupValue: _scheduleType,
-                title: const Text('Knockout', style: TextStyle(fontSize: 14)),
-                subtitle: const Text(
-                  'Seeded single elimination. Needs an exact power-of-2 player count (2, 4, 8, 16...).',
-                  style: TextStyle(fontSize: 11),
-                ),
-                onChanged: (v) => setState(() => _scheduleType = v!),
+            RadioListTile<String>(
+              contentPadding: EdgeInsets.zero,
+              value: 'knockout',
+              groupValue: _scheduleType,
+              title: const Text('Knockout', style: TextStyle(fontSize: 14)),
+              subtitle: Text(
+                widget.isSingles
+                    ? 'Seeded single elimination. Needs an exact power-of-2 player count (2, 4, 8, 16...).'
+                    : 'Seeded single elimination. Needs an exact power-of-2 number of teams (2, 4, 8, 16...).',
+                style: const TextStyle(fontSize: 11),
               ),
+              onChanged: (v) => setState(() => _scheduleType = v!),
+            ),
             RadioListTile<String>(
               contentPadding: EdgeInsets.zero,
               value: 'custom',

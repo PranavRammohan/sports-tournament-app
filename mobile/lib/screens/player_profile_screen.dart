@@ -19,8 +19,13 @@ class PlayerProfileScreen extends StatefulWidget {
 class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
   Map<String, dynamic>? _user;
   List<dynamic> _sports = [];
+  List<dynamic>? _headToHead;
+  int? _currentUserId;
   bool _loading = true;
   String? _error;
+
+  bool get _isOwnProfile =>
+      _currentUserId != null && _currentUserId == widget.userId;
 
   @override
   void initState() {
@@ -37,6 +42,10 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
+      final userJson = prefs.getString('user');
+      if (userJson != null) {
+        _currentUserId = jsonDecode(userJson)['id'];
+      }
 
       final response = await http.get(
         Uri.parse('$baseApiUrl/sports/user/${widget.userId}'),
@@ -55,6 +64,23 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
         _user = data['user'];
         _sports = data['sports'];
       });
+
+      // Head-to-head only makes sense when viewing someone else's profile.
+      if (_currentUserId != null && _currentUserId != widget.userId) {
+        try {
+          final h2hResponse = await http.get(
+            Uri.parse('$baseApiUrl/matches/head-to-head/${widget.userId}'),
+            headers: {'Authorization': 'Bearer $token'},
+          );
+          if (h2hResponse.statusCode == 200) {
+            final h2hData = jsonDecode(h2hResponse.body);
+            setState(() => _headToHead = h2hData['headToHead']);
+          }
+        } catch (err) {
+          // Head-to-head is a nice-to-have; don't block the rest of the
+          // profile from loading if this call fails.
+        }
+      }
     } catch (err) {
       setState(() => _error = 'Could not reach the server.');
     } finally {
@@ -186,6 +212,18 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
               ],
             ),
           ),
+          if (!_isOwnProfile) ...[
+            const SizedBox(height: 20),
+            Text('Head-to-Head', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 10),
+            _buildHeadToHeadCard(
+              cardColor,
+              isDark,
+              primaryTextColor,
+              subtleTextColor,
+              ratingRowBg,
+            ),
+          ],
           const SizedBox(height: 20),
           Text('Sports', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 10),
@@ -259,6 +297,99 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
               );
             }),
         ],
+      ),
+    );
+  }
+
+  Widget _buildHeadToHeadCard(
+    Color cardColor,
+    bool isDark,
+    Color primaryTextColor,
+    Color subtleTextColor,
+    Color rowBg,
+  ) {
+    if (_headToHead == null || _headToHead!.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: cardColor,
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: AppShadows.card(isDark),
+        ),
+        child: Text(
+          "You haven't played any confirmed matches against ${_user?['username'] ?? 'this player'} yet.",
+          style: TextStyle(fontSize: 12, color: subtleTextColor),
+        ),
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: AppShadows.card(isDark),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: _headToHead!.asMap().entries.map((entry) {
+            final index = entry.key;
+            final row = entry.value;
+            final sport = row['sport'];
+            final format = row['format'];
+            final wins = row['my_wins'];
+            final losses = row['my_losses'];
+            final formatLabel = format == 'doubles' ? 'Doubles' : 'Singles';
+            final showFormatLabel = sport != 'table_tennis';
+
+            return Padding(
+              padding: EdgeInsets.only(
+                top: index == 0 ? 0 : 10,
+                bottom: index == _headToHead!.length - 1 ? 0 : 0,
+              ),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 9,
+                ),
+                decoration: BoxDecoration(
+                  color: rowBg,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        sportIcon(sport, size: 16),
+                        const SizedBox(width: 8),
+                        Text(
+                          showFormatLabel
+                              ? '${_formatSportName(sport)} · $formatLabel'
+                              : _formatSportName(sport),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                            color: primaryTextColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      '$wins-$losses',
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.accent,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }).toList(),
+        ),
       ),
     );
   }

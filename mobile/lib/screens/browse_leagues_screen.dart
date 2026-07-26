@@ -32,7 +32,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
 
   String? _filterFormat;
   String? _filterSport;
-  String? _filterArea;
+  List<String> _filterAreas = [];
 
   final TextEditingController _codeController = TextEditingController();
   bool _joiningByCode = false;
@@ -52,7 +52,9 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
       final queryParams = <String, String>{};
       if (_filterFormat != null) queryParams['format'] = _filterFormat!;
       if (_filterSport != null) queryParams['sport'] = _filterSport!;
-      if (_filterArea != null) queryParams['area'] = _filterArea!;
+      if (_filterAreas.isNotEmpty) {
+        queryParams['area'] = _filterAreas.join(',');
+      }
 
       final uri = Uri.parse(
         '$baseApiUrl/leagues',
@@ -71,6 +73,63 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
       // fail silently
     } finally {
       setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _pickAreas() async {
+    final result = await showDialog<List<String>>(
+      context: context,
+      builder: (ctx) {
+        final temp = Set<String>.from(_filterAreas);
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              title: const Text('Select Areas'),
+              content: SizedBox(
+                width: double.maxFinite,
+                height: 420,
+                child: ListView(
+                  children: bangaloreAreas.map((area) {
+                    return CheckboxListTile(
+                      value: temp.contains(area),
+                      dense: true,
+                      title: Text(area, style: const TextStyle(fontSize: 14)),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      onChanged: (checked) {
+                        setDialogState(() {
+                          if (checked == true) {
+                            temp.add(area);
+                          } else {
+                            temp.remove(area);
+                          }
+                        });
+                      },
+                    );
+                  }).toList(),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, <String>[]),
+                  child: const Text('Clear'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, temp.toList()),
+                  child: const Text('Apply'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (result != null) {
+      setState(() => _filterAreas = result);
+      _loadLeagues();
     }
   }
 
@@ -301,20 +360,24 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-          child: DropdownButtonFormField<String>(
-            initialValue: _filterArea,
-            isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Area', isDense: true),
-            items: [
-              const DropdownMenuItem(value: null, child: Text('Any')),
-              ...bangaloreAreas.map(
-                (a) => DropdownMenuItem(value: a, child: Text(a)),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(4),
+            onTap: _pickAreas,
+            child: InputDecorator(
+              decoration: const InputDecoration(
+                labelText: 'Area',
+                isDense: true,
+                suffixIcon: Icon(Icons.arrow_drop_down),
               ),
-            ],
-            onChanged: (v) {
-              setState(() => _filterArea = v);
-              _loadLeagues();
-            },
+              child: Text(
+                _filterAreas.isEmpty
+                    ? 'Any'
+                    : _filterAreas.length == 1
+                    ? _filterAreas.first
+                    : '${_filterAreas.length} areas selected',
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ),
         ),
         Expanded(

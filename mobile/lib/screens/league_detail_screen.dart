@@ -16,6 +16,7 @@ import 'add_players_screen.dart';
 import 'add_manual_match_screen.dart';
 import 'edit_league_screen.dart';
 import 'player_profile_screen.dart';
+import 'partner_selection_screen.dart';
 
 class LeagueDetailScreen extends StatefulWidget {
   final int leagueId;
@@ -29,6 +30,8 @@ class LeagueDetailScreen extends StatefulWidget {
 class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   Map<String, dynamic>? _league;
   List<dynamic> _leaderboard = [];
+  List<dynamic>? _pairLeaderboard;
+  bool _showPairs = true;
   List<dynamic> _schedule = [];
   List<dynamic> _bracket = [];
   int? _currentUserId;
@@ -48,6 +51,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   bool get _isCustom =>
       _league != null && _league!['schedule_type'] == 'custom';
   bool get _isLeagueStyle => !_isKnockout && !_isCustom;
+  bool get _isDoublesLeague =>
+      _league != null && _league!['format'] == 'doubles';
+  String get _partnerMode =>
+      _league != null ? (_league!['partner_mode'] ?? 'host_auto') : 'host_auto';
   bool get _hasConfirmedMatches {
     if (_isKnockout) {
       return _bracket.any((m) => m['status'] == 'confirmed');
@@ -141,6 +148,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       setState(() {
         _league = leagueData['league'];
         _leaderboard = leagueData['leaderboard'];
+        _pairLeaderboard = leagueData['pairLeaderboard'];
       });
 
       if (_isKnockout) {
@@ -1386,6 +1394,35 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               ],
             ),
           ),
+          if (_isDoublesLeague &&
+              _partnerMode != 'host_auto' &&
+              (_isMember || isHost))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  HapticFeedback.selectionClick();
+                  final changed = await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => PartnerSelectionScreen(
+                        leagueId: widget.leagueId,
+                        partnerMode: _partnerMode,
+                        isHost: isHost,
+                        currentUserId: _currentUserId,
+                      ),
+                    ),
+                  );
+                  if (changed == true) _loadAll();
+                },
+                icon: const Icon(Icons.group_add_outlined),
+                label: Text(
+                  _partnerMode == 'host_manual' && isHost
+                      ? 'Manage Partners'
+                      : 'Choose Your Partner',
+                ),
+              ),
+            ),
           if (!_isMember) ...[
             if (_registrationMessage != null)
               Padding(
@@ -1506,7 +1543,28 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                       ),
               ),
             ),
-          if (_leaderboard.isEmpty)
+          if (_isDoublesLeague)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(
+                children: [
+                  ChoiceChip(
+                    label: const Text('Pairs'),
+                    selected: _showPairs,
+                    onSelected: (v) => setState(() => _showPairs = true),
+                  ),
+                  const SizedBox(width: 8),
+                  ChoiceChip(
+                    label: const Text('Individual'),
+                    selected: !_showPairs,
+                    onSelected: (v) => setState(() => _showPairs = false),
+                  ),
+                ],
+              ),
+            ),
+          if (_isDoublesLeague && _showPairs)
+            _buildPairLeaderboardList(isDark)
+          else if (_leaderboard.isEmpty)
             const Text('No members yet.')
           else
             ..._leaderboard.asMap().entries.map((entry) {
@@ -1626,6 +1684,77 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
   }
 
+  Widget _buildPairLeaderboardList(bool isDark) {
+    if (_pairLeaderboard == null || _pairLeaderboard!.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Text(
+          'No confirmed doubles matches yet — pairs will appear here once matches are played.',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+      );
+    }
+
+    return Column(
+      children: _pairLeaderboard!.asMap().entries.map((entry) {
+        final rank = entry.key + 1;
+        final pair = entry.value;
+        final rankColor = rank == 1
+            ? const Color(0xFFB8860B)
+            : rank == 2
+            ? const Color(0xFF9CA3AF)
+            : rank == 3
+            ? const Color(0xFFB08D57)
+            : Colors.grey.shade200;
+        final rankTextColor = rank <= 3 ? Colors.white : AppColors.textDark;
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 6),
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey.shade200),
+            boxShadow: AppShadows.card(isDark),
+          ),
+          child: ListTile(
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 0,
+            ),
+            leading: CircleAvatar(
+              radius: 15,
+              backgroundColor: rankColor,
+              child: Text(
+                '$rank',
+                style: TextStyle(
+                  color: rankTextColor,
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            title: Text(
+              '${pair['player_a_username']} & ${pair['player_b_username']}',
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+            ),
+            subtitle: Text(
+              '${pair['matches_played']} matches · ${pair['wins']}W ${pair['losses']}L',
+              style: const TextStyle(fontSize: 11),
+            ),
+            trailing: Text(
+              'Avg: ${pair['avg_rating']}',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: AppColors.accent,
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
   Widget _buildKnockoutTab(bool isHost) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -1683,14 +1812,21 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 Text(roundName, style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 10),
                 ...entry.value.map((m) {
-                  final p1 = m['player1_username'] ?? 'TBD';
-                  final p2 = m['player2_username'] ?? 'TBD';
+                  final isDoublesMatch = m['player1_partner_username'] != null;
+                  final p1 = isDoublesMatch
+                      ? '${m['player1_username'] ?? 'TBD'}${m['player1_partner_username'] != null ? ' & ${m['player1_partner_username']}' : ''}'
+                      : (m['player1_username'] ?? 'TBD');
+                  final p2 = isDoublesMatch
+                      ? '${m['player2_username'] ?? 'TBD'}${m['player2_partner_username'] != null ? ' & ${m['player2_partner_username']}' : ''}'
+                      : (m['player2_username'] ?? 'TBD');
                   final isReady = m['status'] == 'ready';
                   final isReported = m['status'] == 'reported';
                   final isConfirmed = m['status'] == 'confirmed';
                   final involvesMe =
                       m['player1_id'] == _currentUserId ||
-                      m['player2_id'] == _currentUserId;
+                      m['player2_id'] == _currentUserId ||
+                      m['player1_partner_id'] == _currentUserId ||
+                      m['player2_partner_id'] == _currentUserId;
                   final reportedByMe = m['reported_by'] == _currentUserId;
 
                   return Container(
@@ -1940,7 +2076,9 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           .where(
             (m) =>
                 m['player1_id'] == _currentUserId ||
-                m['player2_id'] == _currentUserId,
+                m['player2_id'] == _currentUserId ||
+                m['player1_partner_id'] == _currentUserId ||
+                m['player2_partner_id'] == _currentUserId,
           )
           .toList();
       if (myMatches.isEmpty) {
@@ -1958,8 +2096,13 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       return ListView(
         padding: const EdgeInsets.all(16),
         children: myMatches.map((m) {
-          final p1 = m['player1_username'] ?? 'TBD';
-          final p2 = m['player2_username'] ?? 'TBD';
+          final isDoublesMatch = m['player1_partner_username'] != null;
+          final p1 = isDoublesMatch
+              ? '${m['player1_username'] ?? 'TBD'}${m['player1_partner_username'] != null ? ' & ${m['player1_partner_username']}' : ''}'
+              : (m['player1_username'] ?? 'TBD');
+          final p2 = isDoublesMatch
+              ? '${m['player2_username'] ?? 'TBD'}${m['player2_partner_username'] != null ? ' & ${m['player2_partner_username']}' : ''}'
+              : (m['player2_username'] ?? 'TBD');
           final isConfirmed = m['status'] == 'confirmed';
           return Container(
             margin: const EdgeInsets.only(bottom: 8),

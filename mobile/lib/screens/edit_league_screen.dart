@@ -38,6 +38,10 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
   late String _scheduleType;
   int? _matchesPerPlayer;
 
+  bool get _isDoubles => widget.league['format'] == 'doubles';
+  late String _initialPartnerMode;
+  late String _partnerMode;
+
   bool _restrictRegistration = false;
   DateTime? _registrationStart;
   DateTime? _registrationEnd;
@@ -56,6 +60,8 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
     _joinCode = l['join_code'];
     _scheduleType = l['schedule_type'] ?? 'round_robin';
     _matchesPerPlayer = l['matches_per_player'];
+    _initialPartnerMode = l['partner_mode'] ?? 'host_auto';
+    _partnerMode = _initialPartnerMode;
 
     _registrationStart = l['registration_start'] != null
         ? DateTime.tryParse(l['registration_start'].toString())?.toLocal()
@@ -110,13 +116,27 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
       case 'round_robin':
         return 'Round Robin';
       case 'matches_per_player':
-        return 'Fixed matches per player${_matchesPerPlayer != null ? ' ($_matchesPerPlayer each)' : ''}';
+        return _isDoubles
+            ? 'Fixed matches per team${_matchesPerPlayer != null ? ' ($_matchesPerPlayer each)' : ''}'
+            : 'Fixed matches per player${_matchesPerPlayer != null ? ' ($_matchesPerPlayer each)' : ''}';
       case 'knockout':
         return 'Knockout';
       case 'custom':
         return 'Custom';
       default:
         return type;
+    }
+  }
+
+  String _partnerModeLabel(String mode) {
+    switch (mode) {
+      case 'self_select':
+        return 'Players choose their own partner';
+      case 'host_manual':
+        return 'I assign partners myself';
+      case 'host_auto':
+      default:
+        return 'Automatic (balanced by rating)';
     }
   }
 
@@ -301,6 +321,8 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
           'isPrivate': _isPrivate,
           if (!widget.hasConfirmedMatches)
             'hostEntersScores': _hostEntersScores,
+          if (_isDoubles && _partnerMode != _initialPartnerMode)
+            'partnerMode': _partnerMode,
           'registrationStart': _restrictRegistration
               ? _registrationStart?.toIso8601String()
               : null,
@@ -419,6 +441,13 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
               'Match Format',
               style: Theme.of(context).textTheme.titleMedium,
             ),
+            const SizedBox(height: 4),
+            Text(
+              widget.league['format'] == 'doubles'
+                  ? 'Doubles league. Sport, format, and category cannot be changed after creation — this affects players\' rating history.'
+                  : 'Singles league. Sport, format, and category cannot be changed after creation — this affects players\' rating history.',
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+            ),
             const SizedBox(height: 6),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -449,6 +478,50 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                 ],
               ),
             ),
+            if (_isDoubles) ...[
+              const SizedBox(height: 14),
+              Text(
+                'Partner Selection',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Can only be changed before any partnerships have started forming.',
+                style: TextStyle(fontSize: 11),
+              ),
+              const SizedBox(height: 6),
+              Container(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).cardColor,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey.shade400),
+                  boxShadow: AppShadows.card(isDark),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: DropdownButtonFormField<String>(
+                  initialValue: _partnerMode,
+                  decoration: const InputDecoration(
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                  ),
+                  items: ['host_auto', 'self_select', 'host_manual']
+                      .map(
+                        (mode) => DropdownMenuItem(
+                          value: mode,
+                          child: Text(
+                            _partnerModeLabel(mode),
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) => setState(() => _partnerMode = v!),
+                ),
+              ),
+            ],
             const SizedBox(height: 20),
             const Divider(),
             const SizedBox(height: 8),
