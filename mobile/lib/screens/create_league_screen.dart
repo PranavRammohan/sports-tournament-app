@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:share_plus/share_plus.dart';
 import '../config.dart';
 
 const List<String> sportsList = [
@@ -345,6 +346,14 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               ],
             ),
             actions: [
+              TextButton(
+                onPressed: () {
+                  Share.share(
+                    'Join my tournament "${league['name']}" on RallyX! Use join code: ${league['join_code']}',
+                  );
+                },
+                child: const Text('Share'),
+              ),
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
                 child: const Text('OK'),

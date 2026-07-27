@@ -20,6 +20,7 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
   Map<String, dynamic>? _user;
   List<dynamic> _sports = [];
   List<dynamic>? _headToHead;
+  List<dynamic>? _headToHeadMatches;
   int? _currentUserId;
   bool _loading = true;
   String? _error;
@@ -74,7 +75,10 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
           );
           if (h2hResponse.statusCode == 200) {
             final h2hData = jsonDecode(h2hResponse.body);
-            setState(() => _headToHead = h2hData['headToHead']);
+            setState(() {
+              _headToHead = h2hData['headToHead'];
+              _headToHeadMatches = h2hData['matches'];
+            });
           }
         } catch (err) {
           // Head-to-head is a nice-to-have; don't block the rest of the
@@ -223,6 +227,23 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
               subtleTextColor,
               ratingRowBg,
             ),
+            if (_headToHeadMatches != null &&
+                _headToHeadMatches!.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Text(
+                'Recent Matches',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              ..._headToHeadMatches!.map(
+                (m) => _buildRecentMatchRow(
+                  m,
+                  ratingRowBg,
+                  primaryTextColor,
+                  subtleTextColor,
+                ),
+              ),
+            ],
           ],
           const SizedBox(height: 20),
           Text('Sports', style: Theme.of(context).textTheme.titleLarge),
@@ -296,6 +317,137 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
                 ),
               );
             }),
+        ],
+      ),
+    );
+  }
+
+  bool _iAmSideOne(dynamic m) =>
+      m['player1_id'] == _currentUserId ||
+      m['player1_partner_id'] == _currentUserId;
+
+  bool _iWonMatch(dynamic m) {
+    return _iAmSideOne(m)
+        ? m['winner_id'] == m['player1_id']
+        : m['winner_id'] == m['player2_id'];
+  }
+
+  String _formatMatchDate(dynamic raw) {
+    final dt = DateTime.tryParse(raw.toString())?.toLocal();
+    if (dt == null) return '';
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+  }
+
+  String _formatH2HSetScores(dynamic raw, bool iAmSideOne) {
+    if (raw == null) return '';
+    try {
+      final List sets = jsonDecode(raw);
+      if (sets.isEmpty) return '';
+      return sets
+          .map((s) {
+            final mine = iAmSideOne ? s['me'] : s['opponent'];
+            final theirs = iAmSideOne ? s['opponent'] : s['me'];
+            return '$mine-$theirs';
+          })
+          .join(', ');
+    } catch (err) {
+      return '';
+    }
+  }
+
+  Widget _buildRecentMatchRow(
+    dynamic m,
+    Color rowBg,
+    Color primaryTextColor,
+    Color subtleTextColor,
+  ) {
+    final iAmSideOne = _iAmSideOne(m);
+    final iWon = _iWonMatch(m);
+    final isDoublesMatch = m['format'] == 'doubles';
+
+    final myPartnerUsername = iAmSideOne
+        ? m['player1_partner_username']
+        : m['player2_partner_username'];
+    final theirPartnerUsername = iAmSideOne
+        ? m['player2_partner_username']
+        : m['player1_partner_username'];
+
+    final myLabel = isDoublesMatch && myPartnerUsername != null
+        ? 'You & $myPartnerUsername'
+        : 'You';
+    final theirLabel = isDoublesMatch && theirPartnerUsername != null
+        ? '${_user?['username'] ?? 'Them'} & $theirPartnerUsername'
+        : (_user?['username'] ?? 'Them');
+
+    final scoreText = _formatH2HSetScores(m['set_scores'], iAmSideOne);
+    final dateText = _formatMatchDate(m['created_at']);
+    final subtitle = [
+      scoreText,
+      dateText,
+    ].where((s) => s.isNotEmpty).join(' · ');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: rowBg,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: iWon ? AppColors.success : AppColors.danger,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              iWon ? 'WIN' : 'LOSS',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 9,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          sportIcon(m['sport'], size: 14),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$myLabel vs $theirLabel',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: primaryTextColor,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (subtitle.isNotEmpty)
+                  Text(
+                    subtitle,
+                    style: TextStyle(fontSize: 10, color: subtleTextColor),
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
     );

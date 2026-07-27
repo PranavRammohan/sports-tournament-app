@@ -24,7 +24,7 @@ class _HomeScreenState extends State<HomeScreen> {
   int _leagueCount = 0;
   int _matchesPlayed = 0;
   int _wins = 0;
-  List<dynamic> _sports = [];
+  Map<String, Map<String, dynamic>> _sportsGrouped = {};
   List<dynamic> _pendingMatches = [];
   List<dynamic> _upcomingMatches = [];
   Map<String, dynamic>? _recentMatch;
@@ -69,11 +69,9 @@ class _HomeScreenState extends State<HomeScreen> {
       final sportsData = jsonDecode(sportsRes.body);
       if (sportsRes.statusCode == 200) {
         // IMPORTANT: aggregate matches/wins from the RAW rows, before any
-        // deduping. A sport like badminton can have both a singles row and
-        // a doubles row — deduping by sport name alone (below) is only for
-        // picking one representative rating to show in "Your Sports"; doing
-        // the totals off the deduped list would silently drop whichever
-        // format's row got overwritten.
+        // grouping. A sport like badminton can have both a singles row and
+        // a doubles row — both are shown in "Your Sports" below, but the
+        // grouping step must not affect these totals.
         final List rawSports = sportsData['sports'];
         _matchesPlayed = rawSports.fold<int>(
           0,
@@ -81,11 +79,13 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         _wins = rawSports.fold<int>(0, (sum, r) => sum + (r['wins'] as int));
 
-        final Map<String, dynamic> seenSports = {};
+        final Map<String, Map<String, dynamic>> grouped = {};
         for (final row in rawSports) {
-          seenSports[row['sport']] = row;
+          final sport = row['sport'];
+          grouped.putIfAbsent(sport, () => {});
+          grouped[sport]![row['format']] = row;
         }
-        _sports = seenSports.values.toList();
+        _sportsGrouped = grouped;
       }
 
       final pendingRes = await http.get(
@@ -365,16 +365,17 @@ class _HomeScreenState extends State<HomeScreen> {
                     _buildRecentMatchCard(cardColor, subtleTextColor, isDark),
                   ],
 
-                  if (_sports.isNotEmpty) ...[
+                  if (_sportsGrouped.isNotEmpty) ...[
                     const SizedBox(height: 20),
                     Text(
                       'Your Sports',
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     const SizedBox(height: 10),
-                    ..._sports.map(
-                      (s) => _buildSportSummaryRow(
-                        s,
+                    ..._sportsGrouped.entries.map(
+                      (entry) => _buildSportSummaryRow(
+                        entry.key,
+                        entry.value,
                         cardColor,
                         borderColor,
                         isDark,
@@ -554,11 +555,18 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildSportSummaryRow(
-    dynamic s,
+    String sport,
+    Map<String, dynamic> formats,
     Color cardColor,
     Color borderColor,
     bool isDark,
   ) {
+    final primaryTextColor =
+        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
+    final isTableTennis = sport == 'table_tennis';
+    final singles = formats['singles'];
+    final doubles = formats['doubles'];
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -568,32 +576,53 @@ class _HomeScreenState extends State<HomeScreen> {
         border: Border.all(color: borderColor),
         boxShadow: AppShadows.card(isDark),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          sportIcon(s['sport'], size: 18),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              _formatSportName(s['sport']),
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                fontSize: 13,
-                color:
-                    Theme.of(context).textTheme.bodyLarge?.color ??
-                    AppColors.textDark,
+          Row(
+            children: [
+              sportIcon(sport, size: 18),
+              const SizedBox(width: 10),
+              Text(
+                _formatSportName(sport),
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                  color: primaryTextColor,
+                ),
               ),
-            ),
+            ],
           ),
-          Text(
-            '${s['rating']}',
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: AppColors.accent,
-            ),
-          ),
+          const SizedBox(height: 6),
+          if (isTableTennis && singles != null)
+            _sportRatingLine('Rating', singles)
+          else ...[
+            if (singles != null) _sportRatingLine('Singles', singles),
+            if (singles != null && doubles != null) const SizedBox(height: 4),
+            if (doubles != null) _sportRatingLine('Doubles', doubles),
+          ],
         ],
       ),
+    );
+  }
+
+  Widget _sportRatingLine(String label, Map<String, dynamic> data) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
+        ),
+        Text(
+          '${data['rating']}',
+          style: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.bold,
+            color: AppColors.accent,
+          ),
+        ),
+      ],
     );
   }
 

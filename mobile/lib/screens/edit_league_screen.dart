@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:share_plus/share_plus.dart';
 import '../main.dart';
 import '../config.dart';
 import 'signup_screen.dart' show bangaloreAreas;
@@ -568,12 +569,23 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                   children: [
                     const Icon(Icons.key_outlined, size: 16),
                     const SizedBox(width: 8),
-                    Text(
-                      'Join code: $_joinCode',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1,
+                    Expanded(
+                      child: Text(
+                        'Join code: $_joinCode',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1,
+                        ),
                       ),
+                    ),
+                    InkWell(
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        Share.share(
+                          'Join my tournament "${_nameController.text.trim()}" on RallyX! Use join code: $_joinCode',
+                        );
+                      },
+                      child: const Icon(Icons.share_outlined, size: 18),
                     ),
                   ],
                 ),

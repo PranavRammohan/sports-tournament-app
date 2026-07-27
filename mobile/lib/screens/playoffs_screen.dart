@@ -10,11 +10,13 @@ import '../config.dart';
 class PlayoffsScreen extends StatefulWidget {
   final int leagueId;
   final bool isHost;
+  final String format;
 
   const PlayoffsScreen({
     super.key,
     required this.leagueId,
     required this.isHost,
+    this.format = 'singles',
   });
 
   @override
@@ -30,8 +32,22 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   bool _hostEntersScores = false;
   String _sport = '';
 
+  bool get _isDoubles => widget.format == 'doubles';
+
   // Tennis is scored in "Sets"; everything else in this app is "Games".
   String get _unitLabel => _sport == 'tennis' ? 'Set' : 'Game';
+
+  String _teamName(dynamic m, {required bool isSideOne}) {
+    final username = isSideOne ? m['player1_username'] : m['player2_username'];
+    final partnerUsername = isSideOne
+        ? m['player1_partner_username']
+        : m['player2_partner_username'];
+    if (username == null) return 'TBD';
+    if (_isDoubles && partnerUsername != null) {
+      return '$username & $partnerUsername';
+    }
+    return username;
+  }
 
   @override
   void initState() {
@@ -185,7 +201,10 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   Future<void> _reportMatch(int matchId) async {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (ctx) => _PlayoffReportDialog(unitLabel: _unitLabel),
+      builder: (ctx) => _PlayoffReportDialog(
+        unitLabel: _unitLabel,
+        opponentLabel: _isDoubles ? 'Opposing Team' : 'Opponent',
+      ),
     );
     if (result == null) return;
 
@@ -249,6 +268,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
       builder: (ctx) => _PlayoffReportDialog(
         title: 'Edit My Report',
         unitLabel: _unitLabel,
+        opponentLabel: _isDoubles ? 'Opposing Team' : 'Opponent',
         initialSets: initialSets,
       ),
     );
@@ -350,8 +370,8 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   }
 
   Future<void> _hostEditScore(dynamic m) async {
-    final p1Name = m['player1_username'] ?? 'TBD';
-    final p2Name = m['player2_username'] ?? 'TBD';
+    final p1Name = _teamName(m, isSideOne: true);
+    final p2Name = _teamName(m, isSideOne: false);
 
     List<Map<String, int>>? initialSets;
     try {
@@ -536,6 +556,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   }
 
   Widget _buildEmptyState() {
+    final unit = _isDoubles ? 'teams' : 'players';
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -555,18 +576,26 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
                 'Choose bracket size:',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
+              if (_isDoubles) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Teams are formed from confirmed partnerships, ranked by combined rating.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
               const SizedBox(height: 10),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   ElevatedButton(
                     onPressed: _generating ? null : () => _generateBracket(4),
-                    child: const Text('Top 4'),
+                    child: Text('Top 4 $unit'),
                   ),
                   const SizedBox(width: 10),
                   ElevatedButton(
                     onPressed: _generating ? null : () => _generateBracket(8),
-                    child: const Text('Top 8'),
+                    child: Text('Top 8 $unit'),
                   ),
                 ],
               ),
@@ -613,14 +642,16 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
                 Text(roundName, style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 10),
                 ...entry.value.map((m) {
-                  final player1Name = m['player1_username'] ?? 'TBD';
-                  final player2Name = m['player2_username'] ?? 'TBD';
+                  final player1Name = _teamName(m, isSideOne: true);
+                  final player2Name = _teamName(m, isSideOne: false);
                   final isReady = m['status'] == 'ready';
                   final isReported = m['status'] == 'reported';
                   final isConfirmed = m['status'] == 'confirmed';
-                  final iAmPlayer1 = m['player1_id'] == _currentUserId;
-                  final iAmPlayer2 = m['player2_id'] == _currentUserId;
-                  final involvesMe = iAmPlayer1 || iAmPlayer2;
+                  final involvesMe =
+                      m['player1_id'] == _currentUserId ||
+                      m['player2_id'] == _currentUserId ||
+                      m['player1_partner_id'] == _currentUserId ||
+                      m['player2_partner_id'] == _currentUserId;
                   final reportedByMe = m['reported_by'] == _currentUserId;
 
                   return Container(
@@ -803,11 +834,13 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
 class _PlayoffReportDialog extends StatefulWidget {
   final String title;
   final String unitLabel;
+  final String opponentLabel;
   final List<Map<String, int>>? initialSets;
 
   const _PlayoffReportDialog({
     this.title = 'Report Result',
     this.unitLabel = 'Set',
+    this.opponentLabel = 'Opponent',
     this.initialSets,
   });
 
@@ -872,8 +905,8 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
                       child: TextField(
                         controller: set.opponentScore,
                         keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                          labelText: 'Opponent',
+                        decoration: InputDecoration(
+                          labelText: widget.opponentLabel,
                           isDense: true,
                         ),
                       ),

@@ -33,6 +33,8 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
   String? _filterFormat;
   String? _filterSport;
   List<String> _filterAreas = [];
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
 
   final TextEditingController _codeController = TextEditingController();
   bool _joiningByCode = false;
@@ -41,6 +43,12 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
   void initState() {
     super.initState();
     _loadLeagues();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadLeagues() async {
@@ -310,6 +318,27 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: TextField(
+            controller: _searchController,
+            decoration: InputDecoration(
+              labelText: 'Search by name',
+              isDense: true,
+              prefixIcon: const Icon(Icons.search, size: 20),
+              suffixIcon: _searchQuery.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.clear, size: 18),
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() => _searchQuery = '');
+                      },
+                    ),
+            ),
+            onChanged: (v) => setState(() => _searchQuery = v),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
           child: Row(
             children: [
               Expanded(
@@ -383,156 +412,181 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator())
-              : RefreshIndicator(
-                  onRefresh: _loadLeagues,
-                  child: _leagues.isEmpty
-                      ? ListView(
-                          children: [
-                            SizedBox(
-                              height: MediaQuery.of(context).size.height * 0.4,
-                              child: Center(
-                                child: Text(
-                                  'No tournaments match these filters.',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(color: subtleTextColor),
-                                ),
-                              ),
-                            ),
-                          ],
-                        )
-                      : ListView.separated(
-                          padding: const EdgeInsets.all(16),
-                          itemCount: _leagues.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 8),
-                          itemBuilder: (context, index) {
-                            final league = _leagues[index];
-                            final alreadyJoined = league['is_member'] == true;
-                            return Container(
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: borderColor),
-                                boxShadow: AppShadows.card(isDark),
-                              ),
-                              child: Material(
-                                color: cardColor,
-                                borderRadius: BorderRadius.circular(8),
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(8),
-                                  onTap: () async {
-                                    HapticFeedback.selectionClick();
-                                    final result = await Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (context) =>
-                                            LeagueDetailScreen(
-                                              leagueId: league['id'],
-                                            ),
-                                      ),
-                                    );
-                                    if (result == 'deleted' ||
-                                        result == 'left' ||
-                                        result == 'joined') {
-                                      _didJoinAny =
-                                          _didJoinAny || result == 'joined';
-                                      _loadLeagues();
-                                    }
-                                  },
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(12),
-                                    child: Row(
-                                      children: [
-                                        sportIcon(league['sport'], size: 22),
-                                        const SizedBox(width: 12),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                league['name'],
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.w600,
-                                                  fontSize: 14,
-                                                  color: primaryTextColor,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 1),
-                                              Text(
-                                                '${_formatSport(league['sport'])} · ${league['area']}',
-                                                style: TextStyle(
-                                                  fontSize: 11,
-                                                  color: subtleTextColor,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 3),
-                                              Text(
-                                                '${formatDateOnly(league['season_start'])} – ${formatDateOnly(league['season_end'])} · ${league['member_count']} players',
-                                                style: TextStyle(
-                                                  fontSize: 11,
-                                                  color: subtleTextColor,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Wrap(
-                                                spacing: 5,
-                                                children: [
-                                                  _tag(
-                                                    league['format'],
-                                                    subtleTextColor,
-                                                  ),
-                                                  _tag(
-                                                    league['gender_category'] ==
-                                                            'mens'
-                                                        ? "Men's"
-                                                        : "Women's",
-                                                    subtleTextColor,
-                                                  ),
-                                                  if (alreadyJoined)
-                                                    Container(
-                                                      padding:
-                                                          const EdgeInsets.symmetric(
-                                                            horizontal: 6,
-                                                            vertical: 2,
-                                                          ),
-                                                      decoration: BoxDecoration(
-                                                        color: AppColors.success
-                                                            .withValues(
-                                                              alpha: 0.12,
-                                                            ),
-                                                        borderRadius:
-                                                            BorderRadius.circular(
-                                                              4,
-                                                            ),
-                                                      ),
-                                                      child: const Text(
-                                                        'Already Joined',
-                                                        style: TextStyle(
-                                                          fontSize: 10,
-                                                          fontWeight:
-                                                              FontWeight.w600,
-                                                          color:
-                                                              AppColors.success,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                ],
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        Icon(
-                                          Icons.chevron_right,
-                                          color: subtleTextColor,
-                                        ),
-                                      ],
+              : Builder(
+                  builder: (context) {
+                    final query = _searchQuery.trim().toLowerCase();
+                    final visibleLeagues = query.isEmpty
+                        ? _leagues
+                        : _leagues
+                              .where(
+                                (l) => (l['name'] as String)
+                                    .toLowerCase()
+                                    .contains(query),
+                              )
+                              .toList();
+
+                    return RefreshIndicator(
+                      onRefresh: _loadLeagues,
+                      child: visibleLeagues.isEmpty
+                          ? ListView(
+                              children: [
+                                SizedBox(
+                                  height:
+                                      MediaQuery.of(context).size.height * 0.4,
+                                  child: Center(
+                                    child: Text(
+                                      query.isEmpty
+                                          ? 'No tournaments match these filters.'
+                                          : 'No tournaments match "$_searchQuery".',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(color: subtleTextColor),
                                     ),
                                   ),
                                 ),
-                              ),
-                            );
-                          },
-                        ),
+                              ],
+                            )
+                          : ListView.separated(
+                              padding: const EdgeInsets.all(16),
+                              itemCount: visibleLeagues.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 8),
+                              itemBuilder: (context, index) {
+                                final league = visibleLeagues[index];
+                                final alreadyJoined =
+                                    league['is_member'] == true;
+                                return Container(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: borderColor),
+                                    boxShadow: AppShadows.card(isDark),
+                                  ),
+                                  child: Material(
+                                    color: cardColor,
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: InkWell(
+                                      borderRadius: BorderRadius.circular(8),
+                                      onTap: () async {
+                                        HapticFeedback.selectionClick();
+                                        final result = await Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) =>
+                                                LeagueDetailScreen(
+                                                  leagueId: league['id'],
+                                                ),
+                                          ),
+                                        );
+                                        if (result == 'deleted' ||
+                                            result == 'left' ||
+                                            result == 'joined') {
+                                          _didJoinAny =
+                                              _didJoinAny || result == 'joined';
+                                          _loadLeagues();
+                                        }
+                                      },
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(12),
+                                        child: Row(
+                                          children: [
+                                            sportIcon(
+                                              league['sport'],
+                                              size: 22,
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    league['name'],
+                                                    style: TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      fontSize: 14,
+                                                      color: primaryTextColor,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 1),
+                                                  Text(
+                                                    '${_formatSport(league['sport'])} · ${league['area']}',
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: subtleTextColor,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 3),
+                                                  Text(
+                                                    '${formatDateOnly(league['season_start'])} – ${formatDateOnly(league['season_end'])} · ${league['member_count']} players',
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: subtleTextColor,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 4),
+                                                  Wrap(
+                                                    spacing: 5,
+                                                    children: [
+                                                      _tag(
+                                                        league['format'],
+                                                        subtleTextColor,
+                                                      ),
+                                                      _tag(
+                                                        league['gender_category'] ==
+                                                                'mens'
+                                                            ? "Men's"
+                                                            : "Women's",
+                                                        subtleTextColor,
+                                                      ),
+                                                      if (alreadyJoined)
+                                                        Container(
+                                                          padding:
+                                                              const EdgeInsets.symmetric(
+                                                                horizontal: 6,
+                                                                vertical: 2,
+                                                              ),
+                                                          decoration: BoxDecoration(
+                                                            color: AppColors
+                                                                .success
+                                                                .withValues(
+                                                                  alpha: 0.12,
+                                                                ),
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  4,
+                                                                ),
+                                                          ),
+                                                          child: const Text(
+                                                            'Already Joined',
+                                                            style: TextStyle(
+                                                              fontSize: 10,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600,
+                                                              color: AppColors
+                                                                  .success,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                    ],
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            Icon(
+                                              Icons.chevron_right,
+                                              color: subtleTextColor,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                    );
+                  },
                 ),
         ),
       ],

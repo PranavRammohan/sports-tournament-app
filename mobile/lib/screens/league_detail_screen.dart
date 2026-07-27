@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:share_plus/share_plus.dart';
 import '../main.dart';
 import '../config.dart';
 import '../utils.dart';
@@ -1534,13 +1535,28 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                           color: AppColors.textDark,
                         ),
                         const SizedBox(width: 6),
-                        Text(
-                          'Join code: ${_league!['join_code']}',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
+                        Expanded(
+                          child: Text(
+                            'Join code: ${_league!['join_code']}',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.textDark,
+                              letterSpacing: 1,
+                            ),
+                          ),
+                        ),
+                        InkWell(
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            Share.share(
+                              'Join my tournament "${_league!['name']}" on RallyX! Use join code: ${_league!['join_code']}',
+                            );
+                          },
+                          child: const Icon(
+                            Icons.share_outlined,
+                            size: 18,
                             color: AppColors.textDark,
-                            letterSpacing: 1,
                           ),
                         ),
                       ],
@@ -1733,7 +1749,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 label: const Text('Leave Tournament'),
               ),
             ),
-          if (_isMember && _league!['format'] == 'singles' && _isLeagueStyle)
+          if (_isMember && _isLeagueStyle)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: OutlinedButton.icon(
@@ -1745,6 +1761,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                       builder: (context) => PlayoffsScreen(
                         leagueId: widget.leagueId,
                         isHost: isHost,
+                        format: _league!['format'],
                       ),
                     ),
                   );
