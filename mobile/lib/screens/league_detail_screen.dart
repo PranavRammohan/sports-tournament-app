@@ -1857,16 +1857,26 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                         ),
                       );
                     },
-                    leading: CircleAvatar(
-                      radius: 15,
-                      backgroundColor: rankColor,
-                      child: Text(
-                        '$rank',
-                        style: TextStyle(
-                          color: rankTextColor,
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                        ),
+                    leading: SizedBox(
+                      width: 64,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircleAvatar(
+                            radius: 15,
+                            backgroundColor: rankColor,
+                            child: Text(
+                              '$rank',
+                              style: TextStyle(
+                                color: rankTextColor,
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          _playerAvatar(player, 15),
+                        ],
                       ),
                     ),
                     title: Text(
@@ -1931,6 +1941,27 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
             }),
         ],
       ),
+    );
+  }
+
+  Widget _playerAvatar(dynamic player, double radius) {
+    final picUrl = player['profile_pic_url'];
+    final hasPic = picUrl != null && (picUrl as String).isNotEmpty;
+    final username = (player['username'] ?? '?') as String;
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: AppColors.primary.withValues(alpha: 0.15),
+      backgroundImage: hasPic ? NetworkImage(picUrl) : null,
+      child: !hasPic
+          ? Text(
+              username.isNotEmpty ? username[0].toUpperCase() : '?',
+              style: TextStyle(
+                fontSize: radius * 0.8,
+                fontWeight: FontWeight.bold,
+                color: AppColors.primary,
+              ),
+            )
+          : null,
     );
   }
 

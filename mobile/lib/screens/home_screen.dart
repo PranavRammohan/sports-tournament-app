@@ -29,6 +29,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<dynamic> _upcomingMatches = [];
   Map<String, dynamic>? _recentMatch;
   int? _currentUserId;
+  String? _profilePicUrl;
   bool _loading = true;
 
   @override
@@ -51,6 +52,21 @@ class _HomeScreenState extends State<HomeScreen> {
         final userData = jsonDecode(userJson);
         _username = userData['username'] ?? '';
         _currentUserId = userData['id'];
+      }
+
+      if (_currentUserId != null) {
+        try {
+          final profileRes = await http.get(
+            Uri.parse('$baseApiUrl/sports/user/$_currentUserId'),
+            headers: {'Authorization': 'Bearer $token'},
+          );
+          if (profileRes.statusCode == 200) {
+            final profileData = jsonDecode(profileRes.body);
+            _profilePicUrl = profileData['user']?['profile_pic_url'];
+          }
+        } catch (err) {
+          // Non-critical — the welcome card just falls back to an initial.
+        }
       }
 
       final leaguesRes = await http.get(
@@ -190,16 +206,25 @@ class _HomeScreenState extends State<HomeScreen> {
                         CircleAvatar(
                           radius: 26,
                           backgroundColor: Colors.white,
-                          child: Text(
-                            _username.isNotEmpty
-                                ? _username[0].toUpperCase()
-                                : '?',
-                            style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.primary,
-                            ),
-                          ),
+                          backgroundImage:
+                              (_profilePicUrl != null &&
+                                  _profilePicUrl!.isNotEmpty)
+                              ? NetworkImage(_profilePicUrl!)
+                              : null,
+                          child:
+                              (_profilePicUrl != null &&
+                                  _profilePicUrl!.isNotEmpty)
+                              ? null
+                              : Text(
+                                  _username.isNotEmpty
+                                      ? _username[0].toUpperCase()
+                                      : '?',
+                                  style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppColors.primary,
+                                  ),
+                                ),
                         ),
                         const SizedBox(width: 14),
                         Expanded(
