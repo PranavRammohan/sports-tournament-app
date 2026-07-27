@@ -657,7 +657,60 @@ router.get('/head-to-head/:otherUserId', async (req, res) => {
        ORDER BY sport, format`,
       [userId, otherUserId]
     );
-    res.status(200).json({ headToHead: result.rows });
+
+    // Individual matches between the two of you, most recent first — used
+    // to show an actual "recent matches against them" list, not just the
+    // aggregate win/loss counts above.
+    const matchesResult = await pool.query(
+      `SELECT * FROM (
+         SELECT m.id, l.sport, l.format, m.created_at, m.set_scores,
+                m.player1_id, m.player2_id, m.player1_partner_id, m.player2_partner_id,
+                m.winner_id, 'regular' as match_type,
+                pp1.username as player1_partner_username, pp2.username as player2_partner_username
+         FROM matches m
+         JOIN leagues l ON l.id = m.league_id
+         LEFT JOIN users pp1 ON pp1.id = m.player1_partner_id
+         LEFT JOIN users pp2 ON pp2.id = m.player2_partner_id
+         WHERE m.status = 'confirmed'
+           AND (
+             (
+               (m.player1_id = $1 OR m.player1_partner_id = $1)
+               AND (m.player2_id = $2 OR m.player2_partner_id = $2)
+             )
+             OR
+             (
+               (m.player2_id = $1 OR m.player2_partner_id = $1)
+               AND (m.player1_id = $2 OR m.player1_partner_id = $2)
+             )
+           )
+         UNION ALL
+         SELECT pm.id, l.sport, l.format, pm.created_at, pm.set_scores,
+                pm.player1_id, pm.player2_id, pm.player1_partner_id, pm.player2_partner_id,
+                pm.winner_id, 'playoff' as match_type,
+                pp1.username as player1_partner_username, pp2.username as player2_partner_username
+         FROM playoff_matches pm
+         JOIN leagues l ON l.id = pm.league_id
+         LEFT JOIN users pp1 ON pp1.id = pm.player1_partner_id
+         LEFT JOIN users pp2 ON pp2.id = pm.player2_partner_id
+         WHERE pm.status = 'confirmed'
+           AND (
+             (
+               (pm.player1_id = $1 OR pm.player1_partner_id = $1)
+               AND (pm.player2_id = $2 OR pm.player2_partner_id = $2)
+             )
+             OR
+             (
+               (pm.player2_id = $1 OR pm.player2_partner_id = $1)
+               AND (pm.player1_id = $2 OR pm.player1_partner_id = $2)
+             )
+           )
+       ) combined
+       ORDER BY created_at DESC
+       LIMIT 20`,
+      [userId, otherUserId]
+    );
+
+    res.status(200).json({ headToHead: result.rows, matches: matchesResult.rows });
   } catch (err) {
     console.error('Head-to-head error:', err);
     res.status(500).json({ error: 'Something went wrong fetching the head-to-head record.' });
