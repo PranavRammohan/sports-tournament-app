@@ -870,7 +870,7 @@ router.get('/:id', async (req, res) => {
     const leagueData = league.rows[0];
 
     const leaderboard = await pool.query(
-      `SELECT u.id, u.username, u.gender, us.rating, lm.points,
+      `SELECT u.id, u.username, u.gender, u.profile_pic_url, us.rating, lm.points,
               COALESCE(match_stats.matches_played, 0) AS matches_played,
               COALESCE(match_stats.wins, 0) AS wins,
               COALESCE(match_stats.losses, 0) AS losses
