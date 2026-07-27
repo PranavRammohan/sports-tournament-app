@@ -9,6 +9,7 @@ import '../config.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
+import 'league_detail_screen.dart';
 
 class MatchHistoryScreen extends StatefulWidget {
   const MatchHistoryScreen({super.key});
@@ -189,6 +190,10 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                                   ? AppColors.success
                                   : AppColors.danger;
 
+                              final tournamentLabel =
+                                  (m['league_name'] as String?) ??
+                                  '${_formatSport(m['sport'])} · ${m['area']}';
+
                               return TweenAnimationBuilder<double>(
                                 tween: Tween(begin: 0, end: 1),
                                 duration: Duration(
@@ -197,83 +202,115 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                                 ),
                                 builder: (context, value, child) =>
                                     Opacity(opacity: value, child: child),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 9,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context).cardColor,
+                                child: Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
                                     borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: Colors.grey.shade200,
-                                    ),
-                                    boxShadow: AppShadows.card(isDark),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Container(
-                                        width: 4,
-                                        height: 30,
-                                        decoration: BoxDecoration(
-                                          color: iWon
-                                              ? AppColors.success
-                                              : AppColors.danger,
-                                          borderRadius: BorderRadius.circular(
-                                            2,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      sportIcon(m['sport'], size: 16),
-                                      const SizedBox(width: 8),
-                                      SizedBox(
-                                        width: 34,
-                                        child: Text(
-                                          iWon ? 'WIN' : 'LOSS',
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.bold,
-                                            color: iWon
-                                                ? AppColors.success
-                                                : AppColors.danger,
-                                          ),
-                                        ),
-                                      ),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              'vs $opponentLabel',
-                                              style: const TextStyle(
-                                                fontWeight: FontWeight.w600,
-                                                fontSize: 13,
+                                    onTap: m['league_id'] == null
+                                        ? null
+                                        : () {
+                                            HapticFeedback.selectionClick();
+                                            Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                builder: (_) =>
+                                                    LeagueDetailScreen(
+                                                      leagueId: m['league_id'],
+                                                    ),
                                               ),
-                                              overflow: TextOverflow.ellipsis,
+                                            );
+                                          },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 9,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Theme.of(context).cardColor,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                          color: Colors.grey.shade200,
+                                        ),
+                                        boxShadow: AppShadows.card(isDark),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Container(
+                                            width: 4,
+                                            height: 30,
+                                            decoration: BoxDecoration(
+                                              color: iWon
+                                                  ? AppColors.success
+                                                  : AppColors.danger,
+                                              borderRadius:
+                                                  BorderRadius.circular(2),
                                             ),
-                                            Text(
-                                              '${_formatSport(m['sport'])} · ${m['area']} · ${_formatSetScores(m['set_scores'])}',
-                                              style: const TextStyle(
+                                          ),
+                                          const SizedBox(width: 8),
+                                          sportIcon(m['sport'], size: 16),
+                                          const SizedBox(width: 8),
+                                          SizedBox(
+                                            width: 34,
+                                            child: Text(
+                                              iWon ? 'WIN' : 'LOSS',
+                                              style: TextStyle(
                                                 fontSize: 10,
-                                                color: AppColors.textGrey,
+                                                fontWeight: FontWeight.bold,
+                                                color: iWon
+                                                    ? AppColors.success
+                                                    : AppColors.danger,
                                               ),
-                                              overflow: TextOverflow.ellipsis,
                                             ),
-                                          ],
-                                        ),
-                                      ),
-                                      if (ratingChange != null)
-                                        Text(
-                                          changeText,
-                                          style: TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.bold,
-                                            color: changeColor,
                                           ),
-                                        ),
-                                    ],
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  'vs $opponentLabel',
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.w600,
+                                                    fontSize: 13,
+                                                  ),
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                                Text(
+                                                  '$tournamentLabel · ${_formatSetScores(m['set_scores'])}',
+                                                  style: const TextStyle(
+                                                    fontSize: 10,
+                                                    color: AppColors.textGrey,
+                                                  ),
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          if (ratingChange != null)
+                                            Text(
+                                              changeText,
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.bold,
+                                                color: changeColor,
+                                              ),
+                                            ),
+                                          if (m['league_id'] != null)
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                left: 4,
+                                              ),
+                                              child: Icon(
+                                                Icons.chevron_right,
+                                                size: 16,
+                                                color: Colors.grey.shade400,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
                                   ),
                                 ),
                               );
