@@ -42,6 +42,8 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
   bool get _isDoubles => widget.league['format'] == 'doubles';
   late String _initialPartnerMode;
   late String _partnerMode;
+  bool _anyPartnershipsStarted = false;
+  bool _loadingPartnerStatus = false;
 
   bool _restrictRegistration = false;
   DateTime? _registrationStart;
@@ -72,6 +74,36 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
         : null;
     _restrictRegistration =
         _registrationStart != null || _registrationEnd != null;
+
+    if (_isDoubles) {
+      _loadPartnerStatus();
+    }
+  }
+
+  // Fix I: proactively check whether any partnerships have already started
+  // forming, so the partner-mode dropdown can be locked upfront instead of
+  // only failing with an error after the host taps Save.
+  Future<void> _loadPartnerStatus() async {
+    setState(() => _loadingPartnerStatus = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final response = await http.get(
+        Uri.parse('$baseApiUrl/leagues/${widget.league['id']}/partners'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final members = data['members'] as List;
+        final anyStarted = members.any((m) => m['partner_status'] != null);
+        if (mounted) setState(() => _anyPartnershipsStarted = anyStarted);
+      }
+    } catch (err) {
+      // Non-critical — worst case the dropdown stays enabled and the host
+      // finds out via the normal save-time error instead.
+    } finally {
+      if (mounted) setState(() => _loadingPartnerStatus = false);
+    }
   }
 
   @override
@@ -489,14 +521,27 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 4),
-              const Text(
-                'Can only be changed before any partnerships have started forming.',
-                style: TextStyle(fontSize: 11),
-              ),
+              if (_loadingPartnerStatus)
+                const Text(
+                  'Checking partner status...',
+                  style: TextStyle(fontSize: 11),
+                )
+              else if (_anyPartnershipsStarted)
+                const Text(
+                  'Locked — one or more players have already sent, accepted, or been assigned a partner. Unpair everyone first if you need to change this.',
+                  style: TextStyle(fontSize: 11, color: AppColors.warning),
+                )
+              else
+                const Text(
+                  'Can only be changed before any partnerships have started forming.',
+                  style: TextStyle(fontSize: 11),
+                ),
               const SizedBox(height: 6),
               Container(
                 decoration: BoxDecoration(
-                  color: Theme.of(context).cardColor,
+                  color: _anyPartnershipsStarted
+                      ? Colors.grey.shade200
+                      : Theme.of(context).cardColor,
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.grey.shade400),
                   boxShadow: AppShadows.card(isDark),
@@ -522,7 +567,9 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                         ),
                       )
                       .toList(),
-                  onChanged: (v) => setState(() => _partnerMode = v!),
+                  onChanged: _anyPartnershipsStarted
+                      ? null
+                      : (v) => setState(() => _partnerMode = v!),
                 ),
               ),
             ],

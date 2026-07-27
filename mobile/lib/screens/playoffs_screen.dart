@@ -90,7 +90,10 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
     }
   }
 
-  Future<void> _generateBracket(int qualifierCount) async {
+  Future<void> _generateBracket(
+    int qualifierCount, {
+    bool force = false,
+  }) async {
     HapticFeedback.lightImpact();
     setState(() => _generating = true);
     try {
@@ -103,7 +106,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
-        body: jsonEncode({'qualifierCount': qualifierCount}),
+        body: jsonEncode({'qualifierCount': qualifierCount, 'force': force}),
       );
       final data = jsonDecode(response.body);
 
@@ -116,6 +119,37 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
           ),
         );
         _loadBracket();
+      } else if (data['incompleteMatches'] != null) {
+        setState(() => _generating = false);
+        final proceed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            title: const Text('Season not finished yet'),
+            content: Text(
+              '${data['error']} Starting playoffs now means those matches will never be played. Continue anyway?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text(
+                  'Start Playoffs Anyway',
+                  style: TextStyle(color: AppColors.danger),
+                ),
+              ),
+            ],
+          ),
+        );
+        if (proceed == true) {
+          await _generateBracket(qualifierCount, force: true);
+        }
+        return;
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -198,12 +232,17 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
     }
   }
 
-  Future<void> _reportMatch(int matchId) async {
+  Future<void> _reportMatch(dynamic m) async {
+    final iAmSideOne =
+        m['player1_id'] == _currentUserId ||
+        m['player1_partner_id'] == _currentUserId;
+    final opponentName = _teamName(m, isSideOne: !iAmSideOne);
+
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) => _PlayoffReportDialog(
         unitLabel: _unitLabel,
-        opponentLabel: _isDoubles ? 'Opposing Team' : 'Opponent',
+        opponentLabel: opponentName,
       ),
     );
     if (result == null) return;
@@ -214,7 +253,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
       final token = prefs.getString('authToken');
 
       final response = await http.post(
-        Uri.parse('$baseApiUrl/playoffs/match/$matchId/report'),
+        Uri.parse('$baseApiUrl/playoffs/match/${m['id']}/report'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
@@ -263,12 +302,17 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
       initialSets = null;
     }
 
+    final iAmSideOne =
+        m['player1_id'] == _currentUserId ||
+        m['player1_partner_id'] == _currentUserId;
+    final opponentName = _teamName(m, isSideOne: !iAmSideOne);
+
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) => _PlayoffReportDialog(
         title: 'Edit My Report',
         unitLabel: _unitLabel,
-        opponentLabel: _isDoubles ? 'Opposing Team' : 'Opponent',
+        opponentLabel: opponentName,
         initialSets: initialSets,
       ),
     );
@@ -579,7 +623,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
               if (_isDoubles) ...[
                 const SizedBox(height: 4),
                 Text(
-                  'Teams are formed from confirmed partnerships, ranked by combined rating.',
+                  'Teams are formed from confirmed partnerships, seeded by combined tournament points (rating breaks ties).',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
@@ -728,7 +772,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
                             style: ElevatedButton.styleFrom(
                               padding: const EdgeInsets.symmetric(vertical: 8),
                             ),
-                            onPressed: () => _reportMatch(m['id']),
+                            onPressed: () => _reportMatch(m),
                             child: const Text(
                               'Report Result',
                               style: TextStyle(fontSize: 12),

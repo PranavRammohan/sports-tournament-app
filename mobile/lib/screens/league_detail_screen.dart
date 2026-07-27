@@ -1749,7 +1749,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 label: const Text('Leave Tournament'),
               ),
             ),
-          if (_isMember && _isLeagueStyle)
+          if (_isMember && _isLeagueStyle && !_isCompleted)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: OutlinedButton.icon(
@@ -2669,7 +2669,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                       visualDensity: VisualDensity.compact,
                     ),
                   ),
-                ] else ...[
+                ] else if (!_isCompleted) ...[
                   TextButton.icon(
                     onPressed: () => _openEditFixtureDialog(f),
                     icon: const Icon(Icons.edit_outlined, size: 15),

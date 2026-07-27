@@ -20,6 +20,7 @@ class PendingMatchesScreen extends StatefulWidget {
 class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
   List<dynamic> _matches = [];
   bool _loading = true;
+  int? _currentUserId;
 
   @override
   void initState() {
@@ -36,6 +37,10 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
+      final userJson = prefs.getString('user');
+      if (userJson != null) {
+        _currentUserId = jsonDecode(userJson)['id'];
+      }
 
       final response = await http.get(
         Uri.parse('$baseApiUrl/matches/pending'),
@@ -189,6 +194,46 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     }
   }
 
+  // Since /matches/pending only ever returns matches where the current user
+  // is the one who needs to confirm (not the reporter), the "opponent" here
+  // is always the reporter's side — surface their contact info the same way
+  // the in-tournament schedule view already does.
+  List<Map<String, String>> _opponentContacts(dynamic m) {
+    final iAmPlayer1Side =
+        m['player1_id'] == _currentUserId ||
+        m['player1_partner_id'] == _currentUserId;
+    final contacts = <Map<String, String>>[];
+
+    if (iAmPlayer1Side) {
+      if (m['player2_phone'] != null) {
+        contacts.add({
+          'name': m['player2_username'],
+          'phone': m['player2_phone'],
+        });
+      }
+      if (m['player2_partner_phone'] != null) {
+        contacts.add({
+          'name': m['player2_partner_username'],
+          'phone': m['player2_partner_phone'],
+        });
+      }
+    } else {
+      if (m['player1_phone'] != null) {
+        contacts.add({
+          'name': m['player1_username'],
+          'phone': m['player1_phone'],
+        });
+      }
+      if (m['player1_partner_phone'] != null) {
+        contacts.add({
+          'name': m['player1_partner_username'],
+          'phone': m['player1_partner_phone'],
+        });
+      }
+    }
+    return contacts;
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -296,6 +341,31 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                                     ),
                                   ],
                                 ),
+                                if (_opponentContacts(m).isNotEmpty) ...[
+                                  const SizedBox(height: 6),
+                                  ..._opponentContacts(m).map(
+                                    (c) => Padding(
+                                      padding: const EdgeInsets.only(top: 2),
+                                      child: Row(
+                                        children: [
+                                          Icon(
+                                            Icons.phone,
+                                            size: 12,
+                                            color: subtleTextColor,
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            '${c['name']}: ${c['phone']}',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: subtleTextColor,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
                                 const SizedBox(height: 10),
                                 Row(
                                   children: [

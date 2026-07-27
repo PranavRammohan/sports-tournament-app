@@ -482,6 +482,7 @@ class _HomeScreenState extends State<HomeScreen> {
         : (ratingChange >= 0
               ? '+${ratingChange.toStringAsFixed(2)}'
               : ratingChange.toStringAsFixed(2));
+    final isPlayoff = m['match_type'] == 'playoff';
 
     return InkWell(
       borderRadius: BorderRadius.circular(10),
@@ -521,9 +522,28 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 8),
             sportIcon(m['sport'], size: 18),
             const SizedBox(width: 10),
+            if (isPlayoff) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text(
+                  'KNOCKOUT',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.accent,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
             Expanded(
               child: Text(
                 'vs $opponent',
