@@ -909,38 +909,67 @@ router.get('/:id', async (req, res) => {
     let pairLeaderboard = null;
     if (leagueData.format === 'doubles') {
       const pairResult = await pool.query(
-        `SELECT p_a AS player_a_id, p_b AS player_b_id,
+        `SELECT p.p_a AS player_a_id, p.p_b AS player_b_id,
                 ua.username AS player_a_username, ub.username AS player_b_username,
-                COUNT(*) AS matches_played,
-                SUM(win) AS wins,
-                SUM(1 - win) AS losses,
+                COALESCE(r.matches_played, 0) AS matches_played,
+                COALESCE(r.wins, 0) AS wins,
+                COALESCE(r.losses, 0) AS losses,
                 ROUND((COALESCE(ra.rating, 0) + COALESCE(rb.rating, 0)) / 2, 1) AS avg_rating
          FROM (
-           SELECT LEAST(player1_id, player1_partner_id) AS p_a, GREATEST(player1_id, player1_partner_id) AS p_b,
-                  CASE WHEN winner_id = player1_id THEN 1 ELSE 0 END AS win
-           FROM matches
-           WHERE league_id = $3 AND status = 'confirmed' AND player1_partner_id IS NOT NULL
-           UNION ALL
-           SELECT LEAST(player2_id, player2_partner_id), GREATEST(player2_id, player2_partner_id),
-                  CASE WHEN winner_id = player2_id THEN 1 ELSE 0 END
-           FROM matches
-           WHERE league_id = $3 AND status = 'confirmed' AND player2_partner_id IS NOT NULL
-           UNION ALL
-           SELECT LEAST(player1_id, player1_partner_id), GREATEST(player1_id, player1_partner_id),
-                  CASE WHEN winner_id = player1_id THEN 1 ELSE 0 END
+           -- Every pair currently known for this league: from the generated
+           -- schedule/bracket (covers host_auto, whose pairing is computed
+           -- fresh at generation time and never persisted to league_members),
+           -- plus any confirmed self-select/host-manual partnership (covers
+           -- pairs that exist before a schedule has even been generated).
+           SELECT LEAST(player1_id, player1_partner_id) AS p_a, GREATEST(player1_id, player1_partner_id) AS p_b
+           FROM scheduled_matches
+           WHERE league_id = $3 AND player1_partner_id IS NOT NULL
+           UNION
+           SELECT LEAST(player2_id, player2_partner_id), GREATEST(player2_id, player2_partner_id)
+           FROM scheduled_matches
+           WHERE league_id = $3 AND player2_partner_id IS NOT NULL
+           UNION
+           SELECT LEAST(player1_id, player1_partner_id), GREATEST(player1_id, player1_partner_id)
            FROM playoff_matches
-           WHERE league_id = $3 AND status = 'confirmed' AND player1_partner_id IS NOT NULL
-           UNION ALL
-           SELECT LEAST(player2_id, player2_partner_id), GREATEST(player2_id, player2_partner_id),
-                  CASE WHEN winner_id = player2_id THEN 1 ELSE 0 END
+           WHERE league_id = $3 AND player1_partner_id IS NOT NULL
+           UNION
+           SELECT LEAST(player2_id, player2_partner_id), GREATEST(player2_id, player2_partner_id)
            FROM playoff_matches
-           WHERE league_id = $3 AND status = 'confirmed' AND player2_partner_id IS NOT NULL
-         ) pair_results
-         JOIN users ua ON ua.id = p_a
-         JOIN users ub ON ub.id = p_b
-         LEFT JOIN user_sports ra ON ra.user_id = p_a AND ra.sport = $1 AND ra.format = $2
-         LEFT JOIN user_sports rb ON rb.user_id = p_b AND rb.sport = $1 AND rb.format = $2
-         GROUP BY p_a, p_b, ua.username, ub.username, ra.rating, rb.rating
+           WHERE league_id = $3 AND player2_partner_id IS NOT NULL
+           UNION
+           SELECT LEAST(lm.user_id, lm.partner_id), GREATEST(lm.user_id, lm.partner_id)
+           FROM league_members lm
+           WHERE lm.league_id = $3 AND lm.partner_status = 'confirmed'
+         ) p
+         JOIN users ua ON ua.id = p.p_a
+         JOIN users ub ON ub.id = p.p_b
+         LEFT JOIN user_sports ra ON ra.user_id = p.p_a AND ra.sport = $1 AND ra.format = $2
+         LEFT JOIN user_sports rb ON rb.user_id = p.p_b AND rb.sport = $1 AND rb.format = $2
+         LEFT JOIN (
+           SELECT p_a, p_b, COUNT(*) AS matches_played, SUM(win) AS wins, SUM(1 - win) AS losses
+           FROM (
+             SELECT LEAST(player1_id, player1_partner_id) AS p_a, GREATEST(player1_id, player1_partner_id) AS p_b,
+                    CASE WHEN winner_id = player1_id THEN 1 ELSE 0 END AS win
+             FROM matches
+             WHERE league_id = $3 AND status = 'confirmed' AND player1_partner_id IS NOT NULL
+             UNION ALL
+             SELECT LEAST(player2_id, player2_partner_id), GREATEST(player2_id, player2_partner_id),
+                    CASE WHEN winner_id = player2_id THEN 1 ELSE 0 END
+             FROM matches
+             WHERE league_id = $3 AND status = 'confirmed' AND player2_partner_id IS NOT NULL
+             UNION ALL
+             SELECT LEAST(player1_id, player1_partner_id), GREATEST(player1_id, player1_partner_id),
+                    CASE WHEN winner_id = player1_id THEN 1 ELSE 0 END
+             FROM playoff_matches
+             WHERE league_id = $3 AND status = 'confirmed' AND player1_partner_id IS NOT NULL
+             UNION ALL
+             SELECT LEAST(player2_id, player2_partner_id), GREATEST(player2_id, player2_partner_id),
+                    CASE WHEN winner_id = player2_id THEN 1 ELSE 0 END
+             FROM playoff_matches
+             WHERE league_id = $3 AND status = 'confirmed' AND player2_partner_id IS NOT NULL
+           ) pair_results
+           GROUP BY p_a, p_b
+         ) r ON r.p_a = p.p_a AND r.p_b = p.p_b
          ORDER BY wins DESC, avg_rating DESC`,
         [leagueData.sport, leagueData.format, leagueId]
       );

@@ -597,7 +597,7 @@ router.get('/history', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT * FROM (
-         SELECT m.id, m.player1_id, m.player2_id, m.player1_partner_id, m.player2_partner_id,
+         SELECT m.id, m.league_id, m.player1_id, m.player2_id, m.player1_partner_id, m.player2_partner_id,
                 m.player1_units, m.player2_units, m.set_scores, m.winner_id, m.created_at,
                 m.player1_rating_change, m.player2_rating_change,
                 m.player1_partner_rating_change, m.player2_partner_rating_change,
@@ -614,7 +614,7 @@ router.get('/history', async (req, res) => {
          WHERE m.status = 'confirmed'
            AND (m.player1_id = $1 OR m.player2_id = $1 OR m.player1_partner_id = $1 OR m.player2_partner_id = $1)
          UNION ALL
-         SELECT pm.id, pm.player1_id, pm.player2_id, pm.player1_partner_id, pm.player2_partner_id,
+         SELECT pm.id, pm.league_id, pm.player1_id, pm.player2_id, pm.player1_partner_id, pm.player2_partner_id,
                 pm.player1_units, pm.player2_units, pm.set_scores, pm.winner_id, pm.created_at,
                 pm.player1_rating_change, pm.player2_rating_change,
                 pm.player1_partner_rating_change, pm.player2_partner_rating_change,
