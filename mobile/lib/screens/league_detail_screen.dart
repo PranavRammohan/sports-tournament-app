@@ -1858,7 +1858,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                       );
                     },
                     leading: SizedBox(
-                      width: 64,
+                      width: 72,
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
