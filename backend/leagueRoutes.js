@@ -1014,6 +1014,13 @@ function buildTeamsFromConfirmedPairs(members) {
 // Resolves the doubles teams for a league, branching on partner_mode.
 function resolveDoublesTeams(league, members) {
   if (league.partner_mode === 'host_auto') {
+    if (members.length % 2 !== 0) {
+      const err = new Error(
+        `Doubles needs an even number of players so everyone gets paired — currently ${members.length}. Add or remove one player, or switch to self-select/host-manual partner mode to intentionally leave someone out.`
+      );
+      err.code = 'ODD_MEMBER_COUNT';
+      throw err;
+    }
     const sorted = [...members].sort((a, b) => parseFloat(b.rating) - parseFloat(a.rating));
     return zigZagPairTeams(sorted);
   }
@@ -1090,7 +1097,7 @@ router.post('/:id/generate-schedule', async (req, res) => {
         scheduledMatches = generateRoundRobinSchedule(league, members);
       }
     } catch (buildErr) {
-      if (buildErr.code === 'UNPAIRED_MEMBERS') {
+      if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT') {
         return res.status(400).json({ error: buildErr.message });
       }
       throw buildErr;
@@ -1172,7 +1179,7 @@ async function generateKnockoutBracket(req, res, league) {
   try {
     teams = resolveDoublesTeams(league, members);
   } catch (buildErr) {
-    if (buildErr.code === 'UNPAIRED_MEMBERS') {
+    if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT') {
       return res.status(400).json({ error: buildErr.message });
     }
     throw buildErr;
@@ -1453,7 +1460,7 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
         scheduledMatches = generateRoundRobinSchedule(refreshedLeague, members);
       }
     } catch (buildErr) {
-      if (buildErr.code === 'UNPAIRED_MEMBERS') {
+      if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT') {
         return res.status(400).json({ error: buildErr.message });
       }
       throw buildErr;
@@ -1492,6 +1499,17 @@ function generateRoundRobinSchedule(league, members) {
     // Preserve original behavior exactly: tier players first (groups of 4),
     // then zig-zag pair within each tier, then round-robin the resulting
     // teams within that same tier.
+    // NOTE: an odd total is checked here (not per-tier) because with
+    // TIER_SIZE=4 and the merge-leftover-tier logic below, an even total
+    // always produces even-sized tiers after merging — so this one check
+    // is sufficient to guarantee no player ever gets silently left out.
+    if (members.length % 2 !== 0) {
+      const err = new Error(
+        `Doubles needs an even number of players so everyone gets paired — currently ${members.length}. Add or remove one player, or switch to self-select/host-manual partner mode to intentionally leave someone out.`
+      );
+      err.code = 'ODD_MEMBER_COUNT';
+      throw err;
+    }
     return generateHostAutoDoublesRoundRobin(members);
   }
   teams = buildTeamsFromConfirmedPairs(members);

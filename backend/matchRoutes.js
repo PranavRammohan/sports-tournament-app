@@ -13,6 +13,28 @@ const SPORT_RATING_RANGES = {
   pickleball: 4.5,       // 2.5–7.0
 };
 
+// A reasonable ceiling for any single unit count (games/points won in a
+// match) — high enough to never legitimately trigger, just a sanity guard
+// against garbage input.
+const MAX_PLAUSIBLE_UNITS = 500;
+
+function isValidUnitCount(value) {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_PLAUSIBLE_UNITS;
+}
+
+// Validates the optional per-set score breakdown: must be an array (possibly
+// empty) of {me, opponent} objects with non-negative integer values, and no
+// set can be tied (every set needs a winner).
+function isValidSetScores(setScores) {
+  if (setScores == null) return true;
+  if (!Array.isArray(setScores)) return false;
+  return setScores.every((s) => {
+    if (s == null || typeof s !== 'object') return false;
+    if (!isValidUnitCount(s.me) || !isValidUnitCount(s.opponent)) return false;
+    return s.me !== s.opponent;
+  });
+}
+
 async function getRating(userId, sport, format) {
   const result = await pool.query(
     'SELECT rating FROM user_sports WHERE user_id = $1 AND sport = $2 AND format = $3',
@@ -207,15 +229,30 @@ async function checkForRatingDrift(match, league) {
     match.player1_id, match.player2_id, match.player1_partner_id, match.player2_partner_id,
   ].filter(Boolean);
 
+  // Table tennis shares one rating across singles/doubles, so a subsequent
+  // match in the *other* format still moved this player's rating and must
+  // count as drift too — pass null to skip the format filter for that sport.
+  const formatFilter = league.sport === 'table_tennis' ? null : league.format;
+
   const result = await pool.query(
-    `SELECT COUNT(*) FROM matches m
-     JOIN leagues l ON l.id = m.league_id
-     WHERE m.status = 'confirmed' AND m.id != $1
-       AND l.sport = $2 AND l.format = $3
-       AND m.created_at > $4
-       AND (m.player1_id = ANY($5::int[]) OR m.player2_id = ANY($5::int[])
-            OR m.player1_partner_id = ANY($5::int[]) OR m.player2_partner_id = ANY($5::int[]))`,
-    [match.id, league.sport, league.format, match.created_at, participantIds]
+    `SELECT COUNT(*) FROM (
+       SELECT m.id FROM matches m
+       JOIN leagues l ON l.id = m.league_id
+       WHERE m.status = 'confirmed' AND m.id != $1
+         AND l.sport = $2 AND ($3::text IS NULL OR l.format = $3)
+         AND m.created_at > $4
+         AND (m.player1_id = ANY($5::int[]) OR m.player2_id = ANY($5::int[])
+              OR m.player1_partner_id = ANY($5::int[]) OR m.player2_partner_id = ANY($5::int[]))
+       UNION ALL
+       SELECT pm.id FROM playoff_matches pm
+       JOIN leagues l ON l.id = pm.league_id
+       WHERE pm.status = 'confirmed'
+         AND l.sport = $2 AND ($3::text IS NULL OR l.format = $3)
+         AND pm.created_at > $4
+         AND (pm.player1_id = ANY($5::int[]) OR pm.player2_id = ANY($5::int[])
+              OR pm.player1_partner_id = ANY($5::int[]) OR pm.player2_partner_id = ANY($5::int[]))
+     ) drift`,
+    [match.id, league.sport, formatFilter, match.created_at, participantIds]
   );
   return parseInt(result.rows[0].count, 10) > 0;
 }
@@ -236,6 +273,12 @@ router.post('/report', async (req, res) => {
 
   if (!leagueId || !opponentId || myUnits == null || opponentUnits == null || iWon == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
+  }
+  if (!isValidUnitCount(myUnits) || !isValidUnitCount(opponentUnits)) {
+    return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
+  }
+  if (!isValidSetScores(setScores)) {
+    return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
   }
 
   try {
@@ -338,6 +381,12 @@ router.post('/report-as-host', async (req, res) => {
 
   if (!leagueId || !player1Id || !player2Id || player1Units == null || player2Units == null || player1Won == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
+  }
+  if (!isValidUnitCount(player1Units) || !isValidUnitCount(player2Units)) {
+    return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
+  }
+  if (!isValidSetScores(setScores)) {
+    return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
   }
 
   try {
@@ -451,7 +500,8 @@ router.get('/pending', async (req, res) => {
            AND pm.reported_by != $1
            AND (pm.player2_id = $1 OR pm.player2_partner_id = $1 OR pm.player1_id = $1 OR pm.player1_partner_id = $1)
        ) combined
-       ORDER BY created_at DESC`,
+       ORDER BY created_at DESC
+       LIMIT 100`,
       [userId]
     );
     res.status(200).json({ matches: result.rows });
@@ -498,7 +548,8 @@ router.get('/pending-reported-by-me', async (req, res) => {
          LEFT JOIN users pp2 ON pp2.id = pm.player2_partner_id
          WHERE pm.status = 'reported' AND pm.reported_by = $1
        ) combined
-       ORDER BY created_at DESC`,
+       ORDER BY created_at DESC
+       LIMIT 100`,
       [userId]
     );
     res.status(200).json({ matches: result.rows });
@@ -580,7 +631,8 @@ router.get('/history', async (req, res) => {
          WHERE pm.status = 'confirmed'
            AND (pm.player1_id = $1 OR pm.player2_id = $1 OR pm.player1_partner_id = $1 OR pm.player2_partner_id = $1)
        ) combined
-       ORDER BY created_at DESC`,
+       ORDER BY created_at DESC
+       LIMIT 200`,
       [userId]
     );
     res.status(200).json({ matches: result.rows });
@@ -799,6 +851,12 @@ router.put('/:id/edit-report', async (req, res) => {
   if (myUnits == null || opponentUnits == null || iWon == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
   }
+  if (!isValidUnitCount(myUnits) || !isValidUnitCount(opponentUnits)) {
+    return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
+  }
+  if (!isValidSetScores(setScores)) {
+    return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
+  }
 
   try {
     const matchResult = await pool.query('SELECT * FROM matches WHERE id = $1', [matchId]);
@@ -842,6 +900,12 @@ router.put('/:id/edit', async (req, res) => {
 
   if (player1Units == null || player2Units == null || player1Won == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
+  }
+  if (!isValidUnitCount(player1Units) || !isValidUnitCount(player2Units)) {
+    return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
+  }
+  if (!isValidSetScores(setScores)) {
+    return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
   }
 
   try {

@@ -25,6 +25,24 @@ function isPowerOfTwo(n) {
   return n > 0 && (n & (n - 1)) === 0;
 }
 
+// Same validation as matchRoutes.js — kept separate here since this file
+// has no shared module with matchRoutes.js.
+const MAX_PLAUSIBLE_UNITS = 500;
+
+function isValidUnitCount(value) {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_PLAUSIBLE_UNITS;
+}
+
+function isValidSetScores(setScores) {
+  if (setScores == null) return true;
+  if (!Array.isArray(setScores)) return false;
+  return setScores.every((s) => {
+    if (s == null || typeof s !== 'object') return false;
+    if (!isValidUnitCount(s.me) || !isValidUnitCount(s.opponent)) return false;
+    return s.me !== s.opponent;
+  });
+}
+
 async function getRating(userId, sport, format) {
   const result = await pool.query(
     'SELECT rating FROM user_sports WHERE user_id = $1 AND sport = $2 AND format = $3',
@@ -66,6 +84,7 @@ function zigZagPairTeams(sortedMembersDesc) {
       player1: a,
       player2: b,
       avgRating: (parseFloat(a.rating) + parseFloat(b.rating)) / 2,
+      totalPoints: (a.points || 0) + (b.points || 0),
     });
     lo++;
     hi--;
@@ -94,6 +113,7 @@ function buildTeamsFromConfirmedPairs(members) {
       player1: m,
       player2: partner,
       avgRating: (parseFloat(m.rating) + parseFloat(partner.rating)) / 2,
+      totalPoints: (m.points || 0) + (partner.points || 0),
     });
   }
 
@@ -108,7 +128,22 @@ function buildTeamsFromConfirmedPairs(members) {
 
 function resolveDoublesTeams(league, members) {
   if (league.partner_mode === 'host_auto') {
-    const sorted = [...members].sort((a, b) => parseFloat(b.rating) - parseFloat(a.rating));
+    if (members.length % 2 !== 0) {
+      const err = new Error(
+        `Doubles needs an even number of players so everyone gets paired — currently ${members.length}. Add or remove one player, or switch to self-select/host-manual partner mode to intentionally leave someone out.`
+      );
+      err.code = 'ODD_MEMBER_COUNT';
+      throw err;
+    }
+    // Balance-pair by tournament points (season performance) rather than
+    // raw rating — the whole point of Playoffs is to reward how the season
+    // actually went, not just long-term skill level. Rating is kept only
+    // as a tiebreaker.
+    const sorted = [...members].sort((a, b) => {
+      const pointsDiff = (b.points || 0) - (a.points || 0);
+      if (pointsDiff !== 0) return pointsDiff;
+      return parseFloat(b.rating) - parseFloat(a.rating);
+    });
     return zigZagPairTeams(sorted);
   }
   return buildTeamsFromConfirmedPairs(members);
@@ -222,13 +257,49 @@ async function reversePlayoffEffects(match, league) {
   await reverseOne(match.player2_partner_id, match.player2_partner_rating_change, !team1Won);
 }
 
+// Checks if any participant in this playoff match has played another
+// confirmed match (regular or knockout, same sport/format) since this one
+// happened — mirrors matchRoutes.js's checkForRatingDrift, kept separate
+// here since this file has no shared module with matchRoutes.js.
+async function checkForRatingDriftPlayoff(match, league) {
+  const participantIds = [
+    match.player1_id, match.player2_id, match.player1_partner_id, match.player2_partner_id,
+  ].filter(Boolean);
+
+  // Table tennis shares one rating across singles/doubles — see the same
+  // note in matchRoutes.js's checkForRatingDrift.
+  const formatFilter = league.sport === 'table_tennis' ? null : league.format;
+
+  const result = await pool.query(
+    `SELECT COUNT(*) FROM (
+       SELECT pm.id FROM playoff_matches pm
+       JOIN leagues l ON l.id = pm.league_id
+       WHERE pm.status = 'confirmed' AND pm.id != $1
+         AND l.sport = $2 AND ($3::text IS NULL OR l.format = $3)
+         AND pm.created_at > $4
+         AND (pm.player1_id = ANY($5::int[]) OR pm.player2_id = ANY($5::int[])
+              OR pm.player1_partner_id = ANY($5::int[]) OR pm.player2_partner_id = ANY($5::int[]))
+       UNION ALL
+       SELECT m.id FROM matches m
+       JOIN leagues l ON l.id = m.league_id
+       WHERE m.status = 'confirmed'
+         AND l.sport = $2 AND ($3::text IS NULL OR l.format = $3)
+         AND m.created_at > $4
+         AND (m.player1_id = ANY($5::int[]) OR m.player2_id = ANY($5::int[])
+              OR m.player1_partner_id = ANY($5::int[]) OR m.player2_partner_id = ANY($5::int[]))
+     ) drift`,
+    [match.id, league.sport, formatFilter, match.created_at, participantIds]
+  );
+  return parseInt(result.rows[0].count, 10) > 0;
+}
+
 // ---------- GENERATE PLAYOFF BRACKET (host only, once) ----------
 // qualifierCount means "number of singles players" for a singles league, or
 // "number of teams" for a doubles league — both must be a power of two.
 router.post('/:leagueId/generate', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.leagueId;
-  const { qualifierCount } = req.body;
+  const { qualifierCount, force } = req.body;
 
   if (!isPowerOfTwo(qualifierCount) || qualifierCount < 2) {
     return res.status(400).json({ error: 'Qualifier count must be a power of 2 (2, 4, 8, 16...).' });
@@ -253,14 +324,36 @@ router.post('/:leagueId/generate', async (req, res) => {
       return res.status(409).json({ error: 'A bracket has already been started for this league.' });
     }
 
+    // Warn (rather than block outright) if the regular season still has
+    // unplayed fixtures — the host might have a good reason to start early
+    // (forfeits, time constraints), so this is a confirm-to-override rather
+    // than a hard stop. The client re-sends with force: true to proceed.
+    if (!force) {
+      const incompleteResult = await pool.query(
+        `SELECT COUNT(*) FROM scheduled_matches sm
+         LEFT JOIN matches m ON m.scheduled_match_id = sm.id AND m.status = 'confirmed'
+         WHERE sm.league_id = $1 AND m.id IS NULL`,
+        [leagueId]
+      );
+      const incompleteCount = parseInt(incompleteResult.rows[0].count, 10);
+      if (incompleteCount > 0) {
+        return res.status(409).json({
+          error: incompleteCount === 1
+            ? '1 match in the regular season hasn\'t been played yet.'
+            : `${incompleteCount} matches in the regular season haven't been played yet.`,
+          incompleteMatches: incompleteCount,
+        });
+      }
+    }
+
     if (league.format === 'singles') {
       const standingsResult = await pool.query(
-        `SELECT u.id, us.rating
+        `SELECT u.id, us.rating, lm.points
          FROM league_members lm
          JOIN users u ON u.id = lm.user_id
          JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
          WHERE lm.league_id = $3
-         ORDER BY us.rating DESC
+         ORDER BY lm.points DESC, us.rating DESC
          LIMIT $4`,
         [league.sport, league.format, leagueId, qualifierCount]
       );
@@ -299,12 +392,12 @@ router.post('/:leagueId/generate', async (req, res) => {
 
     // Doubles: qualifierCount = number of TEAMS.
     const membersResult = await pool.query(
-      `SELECT u.id, us.rating, lm.partner_id, lm.partner_status
+      `SELECT u.id, us.rating, lm.partner_id, lm.partner_status, lm.points
        FROM league_members lm
        JOIN users u ON u.id = lm.user_id
        JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
        WHERE lm.league_id = $3
-       ORDER BY us.rating DESC`,
+       ORDER BY lm.points DESC, us.rating DESC`,
       [league.sport, league.format, leagueId]
     );
     const members = membersResult.rows;
@@ -313,13 +406,19 @@ router.post('/:leagueId/generate', async (req, res) => {
     try {
       teams = resolveDoublesTeams(league, members);
     } catch (buildErr) {
-      if (buildErr.code === 'UNPAIRED_MEMBERS') {
+      if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT') {
         return res.status(400).json({ error: buildErr.message });
       }
       throw buildErr;
     }
 
-    teams.sort((a, b) => b.avgRating - a.avgRating);
+    // Seed by combined tournament points earned this season, not raw
+    // rating — rating only breaks ties between equally-performing teams.
+    teams.sort((a, b) => {
+      const pointsDiff = b.totalPoints - a.totalPoints;
+      if (pointsDiff !== 0) return pointsDiff;
+      return b.avgRating - a.avgRating;
+    });
 
     if (teams.length < qualifierCount) {
       return res.status(400).json({ error: `Need at least ${qualifierCount} teams to start this bracket size. Currently have ${teams.length} team(s) from ${members.length} player(s).` });
@@ -466,6 +565,12 @@ router.post('/match/:matchId/report', async (req, res) => {
   if (myUnits == null || opponentUnits == null || iWon == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
   }
+  if (!isValidUnitCount(myUnits) || !isValidUnitCount(opponentUnits)) {
+    return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
+  }
+  if (!isValidSetScores(setScores)) {
+    return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
+  }
 
   try {
     const matchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
@@ -520,6 +625,12 @@ router.put('/match/:matchId/edit-report', async (req, res) => {
   if (myUnits == null || opponentUnits == null || iWon == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
   }
+  if (!isValidUnitCount(myUnits) || !isValidUnitCount(opponentUnits)) {
+    return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
+  }
+  if (!isValidSetScores(setScores)) {
+    return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
+  }
 
   try {
     const matchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
@@ -562,6 +673,12 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
 
   if (player1Units == null || player2Units == null || player1Won == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
+  }
+  if (!isValidUnitCount(player1Units) || !isValidUnitCount(player2Units)) {
+    return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
+  }
+  if (!isValidSetScores(setScores)) {
+    return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
   }
 
   try {
@@ -623,6 +740,12 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
   if (player1Units == null || player2Units == null || player1Won == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
   }
+  if (!isValidUnitCount(player1Units) || !isValidUnitCount(player2Units)) {
+    return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
+  }
+  if (!isValidSetScores(setScores)) {
+    return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
+  }
 
   try {
     const matchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
@@ -661,6 +784,10 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
         }
       }
     }
+
+    // Check for drift BEFORE reversing, since the reversal itself inserts a
+    // change that would otherwise be picked up by the same query.
+    const hasDrift = await checkForRatingDriftPlayoff(match, league);
 
     // Reverse the old rating effects before touching anything else.
     await reversePlayoffEffects(match, league);
@@ -765,11 +892,17 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
       );
     }
 
+    const warnings = [];
+    if (winnerChanged) {
+      warnings.push('The winner changed — the next round fixture has been updated accordingly.');
+    }
+    if (hasDrift) {
+      warnings.push('One or more players have played other confirmed matches since this one — their current rating may not perfectly reflect this correction.');
+    }
+
     res.status(200).json({
       message: 'Score updated and ratings recalculated.',
-      warning: winnerChanged
-        ? 'The winner changed — the next round fixture has been updated accordingly.'
-        : null,
+      warning: warnings.length > 0 ? warnings.join(' ') : null,
     });
   } catch (err) {
     console.error('Edit playoff score error:', err);
