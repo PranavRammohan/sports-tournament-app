@@ -3,7 +3,11 @@ const express = require('express');
 const router = express.Router();
 const pool = require('./db');
 
-const TIER_SIZE = 4;
+// Round robin means everyone plays everyone, which scales as n(n-1)/2 —
+// fine for small groups, but can silently balloon into hundreds of matches
+// for larger ones. Above this many matches, generation requires an explicit
+// confirm (force: true) rather than proceeding silently.
+const LARGE_ROUND_ROBIN_THRESHOLD = 40;
 
 function generateJoinCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -94,6 +98,7 @@ router.post('/create', async (req, res) => {
     name, sport, area, seasonStart, seasonEnd, format, genderCategory,
     scheduleType, matchesPerPlayer, hostEntersScores, hostPlays, isPrivate, academyName,
     minRating, maxRating, registrationStart, registrationEnd, partnerMode,
+    groupStageScheduleType, groupStageMatchesPerPlayer,
   } = req.body;
 
   if (!name || !sport || !area || !seasonStart || !seasonEnd || !format || !genderCategory) {
@@ -108,7 +113,7 @@ router.post('/create', async (req, res) => {
 
   const finalPartnerMode = VALID_PARTNER_MODES.includes(partnerMode) ? partnerMode : 'host_auto';
 
-  const validScheduleTypes = ['round_robin', 'matches_per_player', 'knockout', 'custom'];
+  const validScheduleTypes = ['round_robin', 'matches_per_player', 'knockout', 'custom', 'groups'];
   const finalScheduleType = validScheduleTypes.includes(scheduleType) ? scheduleType : 'round_robin';
 
   if (finalScheduleType === 'matches_per_player' && (!matchesPerPlayer || matchesPerPlayer < 1)) {
@@ -117,6 +122,28 @@ router.post('/create', async (req, res) => {
   // NOTE: Knockout is now supported for doubles as well as singles — the
   // singles-only restriction has been removed. (Fixed-matches-per-player
   // was already available to both formats via the schedule generator.)
+
+  // Groups format is singles-only for now — doubles would need partner
+  // resolution done separately within each group before anything could be
+  // scheduled, which is a meaningfully bigger scope than this first version.
+  let finalGroupStageScheduleType = null;
+  let finalGroupStageMatchesPerPlayer = null;
+  if (finalScheduleType === 'groups') {
+    if (format !== 'singles') {
+      return res.status(400).json({ error: 'The Groups format is currently only supported for singles leagues.' });
+    }
+    const validGroupStageTypes = ['round_robin', 'matches_per_player'];
+    finalGroupStageScheduleType = validGroupStageTypes.includes(groupStageScheduleType)
+      ? groupStageScheduleType
+      : 'round_robin';
+    if (finalGroupStageScheduleType === 'matches_per_player' &&
+        (!groupStageMatchesPerPlayer || groupStageMatchesPerPlayer < 1)) {
+      return res.status(400).json({ error: 'Please specify how many matches each player should play within their group.' });
+    }
+    finalGroupStageMatchesPerPlayer = finalGroupStageScheduleType === 'matches_per_player'
+      ? groupStageMatchesPerPlayer
+      : null;
+  }
 
   if (minRating != null && maxRating != null && parseFloat(minRating) > parseFloat(maxRating)) {
     return res.status(400).json({ error: 'Minimum rating cannot be higher than maximum rating.' });
@@ -141,11 +168,13 @@ router.post('/create', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO leagues (name, sport, area, season_start, season_end, created_by, format, gender_category,
                             schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
-                            min_rating, max_rating, registration_start, registration_end, partner_mode)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                            min_rating, max_rating, registration_start, registration_end, partner_mode,
+                            group_stage_schedule_type, group_stage_matches_per_player)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
        RETURNING id, name, sport, area, season_start, season_end, format, gender_category, created_by,
                  schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
-                 min_rating, max_rating, registration_start, registration_end, partner_mode`,
+                 min_rating, max_rating, registration_start, registration_end, partner_mode,
+                 group_stage_schedule_type, group_stage_matches_per_player`,
       [
         name, sport, area, seasonStart, seasonEnd, userId, format, genderCategory,
         finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null,
@@ -156,6 +185,8 @@ router.post('/create', async (req, res) => {
         registrationStart || null,
         registrationEnd || null,
         format === 'doubles' ? finalPartnerMode : 'host_auto',
+        finalGroupStageScheduleType,
+        finalGroupStageMatchesPerPlayer,
       ]
     );
 
@@ -633,6 +664,690 @@ router.get('/:id/partners', async (req, res) => {
   }
 });
 
+// =====================================================================
+// GROUPS FORMAT — group management (v1: singles only)
+// =====================================================================
+
+// ---------- CREATE A GROUP (host only) ----------
+router.post('/:id/groups', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { name } = req.body;
+
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'Please give the group a name.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can create groups.' });
+    }
+    if (league.schedule_type !== 'groups') {
+      return res.status(400).json({ error: 'This league is not set up for group play.' });
+    }
+    if (league.groups_locked) {
+      return res.status(400).json({ error: 'Groups are locked and can no longer be changed.' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO league_groups (league_id, name) VALUES ($1, $2) RETURNING *`,
+      [leagueId, name.trim()]
+    );
+
+    res.status(201).json({ group: result.rows[0] });
+  } catch (err) {
+    console.error('Create group error:', err);
+    res.status(500).json({ error: 'Something went wrong creating the group.' });
+  }
+});
+
+// ---------- LIST GROUPS + MEMBERSHIP ----------
+// Returns { groups: [{...group, members: [...with matches_played/wins/losses/points]}], unassignedMembers }
+// Stats are derived from each match's own stored league_points_awarded
+// (fixed at confirm time) rather than the mutable league_members.points
+// running total — that total keeps accumulating through stage 2, but a
+// group's standings must stay a stable historical snapshot of group play
+// only. Shared by GET /:id/groups and stage 2 advancement, which both need
+// the exact same per-group ranking.
+async function getGroupsWithStandings(league, leagueId) {
+  const groupsResult = await pool.query(
+    'SELECT * FROM league_groups WHERE league_id = $1 ORDER BY id ASC',
+    [leagueId]
+  );
+
+  const membersResult = await pool.query(
+    `SELECT u.id, u.username, us.rating, lm.group_id,
+            COALESCE(stats.matches_played, 0) AS matches_played,
+            COALESCE(stats.wins, 0) AS wins,
+            COALESCE(stats.losses, 0) AS losses,
+            COALESCE(stats.points, 0) AS points
+     FROM league_members lm
+     JOIN users u ON u.id = lm.user_id
+     JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+     LEFT JOIN (
+       SELECT player_id, COUNT(*) AS matches_played,
+              SUM(won) AS wins, SUM(1 - won) AS losses, SUM(points_if_won) AS points
+       FROM (
+         SELECT m.player1_id AS player_id,
+                CASE WHEN m.winner_id = m.player1_id THEN 1 ELSE 0 END AS won,
+                CASE WHEN m.winner_id = m.player1_id THEN COALESCE(m.league_points_awarded, 0) ELSE 0 END AS points_if_won
+         FROM matches m
+         JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
+         WHERE sm.league_id = $3 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
+         UNION ALL
+         SELECT m.player2_id,
+                CASE WHEN m.winner_id = m.player2_id THEN 1 ELSE 0 END,
+                CASE WHEN m.winner_id = m.player2_id THEN COALESCE(m.league_points_awarded, 0) ELSE 0 END
+         FROM matches m
+         JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
+         WHERE sm.league_id = $3 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
+       ) participants
+       GROUP BY player_id
+     ) stats ON stats.player_id = u.id
+     WHERE lm.league_id = $3
+     ORDER BY COALESCE(stats.points, 0) DESC, us.rating DESC`,
+    [league.sport, league.format, leagueId]
+  );
+  const members = membersResult.rows;
+
+  const groups = groupsResult.rows.map((g) => ({
+    ...g,
+    members: members.filter((m) => m.group_id === g.id),
+  }));
+  const unassignedMembers = members.filter((m) => m.group_id === null);
+
+  return { groups, unassignedMembers };
+}
+
+router.get('/:id/groups', async (req, res) => {
+  const leagueId = req.params.id;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    const { groups, unassignedMembers } = await getGroupsWithStandings(league, leagueId);
+
+    res.status(200).json({
+      groups,
+      unassignedMembers,
+      groupsLocked: league.groups_locked,
+    });
+  } catch (err) {
+    console.error('List groups error:', err);
+    res.status(500).json({ error: 'Something went wrong fetching groups.' });
+  }
+});
+
+// ---------- GET ONE GROUP'S SCHEDULE (fixtures + contact info) ----------
+router.get('/:id/groups/:groupId/schedule', async (req, res) => {
+  const { id: leagueId, groupId } = req.params;
+
+  try {
+    const groupCheck = await pool.query(
+      'SELECT id FROM league_groups WHERE id = $1 AND league_id = $2',
+      [groupId, leagueId]
+    );
+    if (groupCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Group not found.' });
+    }
+
+    const result = await pool.query(
+      `SELECT sm.id, sm.scheduled_time,
+              sm.player1_id, sm.player2_id,
+              p1.username as player1_username, p1.phone_number as player1_phone,
+              p2.username as player2_username, p2.phone_number as player2_phone,
+              m.id as match_id, m.status as match_status, m.set_scores, m.winner_id, m.reported_by,
+              m.player1_id as reported_player1_id, m.player2_id as reported_player2_id
+       FROM scheduled_matches sm
+       LEFT JOIN matches m ON m.scheduled_match_id = sm.id AND m.status != 'rejected'
+       JOIN users p1 ON p1.id = sm.player1_id
+       JOIN users p2 ON p2.id = sm.player2_id
+       WHERE sm.league_id = $1 AND sm.group_id = $2
+       ORDER BY sm.id ASC`,
+      [leagueId, groupId]
+    );
+    res.status(200).json({ schedule: result.rows });
+  } catch (err) {
+    console.error('Get group schedule error:', err);
+    res.status(500).json({ error: "Something went wrong fetching this group's schedule." });
+  }
+});
+
+// ---------- DELETE A GROUP (host only) — unassigns its members first ----------
+router.delete('/:id/groups/:groupId', async (req, res) => {
+  const userId = req.userId;
+  const { id: leagueId, groupId } = req.params;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can delete groups.' });
+    }
+    if (league.groups_locked) {
+      return res.status(400).json({ error: 'Groups are locked and can no longer be changed.' });
+    }
+
+    const groupCheck = await pool.query(
+      'SELECT id FROM league_groups WHERE id = $1 AND league_id = $2',
+      [groupId, leagueId]
+    );
+    if (groupCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Group not found.' });
+    }
+
+    await pool.query(
+      'UPDATE league_members SET group_id = NULL WHERE league_id = $1 AND group_id = $2',
+      [leagueId, groupId]
+    );
+    await pool.query('DELETE FROM league_groups WHERE id = $1', [groupId]);
+
+    res.status(200).json({ message: 'Group deleted.' });
+  } catch (err) {
+    console.error('Delete group error:', err);
+    res.status(500).json({ error: 'Something went wrong deleting the group.' });
+  }
+});
+
+// ---------- MANUALLY ASSIGN A PLAYER TO A GROUP (host only) ----------
+router.post('/:id/groups/:groupId/assign', async (req, res) => {
+  const userId = req.userId;
+  const { id: leagueId, groupId } = req.params;
+  const { userId: targetUserId } = req.body;
+
+  if (!targetUserId) {
+    return res.status(400).json({ error: 'Please specify which player to assign.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can assign players to groups.' });
+    }
+    if (league.groups_locked) {
+      return res.status(400).json({ error: 'Groups are locked and can no longer be changed.' });
+    }
+
+    const groupCheck = await pool.query(
+      'SELECT id FROM league_groups WHERE id = $1 AND league_id = $2',
+      [groupId, leagueId]
+    );
+    if (groupCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Group not found.' });
+    }
+
+    const result = await pool.query(
+      'UPDATE league_members SET group_id = $1 WHERE league_id = $2 AND user_id = $3 RETURNING id',
+      [groupId, leagueId, targetUserId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'This player is not a member of this league.' });
+    }
+
+    res.status(200).json({ message: 'Player assigned to group.' });
+  } catch (err) {
+    console.error('Assign to group error:', err);
+    res.status(500).json({ error: 'Something went wrong assigning this player.' });
+  }
+});
+
+// ---------- UNASSIGN A PLAYER FROM THEIR GROUP (host only) ----------
+router.post('/:id/groups/unassign', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { userId: targetUserId } = req.body;
+
+  if (!targetUserId) {
+    return res.status(400).json({ error: 'Please specify which player to unassign.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can unassign players.' });
+    }
+    if (league.groups_locked) {
+      return res.status(400).json({ error: 'Groups are locked and can no longer be changed.' });
+    }
+
+    await pool.query(
+      'UPDATE league_members SET group_id = NULL WHERE league_id = $1 AND user_id = $2',
+      [leagueId, targetUserId]
+    );
+
+    res.status(200).json({ message: 'Player unassigned from group.' });
+  } catch (err) {
+    console.error('Unassign from group error:', err);
+    res.status(500).json({ error: 'Something went wrong unassigning this player.' });
+  }
+});
+
+// ---------- AUTO-ASSIGN ALL PLAYERS ACROSS EXISTING GROUPS (host only) ----------
+// Straight distribution by rating: highest rated -> group 1, next -> group 2,
+// next -> group 3, then back to group 1, and so on (not a snake draft) —
+// re-assigns EVERYONE currently in the league, overwriting any existing
+// assignments, so the host can freely re-shuffle before locking.
+router.post('/:id/groups/auto-assign', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can auto-assign groups.' });
+    }
+    if (league.groups_locked) {
+      return res.status(400).json({ error: 'Groups are locked and can no longer be changed.' });
+    }
+
+    const groupsResult = await pool.query(
+      'SELECT id FROM league_groups WHERE league_id = $1 ORDER BY id ASC',
+      [leagueId]
+    );
+    const groups = groupsResult.rows;
+    if (groups.length < 2) {
+      return res.status(400).json({ error: 'Create at least 2 groups before auto-assigning.' });
+    }
+
+    const membersResult = await pool.query(
+      `SELECT lm.user_id, us.rating
+       FROM league_members lm
+       JOIN user_sports us ON us.user_id = lm.user_id AND us.sport = $1 AND us.format = $2
+       WHERE lm.league_id = $3
+       ORDER BY us.rating DESC`,
+      [league.sport, league.format, leagueId]
+    );
+    const members = membersResult.rows;
+
+    for (let i = 0; i < members.length; i++) {
+      const targetGroup = groups[i % groups.length];
+      await pool.query(
+        'UPDATE league_members SET group_id = $1 WHERE league_id = $2 AND user_id = $3',
+        [targetGroup.id, leagueId, members[i].user_id]
+      );
+    }
+
+    res.status(200).json({ message: 'Players auto-assigned to groups.' });
+  } catch (err) {
+    console.error('Auto-assign groups error:', err);
+    res.status(500).json({ error: 'Something went wrong auto-assigning players.' });
+  }
+});
+
+// ---------- LOCK GROUPS AND GENERATE GROUP-STAGE SCHEDULES (host only) ----------
+// Once locked, group membership is frozen and each group gets its own
+// round-robin (or fixed-matches) schedule, exactly like a normal league —
+// just scoped to that group's members and tagged with group_id so each
+// group's matches/leaderboard stay separate.
+router.post('/:id/groups/lock', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can lock groups.' });
+    }
+    if (league.schedule_type !== 'groups') {
+      return res.status(400).json({ error: 'This league is not set up for group play.' });
+    }
+    if (league.groups_locked) {
+      return res.status(409).json({ error: 'Groups are already locked.' });
+    }
+
+    const groupsResult = await pool.query(
+      'SELECT * FROM league_groups WHERE league_id = $1 ORDER BY id ASC',
+      [leagueId]
+    );
+    const groups = groupsResult.rows;
+    if (groups.length < 2) {
+      return res.status(400).json({ error: 'Create at least 2 groups before locking.' });
+    }
+
+    const membersResult = await pool.query(
+      `SELECT u.id, us.rating, lm.group_id
+       FROM league_members lm
+       JOIN users u ON u.id = lm.user_id
+       JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+       WHERE lm.league_id = $3
+       ORDER BY us.rating DESC`,
+      [league.sport, league.format, leagueId]
+    );
+    const members = membersResult.rows;
+
+    const unassigned = members.filter((m) => m.group_id === null);
+    if (unassigned.length > 0) {
+      return res.status(400).json({
+        error: `${unassigned.length} player(s) haven't been assigned to a group yet. Assign everyone (or auto-assign) before locking.`,
+      });
+    }
+
+    for (const group of groups) {
+      const groupMembers = members.filter((m) => m.group_id === group.id);
+      if (groupMembers.length < 2) {
+        return res.status(400).json({
+          error: `"${group.name}" only has ${groupMembers.length} player(s) — every group needs at least 2 to generate matches.`,
+        });
+      }
+    }
+
+    let totalMatches = 0;
+    for (const group of groups) {
+      const groupMembers = members.filter((m) => m.group_id === group.id);
+
+      let groupMatches;
+      if (league.group_stage_schedule_type === 'matches_per_player') {
+        groupMatches = generateNearestRatingSchedule(groupMembers, league.group_stage_matches_per_player);
+      } else {
+        groupMatches = generateSinglesRoundRobin(groupMembers);
+      }
+
+      for (const m of groupMatches) {
+        await pool.query(
+          `INSERT INTO scheduled_matches
+            (league_id, tier_number, player1_id, player1_partner_id, player2_id, player2_partner_id, group_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [leagueId, m.tierNumber, m.player1Id, m.player1PartnerId, m.player2Id, m.player2PartnerId, group.id]
+        );
+      }
+      totalMatches += groupMatches.length;
+    }
+
+    await pool.query('UPDATE leagues SET groups_locked = true WHERE id = $1', [leagueId]);
+
+    res.status(201).json({ message: 'Groups locked and matches generated.', matchCount: totalMatches });
+  } catch (err) {
+    console.error('Lock groups error:', err);
+    res.status(500).json({ error: 'Something went wrong locking groups.' });
+  }
+});
+
+// ---------- START STAGE 2 (host only) ----------
+// Takes the top N (uniform across all groups) from each group's standings
+// and generates a fresh schedule/bracket among just those qualifiers, in
+// whatever format the host picks — completely independent of the group
+// stage's format. Round robin / fixed-matches reuse the same generator
+// functions as any other league (tagged with group_id = NULL to distinguish
+// from group-stage fixtures in the same scheduled_matches table). Knockout
+// is inserted directly into playoff_matches using the same shape the rest
+// of the app already uses — so the existing playoff report/confirm/reject/
+// edit-score endpoints work on these rows completely unmodified.
+router.post('/:id/stage2/start', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { advanceCount, scheduleType, matchesPerPlayer, force } = req.body;
+
+  const validStage2Types = ['round_robin', 'matches_per_player', 'knockout', 'custom'];
+  if (!validStage2Types.includes(scheduleType)) {
+    return res.status(400).json({ error: 'Please choose a valid format for this stage.' });
+  }
+  if (!advanceCount || advanceCount < 1) {
+    return res.status(400).json({ error: 'Please specify how many players advance from each group.' });
+  }
+  if (scheduleType === 'matches_per_player' && (!matchesPerPlayer || matchesPerPlayer < 1)) {
+    return res.status(400).json({ error: 'Please specify how many matches each player should play.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can start this stage.' });
+    }
+    if (league.schedule_type !== 'groups') {
+      return res.status(400).json({ error: 'This league is not set up for group play.' });
+    }
+    if (!league.groups_locked) {
+      return res.status(400).json({ error: 'Lock groups and complete group play before starting this stage.' });
+    }
+    if (league.stage2_started) {
+      return res.status(409).json({ error: 'This stage has already started.' });
+    }
+
+    if (!force) {
+      const incompleteResult = await pool.query(
+        `SELECT COUNT(*) FROM scheduled_matches sm
+         LEFT JOIN matches m ON m.scheduled_match_id = sm.id AND m.status = 'confirmed'
+         WHERE sm.league_id = $1 AND sm.group_id IS NOT NULL AND m.id IS NULL`,
+        [leagueId]
+      );
+      const incompleteCount = parseInt(incompleteResult.rows[0].count, 10);
+      if (incompleteCount > 0) {
+        return res.status(409).json({
+          error: incompleteCount === 1
+            ? '1 group match hasn\'t been played yet.'
+            : `${incompleteCount} group matches haven't been played yet.`,
+          incompleteMatches: incompleteCount,
+        });
+      }
+    }
+
+    const { groups } = await getGroupsWithStandings(league, leagueId);
+
+    for (const group of groups) {
+      if (group.members.length < advanceCount) {
+        return res.status(400).json({
+          error: `"${group.name}" only has ${group.members.length} player(s) — can't advance ${advanceCount} from it.`,
+        });
+      }
+    }
+
+    // Members are already ordered by points desc, rating desc within each
+    // group (inherited from getGroupsWithStandings) — take the top N from
+    // each and combine, alternating groups so top seeds from different
+    // groups don't end up adjacent to each other.
+    const qualifiers = [];
+    for (let rank = 0; rank < advanceCount; rank++) {
+      for (const group of groups) {
+        qualifiers.push(group.members[rank]);
+      }
+    }
+
+    if (scheduleType === 'knockout') {
+      if (!isPowerOfTwo(qualifiers.length)) {
+        return res.status(400).json({
+          error: `Knockout needs an exact power-of-2 qualifier count (2, 4, 8, 16...) — currently ${qualifiers.length}. Adjust how many advance per group.`,
+        });
+      }
+
+      const size = qualifiers.length;
+      const seedOrder = generateSeedOrder(size);
+      const totalRounds = Math.log2(size);
+
+      for (let i = 0; i < seedOrder.length; i += 2) {
+        const seedA = seedOrder[i];
+        const seedB = seedOrder[i + 1];
+        await pool.query(
+          `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, player2_id, status)
+           VALUES ($1, 1, $2, $3, $4, 'ready')`,
+          [leagueId, i / 2 + 1, qualifiers[seedA - 1].id, qualifiers[seedB - 1].id]
+        );
+      }
+      for (let round = 2; round <= totalRounds; round++) {
+        const matchesInRound = size / Math.pow(2, round);
+        for (let pos = 1; pos <= matchesInRound; pos++) {
+          await pool.query(
+            `INSERT INTO playoff_matches (league_id, round_number, position, status)
+             VALUES ($1, $2, $3, 'pending')`,
+            [leagueId, round, pos]
+          );
+        }
+      }
+    } else if (scheduleType === 'custom') {
+      // No auto-generation — host adds matches manually via the existing
+      // add-manual-match endpoint, same as any other custom league.
+    } else {
+      let stage2Matches;
+      if (scheduleType === 'matches_per_player') {
+        stage2Matches = generateNearestRatingSchedule(qualifiers, matchesPerPlayer);
+      } else {
+        stage2Matches = generateSinglesRoundRobin(qualifiers);
+      }
+      for (const m of stage2Matches) {
+        await pool.query(
+          `INSERT INTO scheduled_matches
+            (league_id, tier_number, player1_id, player1_partner_id, player2_id, player2_partner_id, group_id)
+           VALUES ($1, $2, $3, $4, $5, $6, NULL)`,
+          [leagueId, m.tierNumber, m.player1Id, m.player1PartnerId, m.player2Id, m.player2PartnerId]
+        );
+      }
+    }
+
+    await pool.query(
+      `UPDATE leagues SET stage2_started = true, group_advance_count = $1,
+        stage2_schedule_type = $2, stage2_matches_per_player = $3
+       WHERE id = $4`,
+      [advanceCount, scheduleType, scheduleType === 'matches_per_player' ? matchesPerPlayer : null, leagueId]
+    );
+
+    res.status(201).json({
+      message: 'Stage 2 started.',
+      qualifierCount: qualifiers.length,
+    });
+  } catch (err) {
+    console.error('Start stage 2 error:', err);
+    res.status(500).json({ error: 'Something went wrong starting this stage.' });
+  }
+});
+
+// ---------- STAGE 2 STATUS (qualifiers + scoped leaderboard) ----------
+router.get('/:id/stage2', async (req, res) => {
+  const leagueId = req.params.id;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (!league.stage2_started) {
+      return res.status(200).json({ stage2Started: false });
+    }
+
+    // Every scheduled_matches row with group_id IS NULL is, by construction,
+    // a stage 2 fixture (group-stage rows always have a group_id set).
+    const leaderboardResult = await pool.query(
+      `SELECT u.id, u.username, us.rating,
+              COALESCE(stats.matches_played, 0) AS matches_played,
+              COALESCE(stats.wins, 0) AS wins,
+              COALESCE(stats.losses, 0) AS losses,
+              COALESCE(stats.points, 0) AS points
+       FROM (
+         SELECT DISTINCT player_id FROM (
+           SELECT player1_id AS player_id FROM scheduled_matches WHERE league_id = $3 AND group_id IS NULL
+           UNION
+           SELECT player2_id FROM scheduled_matches WHERE league_id = $3 AND group_id IS NULL
+           UNION
+           SELECT player1_id FROM playoff_matches WHERE league_id = $3
+           UNION
+           SELECT player2_id FROM playoff_matches WHERE league_id = $3
+         ) qualifier_ids WHERE player_id IS NOT NULL
+       ) q
+       JOIN users u ON u.id = q.player_id
+       JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+       LEFT JOIN (
+         SELECT player_id, COUNT(*) AS matches_played,
+                SUM(won) AS wins, SUM(1 - won) AS losses, SUM(points_if_won) AS points
+         FROM (
+           SELECT m.player1_id AS player_id,
+                  CASE WHEN m.winner_id = m.player1_id THEN 1 ELSE 0 END AS won,
+                  CASE WHEN m.winner_id = m.player1_id THEN COALESCE(m.league_points_awarded, 0) ELSE 0 END AS points_if_won
+           FROM matches m
+           JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
+           WHERE sm.league_id = $3 AND sm.group_id IS NULL AND m.status = 'confirmed'
+           UNION ALL
+           SELECT m.player2_id,
+                  CASE WHEN m.winner_id = m.player2_id THEN 1 ELSE 0 END,
+                  CASE WHEN m.winner_id = m.player2_id THEN COALESCE(m.league_points_awarded, 0) ELSE 0 END
+           FROM matches m
+           JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
+           WHERE sm.league_id = $3 AND sm.group_id IS NULL AND m.status = 'confirmed'
+         ) participants
+         GROUP BY player_id
+       ) stats ON stats.player_id = u.id
+       ORDER BY COALESCE(stats.points, 0) DESC, us.rating DESC`,
+      [league.sport, league.format, leagueId]
+    );
+
+    res.status(200).json({
+      stage2Started: true,
+      scheduleType: league.stage2_schedule_type,
+      groupAdvanceCount: league.group_advance_count,
+      isKnockout: league.stage2_schedule_type === 'knockout',
+      leaderboard: leaderboardResult.rows,
+    });
+  } catch (err) {
+    console.error('Get stage2 status error:', err);
+    res.status(500).json({ error: 'Something went wrong fetching this stage.' });
+  }
+});
+
+// ---------- STAGE 2 SCHEDULE (round robin / fixed-matches / custom only — knockout uses GET /playoffs/:leagueId) ----------
+router.get('/:id/stage2/schedule', async (req, res) => {
+  const leagueId = req.params.id;
+
+  try {
+    const result = await pool.query(
+      `SELECT sm.id, sm.scheduled_time,
+              sm.player1_id, sm.player2_id,
+              p1.username as player1_username, p1.phone_number as player1_phone,
+              p2.username as player2_username, p2.phone_number as player2_phone,
+              m.id as match_id, m.status as match_status, m.set_scores, m.winner_id, m.reported_by,
+              m.player1_id as reported_player1_id, m.player2_id as reported_player2_id
+       FROM scheduled_matches sm
+       LEFT JOIN matches m ON m.scheduled_match_id = sm.id AND m.status != 'rejected'
+       JOIN users p1 ON p1.id = sm.player1_id
+       JOIN users p2 ON p2.id = sm.player2_id
+       WHERE sm.league_id = $1 AND sm.group_id IS NULL
+       ORDER BY sm.id ASC`,
+      [leagueId]
+    );
+    res.status(200).json({ schedule: result.rows });
+  } catch (err) {
+    console.error('Get stage2 schedule error:', err);
+    res.status(500).json({ error: "Something went wrong fetching this stage's schedule." });
+  }
+});
+
 // ---------- SEARCH USERS TO ADD (host only) ----------
 router.get('/:id/search-players', async (req, res) => {
   const userId = req.userId;
@@ -1060,6 +1775,7 @@ function resolveDoublesTeams(league, members) {
 router.post('/:id/generate-schedule', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.id;
+  const { force } = req.body;
 
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
@@ -1078,6 +1794,9 @@ router.post('/:id/generate-schedule', async (req, res) => {
 
     if (league.schedule_type === 'custom') {
       return res.status(400).json({ error: 'Custom leagues do not use auto-generated schedules. Add matches manually instead.' });
+    }
+    if (league.schedule_type === 'groups') {
+      return res.status(400).json({ error: 'Groups tournaments use group management to set up matches — see the Groups tab instead.' });
     }
 
     if (league.schedule_type === 'knockout') {
@@ -1110,6 +1829,16 @@ router.post('/:id/generate-schedule', async (req, res) => {
           ? 'Need at least 4 players to generate a doubles schedule.'
           : 'Need at least 2 players to generate a schedule.',
       });
+    }
+
+    if (league.schedule_type === 'round_robin' && !force) {
+      const estimatedMatches = estimateRoundRobinMatchCount(league, members.length);
+      if (estimatedMatches > LARGE_ROUND_ROBIN_THRESHOLD) {
+        return res.status(409).json({
+          error: `Everyone playing everyone means ${estimatedMatches} matches for this group size — that's a lot for one tournament.`,
+          estimatedMatches,
+        });
+      }
     }
 
     let scheduledMatches = [];
@@ -1277,7 +2006,9 @@ router.post('/:id/add-manual-match', async (req, res) => {
     if (completedError) {
       return res.status(400).json({ error: completedError });
     }
-    if (league.schedule_type !== 'custom') {
+    const isStage2Custom = league.schedule_type === 'groups' &&
+      league.stage2_started && league.stage2_schedule_type === 'custom';
+    if (league.schedule_type !== 'custom' && !isStage2Custom) {
       return res.status(400).json({ error: 'This league does not use manual match building.' });
     }
     if (league.format === 'doubles' && (!player1PartnerId || !player2PartnerId)) {
@@ -1407,7 +2138,7 @@ async function reverseAllConfirmedPlayoffMatchesForLeague(leagueId, league) {
 router.post('/:id/regenerate-schedule', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.id;
-  const { scheduleType, matchesPerPlayer } = req.body;
+  const { scheduleType, matchesPerPlayer, force } = req.body;
 
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
@@ -1423,13 +2154,40 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
     if (completedError) {
       return res.status(400).json({ error: completedError });
     }
+    if (league.schedule_type === 'groups') {
+      return res.status(400).json({ error: 'Groups tournaments use group management to set up matches — see the Groups tab instead.' });
+    }
+    if (scheduleType === 'groups') {
+      return res.status(400).json({ error: 'Switching to Groups format isn\'t supported here — create a new tournament with Groups format instead.' });
+    }
+
+    const validScheduleTypes = ['round_robin', 'matches_per_player', 'knockout', 'custom'];
+    const finalScheduleType = scheduleType
+      ? (validScheduleTypes.includes(scheduleType) ? scheduleType : 'round_robin')
+      : league.schedule_type;
+
+    if (scheduleType && finalScheduleType === 'matches_per_player' && (!matchesPerPlayer || matchesPerPlayer < 1)) {
+      return res.status(400).json({ error: 'Please specify how many matches each player should play.' });
+    }
+
+    // Check the match-count warning BEFORE wiping anything — a host
+    // declining the warning shouldn't still lose their existing history.
+    if (finalScheduleType === 'round_robin' && !force) {
+      const memberCountResult = await pool.query(
+        'SELECT COUNT(*) FROM league_members WHERE league_id = $1',
+        [leagueId]
+      );
+      const memberCount = parseInt(memberCountResult.rows[0].count, 10);
+      const estimatedMatches = estimateRoundRobinMatchCount(league, memberCount);
+      if (estimatedMatches > LARGE_ROUND_ROBIN_THRESHOLD) {
+        return res.status(409).json({
+          error: `Everyone playing everyone means ${estimatedMatches} matches for this group size — that's a lot for one tournament.`,
+          estimatedMatches,
+        });
+      }
+    }
 
     if (scheduleType) {
-      const validScheduleTypes = ['round_robin', 'matches_per_player', 'knockout', 'custom'];
-      const finalScheduleType = validScheduleTypes.includes(scheduleType) ? scheduleType : 'round_robin';
-      if (finalScheduleType === 'matches_per_player' && (!matchesPerPlayer || matchesPerPlayer < 1)) {
-        return res.status(400).json({ error: 'Please specify how many matches each player should play.' });
-      }
       await pool.query(
         'UPDATE leagues SET schedule_type = $1, matches_per_player = $2 WHERE id = $3',
         [finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null, leagueId]
@@ -1520,18 +2278,11 @@ function generateRoundRobinSchedule(league, members) {
     return generateSinglesRoundRobin(members);
   }
 
-  // Doubles: resolve teams (host_auto -> zig-zag by rating tier; otherwise
-  // -> confirmed partner pairs), then tier the TEAMS the same way singles
-  // tiers players, and round-robin within each tier.
+  // Doubles: resolve teams (host_auto -> zig-zag pairing across the whole
+  // field; otherwise -> confirmed partner pairs), then every team plays
+  // every other team — no rating-tier grouping.
   let teams;
   if (league.partner_mode === 'host_auto') {
-    // Preserve original behavior exactly: tier players first (groups of 4),
-    // then zig-zag pair within each tier, then round-robin the resulting
-    // teams within that same tier.
-    // NOTE: an odd total is checked here (not per-tier) because with
-    // TIER_SIZE=4 and the merge-leftover-tier logic below, an even total
-    // always produces even-sized tiers after merging — so this one check
-    // is sufficient to guarantee no player ever gets silently left out.
     if (members.length % 2 !== 0) {
       const err = new Error(
         `Doubles needs an even number of players so everyone gets paired — currently ${members.length}. Add or remove one player, or switch to self-select/host-manual partner mode to intentionally leave someone out.`
@@ -1544,103 +2295,76 @@ function generateRoundRobinSchedule(league, members) {
   teams = buildTeamsFromConfirmedPairs(members);
   teams.sort((a, b) => b.avgRating - a.avgRating);
 
-  const tiers = [];
-  for (let i = 0; i < teams.length; i += TIER_SIZE) {
-    tiers.push(teams.slice(i, i + TIER_SIZE));
-  }
-  while (tiers.length > 1 && tiers[tiers.length - 1].length < 2) {
-    const leftover = tiers.pop();
-    tiers[tiers.length - 1] = tiers[tiers.length - 1].concat(leftover);
-  }
-
   const scheduledMatches = [];
-  tiers.forEach((tier, tierIndex) => {
-    const tierNumber = tierIndex + 1;
-    for (let i = 0; i < tier.length; i++) {
-      for (let j = i + 1; j < tier.length; j++) {
-        scheduledMatches.push({
-          tierNumber,
-          player1Id: tier[i].player1.id,
-          player1PartnerId: tier[i].player2.id,
-          player2Id: tier[j].player1.id,
-          player2PartnerId: tier[j].player2.id,
-        });
-      }
+  for (let i = 0; i < teams.length; i++) {
+    for (let j = i + 1; j < teams.length; j++) {
+      scheduledMatches.push({
+        tierNumber: 1,
+        player1Id: teams[i].player1.id,
+        player1PartnerId: teams[i].player2.id,
+        player2Id: teams[j].player1.id,
+        player2PartnerId: teams[j].player2.id,
+      });
     }
-  });
+  }
 
   return scheduledMatches;
 }
 
 function generateSinglesRoundRobin(members) {
-  const tiers = [];
-  for (let i = 0; i < members.length; i += TIER_SIZE) {
-    tiers.push(members.slice(i, i + TIER_SIZE));
-  }
-
   const scheduledMatches = [];
-  tiers.forEach((tier, tierIndex) => {
-    const tierNumber = tierIndex + 1;
-    for (let i = 0; i < tier.length; i++) {
-      for (let j = i + 1; j < tier.length; j++) {
-        scheduledMatches.push({
-          tierNumber,
-          player1Id: tier[i].id,
-          player1PartnerId: null,
-          player2Id: tier[j].id,
-          player2PartnerId: null,
-        });
-      }
+  for (let i = 0; i < members.length; i++) {
+    for (let j = i + 1; j < members.length; j++) {
+      scheduledMatches.push({
+        tierNumber: 1,
+        player1Id: members[i].id,
+        player1PartnerId: null,
+        player2Id: members[j].id,
+        player2PartnerId: null,
+      });
     }
-  });
-
+  }
   return scheduledMatches;
 }
 
-// Original host_auto doubles behavior, unchanged from before this feature:
-// tier by TIER_SIZE, zig-zag pair within tier, round-robin the two teams.
+// Auto-pairs the whole field into teams (zig-zag by rating: strongest with
+// weakest, and so on, for balance), then every team plays every other team.
 function generateHostAutoDoublesRoundRobin(members) {
-  const tiers = [];
-  for (let i = 0; i < members.length; i += TIER_SIZE) {
-    tiers.push(members.slice(i, i + TIER_SIZE));
-  }
-
-  const minTierSize = 4;
-  while (tiers.length > 1 && tiers[tiers.length - 1].length < minTierSize) {
-    const leftover = tiers.pop();
-    tiers[tiers.length - 1] = tiers[tiers.length - 1].concat(leftover);
+  const sorted = [...members].sort((a, b) => parseFloat(b.rating) - parseFloat(a.rating));
+  const teams = [];
+  let lo = 0;
+  let hi = sorted.length - 1;
+  while (lo < hi) {
+    teams.push([sorted[lo], sorted[hi]]);
+    lo++;
+    hi--;
   }
 
   const scheduledMatches = [];
-
-  tiers.forEach((tier, tierIndex) => {
-    const tierNumber = tierIndex + 1;
-    if (tier.length < 4) return;
-
-    const teams = [];
-    let lo = 0;
-    let hi = tier.length - 1;
-    while (lo < hi) {
-      teams.push([tier[lo], tier[hi]]);
-      lo++;
-      hi--;
+  for (let i = 0; i < teams.length; i++) {
+    for (let j = i + 1; j < teams.length; j++) {
+      scheduledMatches.push({
+        tierNumber: 1,
+        player1Id: teams[i][0].id,
+        player1PartnerId: teams[i][1].id,
+        player2Id: teams[j][0].id,
+        player2PartnerId: teams[j][1].id,
+      });
     }
-
-    for (let i = 0; i < teams.length; i++) {
-      for (let j = i + 1; j < teams.length; j++) {
-        scheduledMatches.push({
-          tierNumber,
-          player1Id: teams[i][0].id,
-          player1PartnerId: teams[i][1].id,
-          player2Id: teams[j][0].id,
-          player2PartnerId: teams[j][1].id,
-        });
-      }
-    }
-  });
+  }
 
   return scheduledMatches;
 }
+
+// Estimates the match count a round-robin generation would produce, without
+// actually building the fixture list — used to warn the host before a large
+// group accidentally generates hundreds of matches.
+function estimateRoundRobinMatchCount(league, memberCount) {
+  const n = league.format === 'doubles' ? Math.floor(memberCount / 2) : memberCount;
+  return (n * (n - 1)) / 2;
+}
+
+
 
 function generateNearestRatingSchedule(members, matchesPerPlayer) {
   const n = members.length;
