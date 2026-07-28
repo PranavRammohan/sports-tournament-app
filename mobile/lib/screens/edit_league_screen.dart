@@ -227,41 +227,49 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
     });
   }
 
-  Future<void> _changeFormat() async {
-    final result = await showDialog<RegenerateScheduleResult>(
-      context: context,
-      builder: (ctx) => RegenerateScheduleDialog(
-        currentScheduleType: _scheduleType,
-        currentMatchesPerPlayer: _matchesPerPlayer,
-        isSingles: widget.league['format'] == 'singles',
-      ),
-    );
-    if (result == null) return;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        title: const Text('Confirm format change?'),
-        content: const Text(
-          'This wipes ALL match history for this tournament — every confirmed result, rating change, and point awarded so far will be reversed — and rebuilds the fixture list from scratch. This cannot be undone, takes effect immediately, and closes this screen.',
+  Future<void> _changeFormat({
+    RegenerateScheduleResult? retryResult,
+    bool force = false,
+  }) async {
+    var result = retryResult;
+    if (result == null) {
+      result = await showDialog<RegenerateScheduleResult>(
+        context: context,
+        builder: (ctx) => RegenerateScheduleDialog(
+          currentScheduleType: _scheduleType,
+          currentMatchesPerPlayer: _matchesPerPlayer,
+          isSingles: widget.league['format'] == 'singles',
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+      );
+      if (result == null) return;
+
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text(
-              'Wipe & Continue',
-              style: TextStyle(color: AppColors.danger),
+          title: const Text('Confirm format change?'),
+          content: const Text(
+            'This wipes ALL match history for this tournament — every confirmed result, rating change, and point awarded so far will be reversed — and rebuilds the fixture list from scratch. This cannot be undone, takes effect immediately, and closes this screen.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
             ),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text(
+                'Wipe & Continue',
+                style: TextStyle(color: AppColors.danger),
+              ),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
 
     HapticFeedback.mediumImpact();
     setState(() => _changingFormat = true);
@@ -280,6 +288,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
         body: jsonEncode({
           'scheduleType': result.scheduleType,
           'matchesPerPlayer': result.matchesPerPlayer,
+          'force': force,
         }),
       );
       final data = jsonDecode(response.body);
@@ -287,6 +296,32 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
       if (!mounted) return;
       if (response.statusCode == 200 || response.statusCode == 201) {
         Navigator.pop(context, true);
+      } else if (data['estimatedMatches'] != null) {
+        setState(() => _changingFormat = false);
+        final proceed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            title: const Text('That\'s a lot of matches'),
+            content: Text('${data['error']} Continue anyway?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Generate Anyway'),
+              ),
+            ],
+          ),
+        );
+        if (proceed == true) {
+          await _changeFormat(retryResult: result, force: true);
+        }
+        return;
       } else {
         _showAlert(
           'Could not change format',

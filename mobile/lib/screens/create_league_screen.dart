@@ -90,6 +90,13 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   String _scheduleType = 'round_robin';
   final TextEditingController _matchesPerPlayerController =
       TextEditingController();
+
+  // Only meaningful when _scheduleType == 'groups'. Groups format (v1) is
+  // singles-only — see backend for why.
+  String _groupStageScheduleType = 'round_robin';
+  final TextEditingController _groupStageMatchesPerPlayerController =
+      TextEditingController();
+
   bool _hostEntersScores = false;
   bool _hostPlays = true;
   bool _isPrivate = false;
@@ -214,6 +221,22 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
       }
     }
 
+    int? groupStageMatchesPerPlayer;
+    if (_scheduleType == 'groups' &&
+        _groupStageScheduleType == 'matches_per_player') {
+      groupStageMatchesPerPlayer = int.tryParse(
+        _groupStageMatchesPerPlayerController.text.trim(),
+      );
+      if (groupStageMatchesPerPlayer == null ||
+          groupStageMatchesPerPlayer < 1) {
+        _showAlert(
+          'Missing info',
+          'Please enter how many matches each player should play within their group.',
+        );
+        return;
+      }
+    }
+
     double? minRating;
     double? maxRating;
     if (_restrictByRating) {
@@ -279,6 +302,12 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               : 'womens',
           'scheduleType': _scheduleType,
           'matchesPerPlayer': matchesPerPlayer,
+          'groupStageScheduleType': _scheduleType == 'groups'
+              ? _groupStageScheduleType
+              : null,
+          'groupStageMatchesPerPlayer': _scheduleType == 'groups'
+              ? groupStageMatchesPerPlayer
+              : null,
           'hostEntersScores': _hostEntersScores,
           'hostPlays': _hostPlays,
           'isPrivate': _isPrivate,
@@ -453,7 +482,12 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                 DropdownMenuItem(value: 'Singles', child: Text('Singles')),
                 DropdownMenuItem(value: 'Doubles', child: Text('Doubles')),
               ],
-              onChanged: (v) => setState(() => _selectedFormat = v),
+              onChanged: (v) => setState(() {
+                _selectedFormat = v;
+                if (v == 'Doubles' && _scheduleType == 'groups') {
+                  _scheduleType = 'round_robin';
+                }
+              }),
             ),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
@@ -504,7 +538,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               groupValue: _scheduleType,
               title: const Text('Round Robin (everyone plays everyone)'),
               subtitle: const Text(
-                'Best for 7 or fewer players',
+                'Best for smaller groups — match count grows fast as more people join',
                 style: TextStyle(fontSize: 11),
               ),
               onChanged: (v) => setState(() => _scheduleType = v!),
@@ -563,6 +597,70 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               ),
               onChanged: (v) => setState(() => _scheduleType = v!),
             ),
+            if (isSingles)
+              RadioListTile<String>(
+                contentPadding: EdgeInsets.zero,
+                value: 'groups',
+                groupValue: _scheduleType,
+                title: const Text('Groups (pools, then advance)'),
+                subtitle: const Text(
+                  'Split players into named groups; top players from each group advance to a second stage you choose later',
+                  style: TextStyle(fontSize: 11),
+                ),
+                onChanged: (v) => setState(() => _scheduleType = v!),
+              ),
+            if (isSingles && _scheduleType == 'groups') ...[
+              Padding(
+                padding: const EdgeInsets.only(left: 16, top: 4, bottom: 4),
+                child: Text(
+                  'You\'ll create groups and assign players after the tournament is created. Choose how matches work within each group:',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(left: 16),
+                child: RadioListTile<String>(
+                  contentPadding: EdgeInsets.zero,
+                  value: 'round_robin',
+                  groupValue: _groupStageScheduleType,
+                  dense: true,
+                  title: const Text(
+                    'Round Robin within each group',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  onChanged: (v) =>
+                      setState(() => _groupStageScheduleType = v!),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(left: 16),
+                child: RadioListTile<String>(
+                  contentPadding: EdgeInsets.zero,
+                  value: 'matches_per_player',
+                  groupValue: _groupStageScheduleType,
+                  dense: true,
+                  title: const Text(
+                    'Fixed number of matches within each group',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  onChanged: (v) =>
+                      setState(() => _groupStageScheduleType = v!),
+                ),
+              ),
+              if (_groupStageScheduleType == 'matches_per_player')
+                Padding(
+                  padding: const EdgeInsets.only(left: 32, top: 4, bottom: 4),
+                  child: TextField(
+                    controller: _groupStageMatchesPerPlayerController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Matches per player, within each group',
+                      isDense: true,
+                      hintText: 'e.g. 3',
+                    ),
+                  ),
+                ),
+            ],
 
             if (_selectedFormat == 'Doubles') ...[
               const SizedBox(height: 20),

@@ -16,6 +16,8 @@ import 'regenerate_schedule_dialog.dart';
 import 'add_players_screen.dart';
 import 'add_manual_match_screen.dart';
 import 'edit_league_screen.dart';
+import 'group_management_screen.dart';
+import 'groups_overview_screen.dart';
 import 'player_profile_screen.dart';
 import 'partner_selection_screen.dart';
 
@@ -222,7 +224,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     }
   }
 
-  Future<void> _generateSchedule() async {
+  Future<void> _generateSchedule({bool force = false}) async {
     HapticFeedback.lightImpact();
     setState(() => _generating = true);
     try {
@@ -231,7 +233,11 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
       final response = await http.post(
         Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/generate-schedule'),
-        headers: {'Authorization': 'Bearer $token'},
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'force': force}),
       );
       final data = jsonDecode(response.body);
 
@@ -244,6 +250,32 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           ),
         );
         _loadAll();
+      } else if (data['estimatedMatches'] != null) {
+        setState(() => _generating = false);
+        final proceed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            title: const Text('That\'s a lot of matches'),
+            content: Text('${data['error']} Continue anyway?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Generate Anyway'),
+              ),
+            ],
+          ),
+        );
+        if (proceed == true) {
+          await _generateSchedule(force: true);
+        }
+        return;
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -262,41 +294,49 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     }
   }
 
-  Future<void> _regenerateSchedule() async {
-    final result = await showDialog<RegenerateScheduleResult>(
-      context: context,
-      builder: (ctx) => RegenerateScheduleDialog(
-        currentScheduleType: _league!['schedule_type'] ?? 'round_robin',
-        currentMatchesPerPlayer: _league!['matches_per_player'],
-        isSingles: _league!['format'] == 'singles',
-      ),
-    );
-    if (result == null) return;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        title: const Text('Confirm regeneration?'),
-        content: const Text(
-          'This wipes ALL match history for this tournament — every confirmed result, rating change, and point awarded so far will be reversed — and replaces it with a fresh, all-pending fixture list. This cannot be undone.',
+  Future<void> _regenerateSchedule({
+    RegenerateScheduleResult? retryResult,
+    bool force = false,
+  }) async {
+    var result = retryResult;
+    if (result == null) {
+      result = await showDialog<RegenerateScheduleResult>(
+        context: context,
+        builder: (ctx) => RegenerateScheduleDialog(
+          currentScheduleType: _league!['schedule_type'] ?? 'round_robin',
+          currentMatchesPerPlayer: _league!['matches_per_player'],
+          isSingles: _league!['format'] == 'singles',
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+      );
+      if (result == null) return;
+
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text(
-              'Wipe & Regenerate',
-              style: TextStyle(color: AppColors.danger),
+          title: const Text('Confirm regeneration?'),
+          content: const Text(
+            'This wipes ALL match history for this tournament — every confirmed result, rating change, and point awarded so far will be reversed — and replaces it with a fresh, all-pending fixture list. This cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
             ),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text(
+                'Wipe & Regenerate',
+                style: TextStyle(color: AppColors.danger),
+              ),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
 
     HapticFeedback.mediumImpact();
     setState(() => _regenerating = true);
@@ -313,6 +353,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         body: jsonEncode({
           'scheduleType': result.scheduleType,
           'matchesPerPlayer': result.matchesPerPlayer,
+          'force': force,
         }),
       );
       final data = jsonDecode(response.body);
@@ -326,6 +367,32 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           ),
         );
         _loadAll();
+      } else if (data['estimatedMatches'] != null) {
+        setState(() => _regenerating = false);
+        final proceed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            title: const Text('That\'s a lot of matches'),
+            content: Text('${data['error']} Continue anyway?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Generate Anyway'),
+              ),
+            ],
+          ),
+        );
+        if (proceed == true) {
+          await _regenerateSchedule(retryResult: result, force: true);
+        }
+        return;
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1749,7 +1816,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 label: const Text('Leave Tournament'),
               ),
             ),
-          if (_isMember && _isLeagueStyle && !_isCompleted)
+          if (_isMember &&
+              _isLeagueStyle &&
+              !_isCompleted &&
+              _league!['schedule_type'] != 'groups')
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: OutlinedButton.icon(
@@ -1770,9 +1840,49 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 label: const Text('Playoffs'),
               ),
             ),
+          if (isHost && _league!['schedule_type'] == 'groups' && !_isCompleted)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  HapticFeedback.selectionClick();
+                  final changed = await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) =>
+                          GroupManagementScreen(leagueId: widget.leagueId),
+                    ),
+                  );
+                  if (changed == true) _loadAll();
+                },
+                icon: const Icon(Icons.groups_outlined),
+                label: const Text('Manage Groups'),
+              ),
+            ),
+          if (_isMember && _league!['schedule_type'] == 'groups')
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  HapticFeedback.selectionClick();
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => GroupsOverviewScreen(
+                        leagueId: widget.leagueId,
+                        isHost: isHost,
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.leaderboard_outlined),
+                label: const Text('View Groups & Standings'),
+              ),
+            ),
           if (isHost &&
               !_isCustom &&
               !_isCompleted &&
+              _league!['schedule_type'] != 'groups' &&
               ((_isKnockout && _bracket.isEmpty) ||
                   (!_isKnockout && _schedule.isEmpty)))
             Padding(
@@ -2285,7 +2395,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       tiers.putIfAbsent(f['tier_number'], () => []).add(f);
     }
 
-    final showTierHeadings = _league!['schedule_type'] == 'round_robin';
+    final showTierHeadings = false;
 
     return RefreshIndicator(
       onRefresh: _loadAll,

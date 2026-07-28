@@ -67,7 +67,7 @@ class _RegenerateScheduleDialogState extends State<RegenerateScheduleDialog> {
               groupValue: _scheduleType,
               title: const Text('Round Robin', style: TextStyle(fontSize: 14)),
               subtitle: const Text(
-                'Everyone plays everyone. Best for 7 or fewer players.',
+                'Everyone plays everyone. Best for smaller groups — match count grows fast as more people join.',
                 style: TextStyle(fontSize: 11),
               ),
               onChanged: (v) => setState(() => _scheduleType = v!),
