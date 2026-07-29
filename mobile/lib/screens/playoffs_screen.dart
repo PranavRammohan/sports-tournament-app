@@ -683,7 +683,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(roundName, style: Theme.of(context).textTheme.titleLarge),
+                Text(roundName, style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 10),
                 ...entry.value.map((m) {
                   final player1Name = _teamName(m, isSideOne: true);
@@ -691,6 +691,10 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
                   final isReady = m['status'] == 'ready';
                   final isReported = m['status'] == 'reported';
                   final isConfirmed = m['status'] == 'confirmed';
+                  final team1Won =
+                      isConfirmed && m['winner_id'] == m['player1_id'];
+                  final team2Won =
+                      isConfirmed && m['winner_id'] == m['player2_id'];
                   final involvesMe =
                       m['player1_id'] == _currentUserId ||
                       m['player2_id'] == _currentUserId ||
@@ -717,26 +721,66 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
                         Row(
                           children: [
                             Expanded(
-                              child: Text(
-                                '$player1Name  vs  $player2Name',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: isConfirmed
-                                      ? FontWeight.w600
-                                      : FontWeight.normal,
-                                  color: primaryTextColor,
+                              child: Text.rich(
+                                TextSpan(
+                                  children: [
+                                    TextSpan(
+                                      text: player1Name,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: team1Won
+                                            ? FontWeight.bold
+                                            : FontWeight.normal,
+                                        color: team1Won
+                                            ? AppColors.success
+                                            : primaryTextColor,
+                                      ),
+                                    ),
+                                    TextSpan(
+                                      text: '  vs  ',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: subtleTextColor,
+                                      ),
+                                    ),
+                                    TextSpan(
+                                      text: player2Name,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: team2Won
+                                            ? FontWeight.bold
+                                            : FontWeight.normal,
+                                        color: team2Won
+                                            ? AppColors.success
+                                            : primaryTextColor,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ),
-                            if (isConfirmed)
-                              Text(
-                                'Winner: ${m['winner_id'] == m['player1_id'] ? player1Name : player2Name}',
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  color: AppColors.success,
-                                  fontWeight: FontWeight.bold,
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isConfirmed
+                                    ? AppColors.success.withValues(alpha: 0.1)
+                                    : AppColors.warning.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                isConfirmed ? 'Done' : 'Pending',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: isConfirmed
+                                      ? AppColors.success
+                                      : AppColors.warning,
                                 ),
                               ),
+                            ),
                           ],
                         ),
                         if (m['set_scores'] != null) ...[
@@ -750,32 +794,46 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
                           ),
                         ],
                         if (_hostEntersScores && widget.isHost && isReady) ...[
-                          const SizedBox(height: 8),
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                            ),
-                            onPressed: () => _hostReportMatch(
-                              m['id'],
-                              player1Name,
-                              player2Name,
-                            ),
-                            child: const Text(
-                              'Enter Score',
-                              style: TextStyle(fontSize: 12),
+                          const SizedBox(height: 4),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton.icon(
+                              onPressed: () => _hostReportMatch(
+                                m['id'],
+                                player1Name,
+                                player2Name,
+                              ),
+                              icon: const Icon(Icons.sports_score, size: 15),
+                              label: const Text(
+                                'Enter Score',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                              style: TextButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                ),
+                                visualDensity: VisualDensity.compact,
+                              ),
                             ),
                           ),
                         ],
                         if (!_hostEntersScores && isReady && involvesMe) ...[
-                          const SizedBox(height: 8),
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                            ),
-                            onPressed: () => _reportMatch(m),
-                            child: const Text(
-                              'Report Result',
-                              style: TextStyle(fontSize: 12),
+                          const SizedBox(height: 4),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton.icon(
+                              onPressed: () => _reportMatch(m),
+                              icon: const Icon(Icons.sports_score, size: 15),
+                              label: const Text(
+                                'Report Result',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                              style: TextButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                ),
+                                visualDensity: VisualDensity.compact,
+                              ),
                             ),
                           ),
                         ],

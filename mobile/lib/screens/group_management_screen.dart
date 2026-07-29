@@ -371,6 +371,69 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     }
   }
 
+  Future<void> _unlockGroups() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Unlock groups?'),
+        content: const Text(
+          'This reverses every confirmed group-stage match — all results, rating changes, and points earned so far — and wipes the group-stage schedule entirely, so you can edit groups and re-lock when ready. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Unlock & Wipe',
+              style: TextStyle(color: AppColors.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    HapticFeedback.mediumImpact();
+    setState(() => _submitting = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final res = await http.post(
+        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/groups/unlock'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      final data = jsonDecode(res.body);
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['message'] ?? 'Groups unlocked.'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        await _load();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not unlock groups.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -382,9 +445,9 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
-                  if (_groupsLocked)
+                  if (_groupsLocked) ...[
                     Container(
-                      margin: const EdgeInsets.only(bottom: 16),
+                      margin: const EdgeInsets.only(bottom: 12),
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
                         color: AppColors.success.withValues(alpha: 0.1),
@@ -409,8 +472,18 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                           ),
                         ],
                       ),
-                    )
-                  else ...[
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _submitting ? null : _unlockGroups,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.danger,
+                        side: const BorderSide(color: AppColors.danger),
+                      ),
+                      icon: const Icon(Icons.lock_open_outlined),
+                      label: const Text('Unlock Groups'),
+                    ),
+                    const SizedBox(height: 16),
+                  ] else ...[
                     Row(
                       children: [
                         Expanded(
