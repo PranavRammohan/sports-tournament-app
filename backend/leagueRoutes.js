@@ -1192,6 +1192,54 @@ router.post('/:id/groups/unlock', async (req, res) => {
   }
 });
 
+// ---------- EDIT GROUP-STAGE FORMAT (host only, before groups are locked) ----------
+router.put('/:id/groups/config', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { groupStageScheduleType, groupStageMatchesPerPlayer } = req.body;
+
+  const validGroupStageTypes = ['round_robin', 'matches_per_player'];
+  if (!validGroupStageTypes.includes(groupStageScheduleType)) {
+    return res.status(400).json({ error: 'Please choose a valid format.' });
+  }
+  if (groupStageScheduleType === 'matches_per_player' &&
+      (!groupStageMatchesPerPlayer || groupStageMatchesPerPlayer < 1)) {
+    return res.status(400).json({ error: 'Please specify how many matches each player should play within their group.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can edit this.' });
+    }
+    if (league.schedule_type !== 'groups') {
+      return res.status(400).json({ error: 'This league is not set up for group play.' });
+    }
+    if (league.groups_locked) {
+      return res.status(400).json({ error: 'Groups are locked — unlock them first to change the group-stage format.' });
+    }
+
+    await pool.query(
+      `UPDATE leagues SET group_stage_schedule_type = $1, group_stage_matches_per_player = $2 WHERE id = $3`,
+      [
+        groupStageScheduleType,
+        groupStageScheduleType === 'matches_per_player' ? groupStageMatchesPerPlayer : null,
+        leagueId,
+      ]
+    );
+
+    res.status(200).json({ message: 'Group-stage format updated.' });
+  } catch (err) {
+    console.error('Update group-stage config error:', err);
+    res.status(500).json({ error: 'Something went wrong updating the group-stage format.' });
+  }
+});
+
 // ---------- START STAGE 2 (host only) ----------
 // Takes the top N (uniform across all groups) from each group's standings
 // and generates a fresh schedule/bracket among just those qualifiers, in
@@ -1341,6 +1389,67 @@ router.post('/:id/stage2/start', async (req, res) => {
   } catch (err) {
     console.error('Start stage 2 error:', err);
     res.status(500).json({ error: 'Something went wrong starting this stage.' });
+  }
+});
+
+// ---------- RESET THE NEXT ROUND (host only) ----------
+// Reverses every confirmed Next-Round match's rating/points effects, wipes
+// its schedule/bracket entirely (whichever format it used), and clears the
+// stage back to not-started — group standings are completely untouched, so
+// this both lets the host restart with a different format and effectively
+// "go back to the group stage" (the Next Round tab just shows the setup
+// form again until the host starts it once more).
+router.post('/:id/stage2/reset', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can reset the Next Round.' });
+    }
+    if (league.schedule_type !== 'groups') {
+      return res.status(400).json({ error: 'This league is not set up for group play.' });
+    }
+    if (!league.stage2_started) {
+      return res.status(409).json({ error: 'The Next Round has not started yet.' });
+    }
+
+    // Reverse effects for both possible formats — only one of these will
+    // actually have matching rows, but it's safe to run both.
+    await reverseStage2MatchesForLeague(leagueId, league);
+    await reverseAllConfirmedPlayoffMatchesForLeague(leagueId, league);
+
+    await pool.query(
+      `DELETE FROM matches WHERE scheduled_match_id IN (
+         SELECT id FROM scheduled_matches WHERE league_id = $1 AND group_id IS NULL
+       )`,
+      [leagueId]
+    );
+    await pool.query(
+      'DELETE FROM scheduled_matches WHERE league_id = $1 AND group_id IS NULL',
+      [leagueId]
+    );
+    await pool.query('DELETE FROM playoff_matches WHERE league_id = $1', [leagueId]);
+
+    await pool.query(
+      `UPDATE leagues SET stage2_started = false, stage2_schedule_type = NULL,
+        stage2_matches_per_player = NULL, group_advance_count = NULL
+       WHERE id = $1`,
+      [leagueId]
+    );
+
+    res.status(200).json({
+      message: 'The Next Round has been reset — all its match history and rating changes have been reversed. Group standings are untouched. Start it again whenever ready, with any format you like.',
+    });
+  } catch (err) {
+    console.error('Reset stage2 error:', err);
+    res.status(500).json({ error: 'Something went wrong resetting the Next Round.' });
   }
 });
 
@@ -2228,6 +2337,55 @@ async function reverseAllConfirmedPlayoffMatchesForLeague(leagueId, league) {
     await reverseOne(match.player2_id, match.player2_rating_change, !team1Won);
     await reverseOne(match.player1_partner_id, match.player1_partner_rating_change, team1Won);
     await reverseOne(match.player2_partner_id, match.player2_partner_rating_change, !team1Won);
+  }
+}
+
+// Same idea as reverseAllConfirmedMatchesForLeague, but scoped to just this
+// league's Next-Round (Stage 2) fixtures — those are the scheduled_matches
+// rows with group_id IS NULL, since every group-stage fixture always has a
+// group_id set. Used by /stage2/reset, which must not touch group-stage
+// results at all.
+async function reverseStage2MatchesForLeague(leagueId, league) {
+  const { sport, format } = league;
+
+  const matchesResult = await pool.query(
+    `SELECT m.* FROM matches m
+     JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
+     WHERE sm.league_id = $1 AND sm.group_id IS NULL AND m.status = 'confirmed'`,
+    [leagueId]
+  );
+
+  for (const match of matchesResult.rows) {
+    const team1Won = match.winner_id === match.player1_id;
+
+    const reverseOne = async (playerId, ratingChange, won) => {
+      if (playerId == null || ratingChange == null) return;
+      if (sport === 'table_tennis') {
+        await pool.query(
+          `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
+           wins = wins - $2, losses = losses - $3
+           WHERE user_id = $4 AND sport = $5`,
+          [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport]
+        );
+      } else {
+        await pool.query(
+          `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
+           wins = wins - $2, losses = losses - $3
+           WHERE user_id = $4 AND sport = $5 AND format = $6`,
+          [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport, format]
+        );
+      }
+    };
+
+    await reverseOne(match.player1_id, match.player1_rating_change, team1Won);
+    await reverseOne(match.player2_id, match.player2_rating_change, !team1Won);
+
+    if (match.league_points_awarded != null) {
+      await pool.query(
+        'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+        [match.league_points_awarded, leagueId, match.winner_id]
+      );
+    }
   }
 }
 
