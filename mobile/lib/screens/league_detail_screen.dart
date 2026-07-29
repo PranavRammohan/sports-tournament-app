@@ -1612,7 +1612,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 if (_isLeagueStyle) ...[
                   const SizedBox(height: 4),
                   const Text(
-                    'Ranked by tournament points (win = 2, +1 for a dominant win)',
+                    'Ranked by tournament points (win = 2 pts, loss = 0)',
                     style: TextStyle(
                       fontSize: 11,
                       color: AppColors.textGrey,
