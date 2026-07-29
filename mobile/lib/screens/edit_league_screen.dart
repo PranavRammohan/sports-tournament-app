@@ -39,6 +39,13 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
   late String _scheduleType;
   int? _matchesPerPlayer;
 
+  bool get _isGroups => _scheduleType == 'groups';
+  bool _groupsLocked = false;
+  late String _groupStageScheduleType;
+  final TextEditingController _groupStageMatchesPerPlayerController =
+      TextEditingController();
+  bool _savingGroupFormat = false;
+
   bool get _isDoubles => widget.league['format'] == 'doubles';
   late String _initialPartnerMode;
   late String _partnerMode;
@@ -63,6 +70,12 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
     _joinCode = l['join_code'];
     _scheduleType = l['schedule_type'] ?? 'round_robin';
     _matchesPerPlayer = l['matches_per_player'];
+    _groupsLocked = l['groups_locked'] == true;
+    _groupStageScheduleType = l['group_stage_schedule_type'] ?? 'round_robin';
+    _groupStageMatchesPerPlayerController.text =
+        l['group_stage_matches_per_player'] != null
+        ? '${l['group_stage_matches_per_player']}'
+        : '';
     _initialPartnerMode = l['partner_mode'] ?? 'host_auto';
     _partnerMode = _initialPartnerMode;
 
@@ -110,6 +123,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
   void dispose() {
     _nameController.dispose();
     _academyController.dispose();
+    _groupStageMatchesPerPlayerController.dispose();
     super.dispose();
   }
 
@@ -225,6 +239,65 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
         _registrationEnd = combined;
       }
     });
+  }
+
+  Future<void> _saveGroupStageFormat() async {
+    int? matchesPerPlayer;
+    if (_groupStageScheduleType == 'matches_per_player') {
+      matchesPerPlayer = int.tryParse(
+        _groupStageMatchesPerPlayerController.text.trim(),
+      );
+      if (matchesPerPlayer == null || matchesPerPlayer < 1) {
+        _showAlert(
+          'Missing info',
+          'Please enter how many matches each player should play within their group.',
+        );
+        return;
+      }
+    }
+
+    HapticFeedback.lightImpact();
+    setState(() => _savingGroupFormat = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final response = await http.put(
+        Uri.parse('$baseApiUrl/leagues/${widget.league['id']}/groups/config'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'groupStageScheduleType': _groupStageScheduleType,
+          'groupStageMatchesPerPlayer': matchesPerPlayer,
+        }),
+      );
+      final data = jsonDecode(response.body);
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['message'] ?? 'Group format updated.'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not update group format.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _savingGroupFormat = false);
+    }
   }
 
   Future<void> _changeFormat({
@@ -549,6 +622,105 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                 ],
               ),
             ),
+            if (_isGroups) ...[
+              const SizedBox(height: 14),
+              Text(
+                'Group Stage Format',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 4),
+              if (_groupsLocked)
+                const Text(
+                  'Locked — groups have already started playing. Unlock groups from the Manage Groups screen first if you need to change this.',
+                  style: TextStyle(fontSize: 11, color: AppColors.warning),
+                )
+              else
+                const Text(
+                  'How matches work within each group.',
+                  style: TextStyle(fontSize: 11),
+                ),
+              const SizedBox(height: 6),
+              Container(
+                decoration: BoxDecoration(
+                  color: _groupsLocked
+                      ? Colors.grey.shade200
+                      : Theme.of(context).cardColor,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey.shade400),
+                  boxShadow: AppShadows.card(isDark),
+                ),
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    RadioListTile<String>(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      value: 'round_robin',
+                      groupValue: _groupStageScheduleType,
+                      title: const Text(
+                        'Round Robin within each group',
+                        style: TextStyle(fontSize: 13),
+                      ),
+                      onChanged: _groupsLocked
+                          ? null
+                          : (v) => setState(() => _groupStageScheduleType = v!),
+                    ),
+                    RadioListTile<String>(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      value: 'matches_per_player',
+                      groupValue: _groupStageScheduleType,
+                      title: const Text(
+                        'Fixed number of matches within each group',
+                        style: TextStyle(fontSize: 13),
+                      ),
+                      onChanged: _groupsLocked
+                          ? null
+                          : (v) => setState(() => _groupStageScheduleType = v!),
+                    ),
+                    if (_groupStageScheduleType == 'matches_per_player')
+                      Padding(
+                        padding: const EdgeInsets.only(
+                          left: 16,
+                          top: 4,
+                          bottom: 4,
+                        ),
+                        child: TextField(
+                          controller: _groupStageMatchesPerPlayerController,
+                          enabled: !_groupsLocked,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Matches per player, within each group',
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                    if (!_groupsLocked) ...[
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: ElevatedButton(
+                          onPressed: _savingGroupFormat
+                              ? null
+                              : _saveGroupStageFormat,
+                          child: _savingGroupFormat
+                              ? const SizedBox(
+                                  height: 16,
+                                  width: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text('Save Group Format'),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
             if (_isDoubles) ...[
               const SizedBox(height: 14),
               Text(

@@ -7,7 +7,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../config.dart';
 import 'report_match_screen.dart';
-import 'host_report_match_screen.dart';
 import 'playoffs_screen.dart';
 
 class GroupsOverviewScreen extends StatefulWidget {
@@ -207,7 +206,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
       if (response.statusCode == 201) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Stage 2 started!'),
+            content: Text('Next Round started!'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -221,7 +220,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
               borderRadius: BorderRadius.circular(10),
             ),
             title: const Text('Group play not finished yet'),
-            content: Text('${data['error']} Start Stage 2 anyway?'),
+            content: Text('${data['error']} Start the Next Round anyway?'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
@@ -241,7 +240,71 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not start Stage 2.'),
+            content: Text(data['error'] ?? 'Could not start the Next Round.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _startingStage2 = false);
+    }
+  }
+
+  Future<void> _resetStage2() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Reset the Next Round?'),
+        content: const Text(
+          'This reverses every result, rating change, and point earned in the Next Round, and wipes its schedule/bracket entirely. Group standings are untouched. You can then start the Next Round again with a different format, or leave it unstarted. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Reset',
+              style: TextStyle(color: AppColors.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    HapticFeedback.mediumImpact();
+    setState(() => _startingStage2 = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final response = await http.post(
+        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/stage2/reset'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      final data = jsonDecode(response.body);
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['message'] ?? 'Next Round reset.'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _load();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not reset the Next Round.'),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -276,7 +339,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
           unselectedLabelColor: Colors.white70,
           tabs: [
             ..._groups.map((g) => Tab(text: g['name'])),
-            const Tab(text: 'Stage 2'),
+            const Tab(text: 'Next Round'),
           ],
         ),
       ),
@@ -362,30 +425,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
-              if (hostEntersScores && widget.isHost)
-                TextButton.icon(
-                  onPressed: () async {
-                    HapticFeedback.selectionClick();
-                    final pending = schedule
-                        .where((f) => f['match_status'] != 'confirmed')
-                        .toList();
-                    final reported = await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => HostReportMatchScreen(
-                          leagueId: widget.leagueId,
-                          sport: _league?['sport'] ?? '',
-                          pendingFixtures: pending,
-                          members: members,
-                        ),
-                      ),
-                    );
-                    if (reported == true) _load();
-                  },
-                  icon: const Icon(Icons.sports_score, size: 16),
-                  label: const Text('Enter Score'),
-                )
-              else if (!hostEntersScores && isMemberOfGroup)
+              if (!hostEntersScores && isMemberOfGroup)
                 TextButton.icon(
                   onPressed: () async {
                     HapticFeedback.selectionClick();
@@ -635,6 +675,68 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
     }
   }
 
+  // Reports a brand-new result directly from a specific fixture row (host
+  // mode) — no separate opponent-picking screen needed, since the fixture
+  // already tells us exactly who's playing.
+  Future<void> _hostReportFixture(dynamic f) async {
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => _HostScoreDialog(
+        player1Name: f['player1_username'] ?? '',
+        player2Name: f['player2_username'] ?? '',
+        title: 'Enter Score',
+      ),
+    );
+    if (result == null) return;
+
+    HapticFeedback.lightImpact();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final response = await http.post(
+        Uri.parse('$baseApiUrl/matches/report-as-host'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'leagueId': widget.leagueId,
+          'player1Id': f['player1_id'],
+          'player1PartnerId': null,
+          'player2Id': f['player2_id'],
+          'player2PartnerId': null,
+          'player1Units': result['player1Units'],
+          'player2Units': result['player2Units'],
+          'player1Won': result['player1Won'],
+          'setScores': result['setScores'],
+        }),
+      );
+      final data = jsonDecode(response.body);
+      if (!mounted) return;
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Match confirmed!'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _load();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not enter score.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    }
+  }
+
   Future<void> _confirmDeleteMatch(int matchId) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -829,6 +931,19 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                     ),
                   ),
                 ] else ...[
+                  if (_league?['host_enters_scores'] == true)
+                    TextButton.icon(
+                      onPressed: () => _hostReportFixture(f),
+                      icon: const Icon(Icons.sports_score, size: 15),
+                      label: const Text(
+                        'Enter Score',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
                   TextButton.icon(
                     onPressed: () => _openEditFixtureDialog(f, members),
                     icon: const Icon(Icons.edit_outlined, size: 15),
@@ -872,7 +987,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Text(
-            'Lock groups and finish group play before Stage 2 can start.',
+            'Lock groups and finish group play before the Next Round can start.',
             textAlign: TextAlign.center,
           ),
         ),
@@ -885,7 +1000,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
           child: Padding(
             padding: EdgeInsets.all(24),
             child: Text(
-              "The host hasn't started Stage 2 yet.",
+              "The host hasn't started the Next Round yet.",
               textAlign: TextAlign.center,
             ),
           ),
@@ -902,7 +1017,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Text(
-                'Stage 2 is a knockout bracket.',
+                'The Next Round is a knockout bracket.',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
@@ -923,6 +1038,17 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                 icon: const Icon(Icons.emoji_events_outlined),
                 label: const Text('View Bracket'),
               ),
+              if (widget.isHost) ...[
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  onPressed: _startingStage2 ? null : _resetStage2,
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.danger,
+                  ),
+                  icon: const Icon(Icons.restart_alt, size: 18),
+                  label: const Text('Reset Next Round'),
+                ),
+              ],
             ],
           ),
         ),
@@ -940,6 +1066,16 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if (widget.isHost)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: _startingStage2 ? null : _resetStage2,
+                style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+                icon: const Icon(Icons.restart_alt, size: 18),
+                label: const Text('Reset Next Round'),
+              ),
+            ),
           Text('Standings', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           if (_stage2Leaderboard.isEmpty)
@@ -1003,30 +1139,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
-              if (hostEntersScores && widget.isHost)
-                TextButton.icon(
-                  onPressed: () async {
-                    HapticFeedback.selectionClick();
-                    final pending = _stage2Schedule
-                        .where((f) => f['match_status'] != 'confirmed')
-                        .toList();
-                    final reported = await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => HostReportMatchScreen(
-                          leagueId: widget.leagueId,
-                          sport: _league?['sport'] ?? '',
-                          pendingFixtures: pending,
-                          members: _stage2Leaderboard,
-                        ),
-                      ),
-                    );
-                    if (reported == true) _load();
-                  },
-                  icon: const Icon(Icons.sports_score, size: 16),
-                  label: const Text('Enter Score'),
-                )
-              else if (!hostEntersScores && isQualifier)
+              if (!hostEntersScores && isQualifier)
                 TextButton.icon(
                   onPressed: () async {
                     HapticFeedback.selectionClick();
@@ -1069,7 +1182,10 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Text('Set Up Stage 2', style: Theme.of(context).textTheme.titleLarge),
+        Text(
+          'Set Up the Next Round',
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
         const SizedBox(height: 8),
         const Text(
           'Choose how many players advance from each group, and what format they\'ll play in this stage.',
@@ -1148,7 +1264,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                     color: Colors.white,
                   ),
                 )
-              : const Text('Start Stage 2'),
+              : const Text('Start Next Round'),
         ),
       ],
     );

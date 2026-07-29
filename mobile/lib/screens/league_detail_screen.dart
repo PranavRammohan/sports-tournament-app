@@ -10,7 +10,6 @@ import '../config.dart';
 import '../utils.dart';
 import '../widgets/sport_icon.dart';
 import 'report_match_screen.dart';
-import 'host_report_match_screen.dart';
 import 'playoffs_screen.dart';
 import 'regenerate_schedule_dialog.dart';
 import 'add_players_screen.dart';
@@ -1012,6 +1011,76 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     }
   }
 
+  // Reports a brand-new result directly from a specific fixture card (host
+  // mode) — no separate opponent-picking screen needed, since the fixture
+  // already tells us exactly who's playing.
+  Future<void> _hostReportFixture(dynamic f) async {
+    final team1Name = f['player1_partner_username'] != null
+        ? '${f['player1_username']} & ${f['player1_partner_username']}'
+        : f['player1_username'];
+    final team2Name = f['player2_partner_username'] != null
+        ? '${f['player2_username']} & ${f['player2_partner_username']}'
+        : f['player2_username'];
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => _HostReportSetsDialog(
+        player1Name: team1Name,
+        player2Name: team2Name,
+        title: 'Enter Score',
+        unitLabel: _unitLabel,
+      ),
+    );
+    if (result == null) return;
+
+    HapticFeedback.lightImpact();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('authToken');
+      final response = await http.post(
+        Uri.parse('$baseApiUrl/matches/report-as-host'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'leagueId': widget.leagueId,
+          'player1Id': f['player1_id'],
+          'player1PartnerId': f['player1_partner_id'],
+          'player2Id': f['player2_id'],
+          'player2PartnerId': f['player2_partner_id'],
+          'player1Units': result['player1Units'],
+          'player2Units': result['player2Units'],
+          'player1Won': result['player1Won'],
+          'setScores': result['setScores'],
+        }),
+      );
+      final data = jsonDecode(response.body);
+      if (!mounted) return;
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Match confirmed!'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadAll();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(data['error'] ?? 'Could not enter score.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    }
+  }
+
   Future<void> _editMyReport(dynamic f) async {
     final iAmTeam1 =
         f['player1_id'] == _currentUserId ||
@@ -1290,31 +1359,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     }
 
     if (hostEntersScores) {
-      if (!isHost) return null;
-
-      final pendingFixtures = _schedule
-          .where((f) => f['match_status'] != 'confirmed')
-          .toList();
-
-      return FloatingActionButton.extended(
-        onPressed: () async {
-          HapticFeedback.lightImpact();
-          final reported = await Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => HostReportMatchScreen(
-                leagueId: widget.leagueId,
-                sport: _league!['sport'],
-                pendingFixtures: pendingFixtures,
-                members: _leaderboard,
-              ),
-            ),
-          );
-          if (reported == true) _loadAll();
-        },
-        icon: const Icon(Icons.sports_score),
-        label: const Text('Enter Score'),
-      );
+      // Host scoring is now done inline per-fixture (see the "Enter Score"
+      // button on each unplayed fixture card) rather than through a
+      // separate screen, so no FAB is needed here.
+      return null;
     }
 
     if (!_isMember) return null;
@@ -2811,6 +2859,19 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                     ),
                   ),
                 ] else if (!_isCompleted) ...[
+                  if (_league!['host_enters_scores'] == true)
+                    TextButton.icon(
+                      onPressed: () => _hostReportFixture(f),
+                      icon: const Icon(Icons.sports_score, size: 15),
+                      label: const Text(
+                        'Enter Score',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
                   TextButton.icon(
                     onPressed: () => _openEditFixtureDialog(f),
                     icon: const Icon(Icons.edit_outlined, size: 15),
