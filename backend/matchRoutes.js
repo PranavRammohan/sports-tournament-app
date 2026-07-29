@@ -4,15 +4,6 @@ const router = express.Router();
 const pool = require('./db');
 const { calculateNewRatings } = require('./ratingEngine');
 
-// Recalibrated to match each sport's real practical rating range used in this
-// app (see ratingEngine.js for the same recalibration reasoning).
-const SPORT_RATING_RANGES = {
-  badminton: 2500,      // 6000–8500
-  tennis: 11.5,          // 2.5–13 (plus a little headroom above 13, in case)
-  table_tennis: 1500,    // 1000–2500
-  pickleball: 4.5,       // 2.5–7.0
-};
-
 // A reasonable ceiling for any single unit count (games/points won in a
 // match) — high enough to never legitimately trigger, just a sanity guard
 // against garbage input.
@@ -62,28 +53,11 @@ async function updateRating(userId, sport, format, newRating, won) {
   }
 }
 
+// Flat scoring: 2 points for a win, 0 for a loss. No bonuses for upsets or
+// dominant (straight-set) wins — kept deliberately simple so every win is
+// worth exactly the same, regardless of how it happened.
 function calculateLeaguePoints(sport, winnerRating, loserRating, setScores, winnerWonTeam1) {
-  let points = 2;
-
-  if (winnerRating != null && loserRating != null && winnerRating < loserRating) {
-    const range = SPORT_RATING_RANGES[sport] || 1;
-    const gapFraction = (loserRating - winnerRating) / range;
-    points += gapFraction > 0.15 ? 2 : 1;
-  }
-
-  try {
-    const sets = JSON.parse(setScores);
-    const wonEverySet = sets.length > 0 && sets.every((s) => {
-      const winnerScore = winnerWonTeam1 ? s.me : s.opponent;
-      const loserScore = winnerWonTeam1 ? s.opponent : s.me;
-      return winnerScore > loserScore;
-    });
-    if (wonEverySet) points += 1;
-  } catch (err) {
-    // if parsing fails, just skip the dominant-win bonus
-  }
-
-  return points;
+  return 2;
 }
 
 async function awardLeaguePoints(leagueId, winnerId, points) {
