@@ -1096,6 +1096,102 @@ router.post('/:id/groups/lock', async (req, res) => {
   }
 });
 
+// ---------- UNLOCK GROUPS (host only) ----------
+// Reverses every confirmed group-stage match's rating/points effects, wipes
+// the group-stage schedule entirely, and reopens group membership for
+// editing — mirrors how "Regenerate Schedule" already works for normal
+// leagues. Blocked once Stage 2 has started, since Stage 2 was built on top
+// of the group standings this would erase.
+router.post('/:id/groups/unlock', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can unlock groups.' });
+    }
+    if (league.schedule_type !== 'groups') {
+      return res.status(400).json({ error: 'This league is not set up for group play.' });
+    }
+    if (!league.groups_locked) {
+      return res.status(409).json({ error: 'Groups are not locked.' });
+    }
+    if (league.stage2_started) {
+      return res.status(400).json({
+        error: 'Stage 2 has already started, which was built from these group standings — groups can no longer be unlocked.',
+      });
+    }
+
+    // Reverse rating/points effects for every confirmed group-stage match
+    // before wiping anything, same principle as regenerate-schedule.
+    const confirmedResult = await pool.query(
+      `SELECT m.* FROM matches m
+       JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
+       WHERE sm.league_id = $1 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'`,
+      [leagueId]
+    );
+
+    for (const match of confirmedResult.rows) {
+      const team1Won = match.winner_id === match.player1_id;
+
+      const reverseOne = async (playerId, ratingChange, won) => {
+        if (playerId == null || ratingChange == null) return;
+        if (league.sport === 'table_tennis') {
+          await pool.query(
+            `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
+             wins = wins - $2, losses = losses - $3
+             WHERE user_id = $4 AND sport = $5`,
+            [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, league.sport]
+          );
+        } else {
+          await pool.query(
+            `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
+             wins = wins - $2, losses = losses - $3
+             WHERE user_id = $4 AND sport = $5 AND format = $6`,
+            [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, league.sport, league.format]
+          );
+        }
+      };
+
+      await reverseOne(match.player1_id, match.player1_rating_change, team1Won);
+      await reverseOne(match.player2_id, match.player2_rating_change, !team1Won);
+
+      if (match.league_points_awarded != null) {
+        const winnerId = match.winner_id;
+        await pool.query(
+          'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+          [match.league_points_awarded, leagueId, winnerId]
+        );
+      }
+    }
+
+    await pool.query(
+      `DELETE FROM matches WHERE scheduled_match_id IN (
+         SELECT id FROM scheduled_matches WHERE league_id = $1 AND group_id IS NOT NULL
+       )`,
+      [leagueId]
+    );
+    await pool.query(
+      'DELETE FROM scheduled_matches WHERE league_id = $1 AND group_id IS NOT NULL',
+      [leagueId]
+    );
+    await pool.query('UPDATE leagues SET groups_locked = false WHERE id = $1', [leagueId]);
+
+    res.status(200).json({
+      message: 'Groups unlocked. All group-stage match history and rating changes have been reversed — you can now edit groups and re-lock when ready.',
+    });
+  } catch (err) {
+    console.error('Unlock groups error:', err);
+    res.status(500).json({ error: 'Something went wrong unlocking groups.' });
+  }
+});
+
 // ---------- START STAGE 2 (host only) ----------
 // Takes the top N (uniform across all groups) from each group's standings
 // and generates a fresh schedule/bracket among just those qualifiers, in
