@@ -214,6 +214,78 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     }
   }
 
+  Future<void> _editGroupFormat(dynamic group) async {
+    final matchesPerPlayerController = TextEditingController(
+      text: group['matches_per_player'] != null ? '${group['matches_per_player']}' : '',
+    );
+    String scheduleType = group['schedule_type'] ?? 'round_robin';
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          title: Text('Edit Format — ${group['name']}'),
+          content: SingleChildScrollView(
+            child: _scheduleTypeRadios(
+              value: scheduleType,
+              onChanged: (v) => setDialogState(() => scheduleType = v),
+              matchesPerPlayerController: matchesPerPlayerController,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                int? matchesPerPlayer;
+                if (scheduleType == 'matches_per_player') {
+                  matchesPerPlayer = int.tryParse(matchesPerPlayerController.text.trim());
+                  if (matchesPerPlayer == null || matchesPerPlayer < 1) return;
+                }
+                Navigator.pop(ctx, {
+                  'scheduleType': scheduleType,
+                  'matchesPerPlayer': matchesPerPlayer,
+                });
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result == null) return;
+
+    HapticFeedback.lightImpact();
+    setState(() => _submitting = true);
+    try {
+      final res = await ApiClient.put(
+        '/leagues/${widget.leagueId}/groups/${group['id']}/config',
+        body: result,
+      );
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        await _load();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not update this group\'s format.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
   Future<void> _deleteGroup(int groupId, String groupName) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -265,31 +337,10 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     }
   }
 
-  Future<void> _assignToGroup(int userId, int groupId, {String? fromGroupName, required String toGroupName}) async {
-    if (fromGroupName != null) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          title: Text('Move to "$toGroupName"?'),
-          content: Text(
-            'This removes their unplayed matches in "$fromGroupName" — confirmed results and rating changes stay as-is.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Move'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true) return;
-    }
-
+  // Purely additive — a player can belong to any number of groups. Adding
+  // them to another group never removes them from groups they're already
+  // in, so there's nothing destructive here worth confirming.
+  Future<void> _assignToGroup(int userId, int groupId) async {
     HapticFeedback.selectionClick();
     setState(() => _submitting = true);
     try {
@@ -303,7 +354,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(res.errorOr('Could not assign player.')),
+            content: Text(res.errorOr('Could not add this player.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -318,12 +369,14 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     }
   }
 
-  Future<void> _unassign(int userId) async {
+  // Removes a player from THIS one group only — undoing a mis-click before
+  // it matters. Never touches any other group they belong to.
+  Future<void> _unassign(int userId, int groupId) async {
     HapticFeedback.selectionClick();
     setState(() => _submitting = true);
     try {
       final res = await ApiClient.post(
-        '/leagues/${widget.leagueId}/groups/unassign',
+        '/leagues/${widget.leagueId}/groups/$groupId/unassign',
         body: {'userId': userId},
       );
       if (!mounted) return;
@@ -332,7 +385,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(res.errorOr('Could not unassign player.')),
+            content: Text(res.errorOr('Could not remove this player.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -354,7 +407,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         title: const Text('Auto-assign everyone?'),
         content: const Text(
-          'This distributes players across the unlocked groups by rating (highest rated to the first group, next to the second, and so on, cycling through), overwriting assignments already made in those groups. Locked groups and their members are left untouched.',
+          'This distributes players who aren\'t in any group yet across the unlocked groups by rating (highest rated to the first group, next to the second, and so on, cycling through). Anyone already placed in a group — locked or not — is left exactly where they are.',
         ),
         actions: [
           TextButton(
@@ -743,13 +796,22 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     );
   }
 
+  // Which OTHER unlocked groups a given member could still be added to —
+  // excludes groups they already belong to, since a player can be in
+  // several groups at once and re-adding them somewhere they already are
+  // would just be a no-op menu item.
+  List<dynamic> _candidateGroupsFor(dynamic member, dynamic currentGroup) {
+    return _groups.where((g) {
+      if (g['id'] == currentGroup['id'] || g['locked'] == true) return false;
+      final groupMembers = g['members'] as List;
+      return !groupMembers.any((mm) => mm['id'] == member['id']);
+    }).toList();
+  }
+
   Widget _buildGroupCard(dynamic group) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final members = group['members'] as List;
     final locked = group['locked'] == true;
-    final otherUnlockedGroups = _groups.where(
-      (g) => g['id'] != group['id'] && g['locked'] != true,
-    ).toList();
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -801,6 +863,12 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                     color: AppColors.textGrey,
                   ),
                 ),
+                if (!locked)
+                  IconButton(
+                    icon: const Icon(Icons.tune, size: 18),
+                    tooltip: 'Edit format',
+                    onPressed: _submitting ? null : () => _editGroupFormat(group),
+                  ),
                 IconButton(
                   icon: Icon(
                     locked ? Icons.lock_open_outlined : Icons.lock_outline,
@@ -837,6 +905,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
               )
             else
               ...members.map<Widget>((m) {
+                final candidateGroups = _candidateGroupsFor(m, group);
                 return Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Row(
@@ -847,34 +916,28 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                           style: const TextStyle(fontSize: 13),
                         ),
                       ),
-                      if (otherUnlockedGroups.isNotEmpty)
+                      if (candidateGroups.isNotEmpty)
                         PopupMenuButton<int>(
-                          icon: const Icon(Icons.swap_horiz, size: 16),
-                          tooltip: 'Move to another group',
+                          icon: const Icon(Icons.group_add_outlined, size: 16),
+                          tooltip: 'Add to another group',
                           enabled: !_submitting,
-                          itemBuilder: (ctx) => otherUnlockedGroups
+                          itemBuilder: (ctx) => candidateGroups
                               .map<PopupMenuItem<int>>(
                                 (g) => PopupMenuItem(
                                   value: g['id'] as int,
-                                  child: Text('Move to ${g['name']}'),
+                                  child: Text('Add to ${g['name']}'),
                                 ),
                               )
                               .toList(),
-                          onSelected: (targetGroupId) => _assignToGroup(
-                            m['id'],
-                            targetGroupId,
-                            fromGroupName: group['name'],
-                            toGroupName: otherUnlockedGroups
-                                .firstWhere((g) => g['id'] == targetGroupId)['name'],
-                          ),
+                          onSelected: (targetGroupId) => _assignToGroup(m['id'], targetGroupId),
                         ),
                       if (!locked)
                         IconButton(
                           icon: const Icon(Icons.close, size: 16),
-                          tooltip: 'Unassign',
+                          tooltip: 'Remove from this group',
                           onPressed: _submitting
                               ? null
-                              : () => _unassign(m['id']),
+                              : () => _unassign(m['id'], group['id']),
                           visualDensity: VisualDensity.compact,
                         ),
                     ],
@@ -926,8 +989,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                 ? null
                 : (groupId) {
                     if (groupId != null) {
-                      final targetName = unlockedGroups.firstWhere((g) => g['id'] == groupId)['name'];
-                      _assignToGroup(member['id'], groupId, toGroupName: targetName);
+                      _assignToGroup(member['id'], groupId);
                     }
                   },
           ),

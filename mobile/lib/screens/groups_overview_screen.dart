@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import '../main.dart';
 import '../api_client.dart';
 import 'report_match_screen.dart';
-import 'playoffs_screen.dart';
+import '../widgets/bracket_view.dart';
 import 'add_manual_match_screen.dart';
 
 class GroupsOverviewScreen extends StatefulWidget {
@@ -69,7 +69,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
 
       // Each non-knockout group's schedule fetch is independent of the
       // others too — knockout groups render a bracket instead (fetched by
-      // PlayoffsScreen itself when the host/player opens that group's tab).
+      // BracketView itself when the host/player opens that group's tab).
       final scheduledGroups = _groups.where((g) => g['schedule_type'] != 'knockout').toList();
       if (scheduledGroups.isNotEmpty) {
         final schedResults = await Future.wait(
@@ -193,12 +193,13 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
 
   Widget _buildGroupTab(dynamic group) {
     if (group['schedule_type'] == 'knockout') {
-      return PlayoffsScreen(
+      // Rendered directly inline, like every other group format's tab — no
+      // navigating away to a separate screen.
+      return BracketView(
         leagueId: widget.leagueId,
         isHost: widget.isHost,
         format: 'singles',
         groupId: group['id'] as int,
-        groupName: group['name'],
         groupLocked: group['locked'] == true,
       );
     }
