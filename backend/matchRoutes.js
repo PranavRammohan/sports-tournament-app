@@ -2,7 +2,8 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('./db');
-const { calculateNewRatings } = require('./ratingEngine');
+const { calculateNewRatings, reverseRatingChange } = require('./ratingEngine');
+const { RouteError } = pool;
 
 // A reasonable ceiling for any single unit count (games/points won in a
 // match) — high enough to never legitimately trigger, just a sanity guard
@@ -26,8 +27,19 @@ function isValidSetScores(setScores) {
   });
 }
 
-async function getRating(userId, sport, format) {
-  const result = await pool.query(
+// Same guard leagueRoutes.js uses — kept as a local copy here since this file
+// has no shared module with leagueRoutes.js. Returns a user-facing error
+// string if the league has been marked completed (read-only), or null if
+// it's still active.
+function checkNotCompleted(league) {
+  if (league.status === 'completed') {
+    return 'This tournament has been marked completed and is now read-only.';
+  }
+  return null;
+}
+
+async function getRating(db, userId, sport, format) {
+  const result = await db.query(
     'SELECT rating FROM user_sports WHERE user_id = $1 AND sport = $2 AND format = $3',
     [userId, sport, format]
   );
@@ -35,16 +47,16 @@ async function getRating(userId, sport, format) {
   return parseFloat(result.rows[0].rating);
 }
 
-async function updateRating(userId, sport, format, newRating, won) {
+async function updateRating(db, userId, sport, format, newRating, won) {
   if (sport === 'table_tennis') {
-    await pool.query(
+    await db.query(
       `UPDATE user_sports SET rating = $1, matches_played = matches_played + 1,
        wins = wins + $2, losses = losses + $3
        WHERE user_id = $4 AND sport = $5`,
       [newRating, won ? 1 : 0, won ? 0 : 1, userId, sport]
     );
   } else {
-    await pool.query(
+    await db.query(
       `UPDATE user_sports SET rating = $1, matches_played = matches_played + 1,
        wins = wins + $2, losses = losses + $3
        WHERE user_id = $4 AND sport = $5 AND format = $6`,
@@ -60,15 +72,15 @@ function calculateLeaguePoints(sport, winnerRating, loserRating, setScores, winn
   return 2;
 }
 
-async function awardLeaguePoints(leagueId, winnerId, points) {
-  await pool.query(
+async function awardLeaguePoints(db, leagueId, winnerId, points) {
+  await db.query(
     'UPDATE league_members SET points = points + $1 WHERE league_id = $2 AND user_id = $3',
     [points, leagueId, winnerId]
   );
 }
 
-async function findMatchingFixture(leagueId, team1Ids, team2Ids) {
-  const result = await pool.query(
+async function findMatchingFixture(db, leagueId, team1Ids, team2Ids) {
+  const result = await db.query(
     'SELECT id, player1_id, player1_partner_id, player2_id, player2_partner_id FROM scheduled_matches WHERE league_id = $1',
     [leagueId]
   );
@@ -97,13 +109,13 @@ async function findMatchingFixture(leagueId, team1Ids, team2Ids) {
   return null;
 }
 
-async function finalizeMatch(match, league) {
+async function finalizeMatch(db, match, league) {
   const { sport, format } = league;
 
-  const rating1a = await getRating(match.player1_id, sport, format);
-  const rating2a = await getRating(match.player2_id, sport, format);
-  const rating1b = match.player1_partner_id ? await getRating(match.player1_partner_id, sport, format) : null;
-  const rating2b = match.player2_partner_id ? await getRating(match.player2_partner_id, sport, format) : null;
+  const rating1a = await getRating(db, match.player1_id, sport, format);
+  const rating2a = await getRating(db, match.player2_id, sport, format);
+  const rating1b = match.player1_partner_id ? await getRating(db, match.player1_partner_id, sport, format) : null;
+  const rating2b = match.player2_partner_id ? await getRating(db, match.player2_partner_id, sport, format) : null;
 
   const team1Rating = rating1b != null ? (rating1a + rating1b) / 2 : rating1a;
   const team2Rating = rating2b != null ? (rating2a + rating2b) / 2 : rating2a;
@@ -121,7 +133,7 @@ async function finalizeMatch(match, league) {
     if (individualRating == null) return null;
     const updated = Math.round((individualRating + change) * 10) / 10;
     const actualChange = Math.round((updated - individualRating) * 100) / 100;
-    await updateRating(playerId, sport, format, updated, won);
+    await updateRating(db, playerId, sport, format, updated, won);
     return actualChange;
   };
 
@@ -134,7 +146,7 @@ async function finalizeMatch(match, league) {
   const loserRating = team1Won ? team2Rating : team1Rating;
   const points = calculateLeaguePoints(sport, winnerRating, loserRating, match.set_scores, team1Won);
 
-  await pool.query(
+  await db.query(
     `UPDATE matches SET status = 'confirmed',
       player1_rating_change = $1, player2_rating_change = $2,
       player1_partner_rating_change = $3, player2_partner_rating_change = $4,
@@ -143,51 +155,32 @@ async function finalizeMatch(match, league) {
     [player1RatingChange, player2RatingChange, player1PartnerRatingChange, player2PartnerRatingChange, points, match.id]
   );
 
-  await awardLeaguePoints(match.league_id, match.winner_id, points);
+  await awardLeaguePoints(db, match.league_id, match.winner_id, points);
   if (match.winner_id === match.player1_id && match.player1_partner_id) {
-    await awardLeaguePoints(match.league_id, match.player1_partner_id, points);
+    await awardLeaguePoints(db, match.league_id, match.player1_partner_id, points);
   }
   if (match.winner_id === match.player2_id && match.player2_partner_id) {
-    await awardLeaguePoints(match.league_id, match.player2_partner_id, points);
+    await awardLeaguePoints(db, match.league_id, match.player2_partner_id, points);
   }
 }
 
 // Undoes the rating + league-points effects of a previously confirmed match.
 // Used when a host edits or deletes a confirmed score.
-async function reverseMatchEffects(match, league) {
+async function reverseMatchEffects(db, match, league) {
   const { sport, format } = league;
   const team1Won = match.winner_id === match.player1_id;
 
-  const reverseOne = async (playerId, ratingChange, won) => {
-    if (playerId == null || ratingChange == null) return;
-    if (sport === 'table_tennis') {
-      await pool.query(
-        `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
-         wins = wins - $2, losses = losses - $3
-         WHERE user_id = $4 AND sport = $5`,
-        [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport]
-      );
-    } else {
-      await pool.query(
-        `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
-         wins = wins - $2, losses = losses - $3
-         WHERE user_id = $4 AND sport = $5 AND format = $6`,
-        [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport, format]
-      );
-    }
-  };
-
-  await reverseOne(match.player1_id, match.player1_rating_change, team1Won);
-  await reverseOne(match.player2_id, match.player2_rating_change, !team1Won);
-  await reverseOne(match.player1_partner_id, match.player1_partner_rating_change, team1Won);
-  await reverseOne(match.player2_partner_id, match.player2_partner_rating_change, !team1Won);
+  await reverseRatingChange(db, match.player1_id, sport, format, match.player1_rating_change, team1Won);
+  await reverseRatingChange(db, match.player2_id, sport, format, match.player2_rating_change, !team1Won);
+  await reverseRatingChange(db, match.player1_partner_id, sport, format, match.player1_partner_rating_change, team1Won);
+  await reverseRatingChange(db, match.player2_partner_id, sport, format, match.player2_partner_rating_change, !team1Won);
 
   if (match.league_points_awarded != null) {
     const winnerIds = [match.winner_id];
     if (match.winner_id === match.player1_id && match.player1_partner_id) winnerIds.push(match.player1_partner_id);
     if (match.winner_id === match.player2_id && match.player2_partner_id) winnerIds.push(match.player2_partner_id);
     for (const wId of winnerIds) {
-      await pool.query(
+      await db.query(
         'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
         [match.league_points_awarded, match.league_id, wId]
       );
@@ -198,7 +191,7 @@ async function reverseMatchEffects(match, league) {
 // Checks if any participant in this match has played another confirmed match
 // (same sport/format) since this one happened — a signal that reversing this
 // match's rating change may not perfectly restore their "true" current rating.
-async function checkForRatingDrift(match, league) {
+async function checkForRatingDrift(db, match, league) {
   const participantIds = [
     match.player1_id, match.player2_id, match.player1_partner_id, match.player2_partner_id,
   ].filter(Boolean);
@@ -208,7 +201,7 @@ async function checkForRatingDrift(match, league) {
   // count as drift too — pass null to skip the format filter for that sport.
   const formatFilter = league.sport === 'table_tennis' ? null : league.format;
 
-  const result = await pool.query(
+  const result = await db.query(
     `SELECT COUNT(*) FROM (
        SELECT m.id FROM matches m
        JOIN leagues l ON l.id = m.league_id
@@ -279,16 +272,18 @@ router.post('/report', async (req, res) => {
     const winnerId = iWon ? userId : opponentId;
 
     const scheduledMatchId = await findMatchingFixture(
+      pool,
       leagueId,
       [userId, partnerId],
       [opponentId, opponentPartnerId]
     );
 
-    const scheduleExists = await pool.query(
-      'SELECT id FROM scheduled_matches WHERE league_id = $1 LIMIT 1',
-      [leagueId]
-    );
-    if (scheduleExists.rows.length > 0 && scheduledMatchId === null) {
+    // Require a matching scheduled fixture unconditionally — including when
+    // the league has no scheduled_matches rows at all yet (e.g. a 'custom'
+    // league before the host has added its first manual match). Without this,
+    // an empty schedule let anyone self-report a fabricated matchup against
+    // any other member, since there was nothing yet to fail to match against.
+    if (scheduledMatchId === null) {
       return res.status(400).json({
         error: 'This matchup isn\'t part of the generated schedule. Report matches against your scheduled opponents only.',
       });
@@ -364,66 +359,74 @@ router.post('/report-as-host', async (req, res) => {
   }
 
   try {
-    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
-    if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
-    }
-    const league = leagueResult.rows[0];
+    let match;
 
-    if (!league.host_enters_scores || league.created_by !== userId) {
-      return res.status(403).json({ error: 'Only the host can enter scores directly for this league.' });
-    }
-    if (league.status === 'completed') {
-      return res.status(400).json({ error: 'This tournament has been marked completed and is now read-only.' });
-    }
+    await pool.withTransaction(async (client) => {
+      const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+      if (leagueResult.rows.length === 0) {
+        throw new RouteError(404, 'League not found.');
+      }
+      const league = leagueResult.rows[0];
 
-    const winnerId = player1Won ? player1Id : player2Id;
+      if (!league.host_enters_scores || league.created_by !== userId) {
+        throw new RouteError(403, 'Only the host can enter scores directly for this league.');
+      }
+      if (league.status === 'completed') {
+        throw new RouteError(400, 'This tournament has been marked completed and is now read-only.');
+      }
 
-    const scheduledMatchId = await findMatchingFixture(
-      leagueId,
-      [player1Id, player1PartnerId],
-      [player2Id, player2PartnerId]
-    );
+      const winnerId = player1Won ? player1Id : player2Id;
 
-    if (scheduledMatchId === null) {
-      return res.status(400).json({ error: 'This matchup is not part of the generated schedule.' });
-    }
-
-    const alreadyConfirmed = await pool.query(
-      `SELECT id FROM matches WHERE scheduled_match_id = $1 AND status = 'confirmed' LIMIT 1`,
-      [scheduledMatchId]
-    );
-    if (alreadyConfirmed.rows.length > 0) {
-      return res.status(409).json({ error: 'This scheduled match has already been completed.' });
-    }
-
-    const result = await pool.query(
-      `INSERT INTO matches
-        (league_id, player1_id, player1_partner_id, player2_id, player2_partner_id,
-         player1_units, player2_units, winner_id, reported_by, status, format, set_scores, scheduled_match_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'confirmed', $10, $11, $12)
-       RETURNING *`,
-      [
+      const scheduledMatchId = await findMatchingFixture(
+        client,
         leagueId,
-        player1Id,
-        player1PartnerId || null,
-        player2Id,
-        player2PartnerId || null,
-        player1Units,
-        player2Units,
-        winnerId,
-        userId,
-        league.format,
-        JSON.stringify(setScores || []),
-        scheduledMatchId,
-      ]
-    );
+        [player1Id, player1PartnerId],
+        [player2Id, player2PartnerId]
+      );
 
-    const match = result.rows[0];
-    await finalizeMatch(match, league);
+      if (scheduledMatchId === null) {
+        throw new RouteError(400, 'This matchup is not part of the generated schedule.');
+      }
+
+      const alreadyConfirmed = await client.query(
+        `SELECT id FROM matches WHERE scheduled_match_id = $1 AND status = 'confirmed' LIMIT 1`,
+        [scheduledMatchId]
+      );
+      if (alreadyConfirmed.rows.length > 0) {
+        throw new RouteError(409, 'This scheduled match has already been completed.');
+      }
+
+      const result = await client.query(
+        `INSERT INTO matches
+          (league_id, player1_id, player1_partner_id, player2_id, player2_partner_id,
+           player1_units, player2_units, winner_id, reported_by, status, format, set_scores, scheduled_match_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'confirmed', $10, $11, $12)
+         RETURNING *`,
+        [
+          leagueId,
+          player1Id,
+          player1PartnerId || null,
+          player2Id,
+          player2PartnerId || null,
+          player1Units,
+          player2Units,
+          winnerId,
+          userId,
+          league.format,
+          JSON.stringify(setScores || []),
+          scheduledMatchId,
+        ]
+      );
+
+      match = result.rows[0];
+      await finalizeMatch(client, match, league);
+    });
 
     res.status(201).json({ match });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Host report match error:', err);
     res.status(500).json({ error: 'Something went wrong entering the score.' });
   }
@@ -749,31 +752,45 @@ router.post('/:id/confirm', async (req, res) => {
   const matchId = req.params.id;
 
   try {
-    const matchResult = await pool.query('SELECT * FROM matches WHERE id = $1', [matchId]);
-    if (matchResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Match not found.' });
-    }
-    const match = matchResult.rows[0];
+    await pool.withTransaction(async (client) => {
+      // Lock the row for the duration of the transaction so two simultaneous
+      // confirms on the same match can't both pass the pending-status check
+      // below and double-apply the rating/points change — the second one
+      // blocks until the first commits, then sees the updated status.
+      const matchResult = await client.query('SELECT * FROM matches WHERE id = $1 FOR UPDATE', [matchId]);
+      if (matchResult.rows.length === 0) {
+        throw new RouteError(404, 'Match not found.');
+      }
+      const match = matchResult.rows[0];
 
-    if (match.status !== 'pending') {
-      return res.status(409).json({ error: 'This match has already been processed.' });
-    }
+      if (match.status !== 'pending') {
+        throw new RouteError(409, 'This match has already been processed.');
+      }
 
-    const participants = [match.player1_id, match.player1_partner_id, match.player2_id, match.player2_partner_id];
-    if (!participants.includes(userId)) {
-      return res.status(403).json({ error: 'You are not part of this match.' });
-    }
-    if (userId === match.reported_by) {
-      return res.status(400).json({ error: 'You cannot confirm your own report.' });
-    }
+      const participants = [match.player1_id, match.player1_partner_id, match.player2_id, match.player2_partner_id];
+      if (!participants.includes(userId)) {
+        throw new RouteError(403, 'You are not part of this match.');
+      }
+      if (userId === match.reported_by) {
+        throw new RouteError(400, 'You cannot confirm your own report.');
+      }
 
-    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
-    const league = leagueResult.rows[0];
+      const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+      const league = leagueResult.rows[0];
 
-    await finalizeMatch(match, league);
+      const completedError = checkNotCompleted(league);
+      if (completedError) {
+        throw new RouteError(400, completedError);
+      }
+
+      await finalizeMatch(client, match, league);
+    });
 
     res.status(200).json({ message: 'Match confirmed and ratings updated.' });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Confirm match error:', err);
     res.status(500).json({ error: 'Something went wrong confirming the match.' });
   }
@@ -801,6 +818,14 @@ router.post('/:id/reject', async (req, res) => {
     }
     if (userId === match.reported_by) {
       return res.status(400).json({ error: 'You cannot reject your own report.' });
+    }
+
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+    const league = leagueResult.rows[0];
+
+    const completedError = checkNotCompleted(league);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
     }
 
     await pool.query(`UPDATE matches SET status = 'rejected' WHERE id = $1`, [matchId]);
@@ -846,6 +871,14 @@ router.put('/:id/edit-report', async (req, res) => {
       return res.status(403).json({ error: 'Only the player who reported this result can edit it.' });
     }
 
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+    const league = leagueResult.rows[0];
+
+    const completedError = checkNotCompleted(league);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
+    }
+
     const iAmPlayer1 = userId === match.player1_id || userId === match.player1_partner_id;
     const winnerId = iWon
       ? (iAmPlayer1 ? match.player1_id : match.player2_id)
@@ -883,36 +916,40 @@ router.put('/:id/edit', async (req, res) => {
   }
 
   try {
-    const matchResult = await pool.query('SELECT * FROM matches WHERE id = $1', [matchId]);
-    if (matchResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Match not found.' });
-    }
-    const match = matchResult.rows[0];
+    let hasDrift = false;
 
-    if (match.status !== 'confirmed') {
-      return res.status(400).json({ error: 'Only confirmed matches can be edited.' });
-    }
+    await pool.withTransaction(async (client) => {
+      const matchResult = await client.query('SELECT * FROM matches WHERE id = $1', [matchId]);
+      if (matchResult.rows.length === 0) {
+        throw new RouteError(404, 'Match not found.');
+      }
+      const match = matchResult.rows[0];
 
-    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
-    const league = leagueResult.rows[0];
+      if (match.status !== 'confirmed') {
+        throw new RouteError(400, 'Only confirmed matches can be edited.');
+      }
 
-    if (league.created_by !== userId) {
-      return res.status(403).json({ error: 'Only the league host can edit match scores.' });
-    }
+      const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+      const league = leagueResult.rows[0];
 
-    const hasDrift = await checkForRatingDrift(match, league);
+      if (league.created_by !== userId) {
+        throw new RouteError(403, 'Only the league host can edit match scores.');
+      }
 
-    await reverseMatchEffects(match, league);
+      hasDrift = await checkForRatingDrift(client, match, league);
 
-    const winnerId = player1Won ? match.player1_id : match.player2_id;
-    await pool.query(
-      `UPDATE matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4
-       WHERE id = $5`,
-      [player1Units, player2Units, winnerId, JSON.stringify(setScores || []), matchId]
-    );
+      await reverseMatchEffects(client, match, league);
 
-    const updatedMatchResult = await pool.query('SELECT * FROM matches WHERE id = $1', [matchId]);
-    await finalizeMatch(updatedMatchResult.rows[0], league);
+      const winnerId = player1Won ? match.player1_id : match.player2_id;
+      await client.query(
+        `UPDATE matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4
+         WHERE id = $5`,
+        [player1Units, player2Units, winnerId, JSON.stringify(setScores || []), matchId]
+      );
+
+      const updatedMatchResult = await client.query('SELECT * FROM matches WHERE id = $1', [matchId]);
+      await finalizeMatch(client, updatedMatchResult.rows[0], league);
+    });
 
     res.status(200).json({
       message: 'Match updated and ratings recalculated.',
@@ -921,6 +958,9 @@ router.put('/:id/edit', async (req, res) => {
         : null,
     });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Edit match error:', err);
     res.status(500).json({ error: 'Something went wrong editing the match.' });
   }
@@ -932,32 +972,38 @@ router.delete('/:id', async (req, res) => {
   const matchId = req.params.id;
 
   try {
-    const matchResult = await pool.query('SELECT * FROM matches WHERE id = $1', [matchId]);
-    if (matchResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Match not found.' });
-    }
-    const match = matchResult.rows[0];
-
-    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
-    const league = leagueResult.rows[0];
-
-    if (league.created_by !== userId) {
-      return res.status(403).json({ error: 'Only the league host can delete a match.' });
-    }
-
     let warning = null;
-    if (match.status === 'confirmed') {
-      const hasDrift = await checkForRatingDrift(match, league);
-      if (hasDrift) {
-        warning = 'One or more players have played other confirmed matches since this one — their current rating may not perfectly reflect this reversal.';
-      }
-      await reverseMatchEffects(match, league);
-    }
 
-    await pool.query('DELETE FROM matches WHERE id = $1', [matchId]);
+    await pool.withTransaction(async (client) => {
+      const matchResult = await client.query('SELECT * FROM matches WHERE id = $1', [matchId]);
+      if (matchResult.rows.length === 0) {
+        throw new RouteError(404, 'Match not found.');
+      }
+      const match = matchResult.rows[0];
+
+      const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+      const league = leagueResult.rows[0];
+
+      if (league.created_by !== userId) {
+        throw new RouteError(403, 'Only the league host can delete a match.');
+      }
+
+      if (match.status === 'confirmed') {
+        const hasDrift = await checkForRatingDrift(client, match, league);
+        if (hasDrift) {
+          warning = 'One or more players have played other confirmed matches since this one — their current rating may not perfectly reflect this reversal.';
+        }
+        await reverseMatchEffects(client, match, league);
+      }
+
+      await client.query('DELETE FROM matches WHERE id = $1', [matchId]);
+    });
 
     res.status(200).json({ message: 'Match deleted.', warning });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Delete match error:', err);
     res.status(500).json({ error: 'Something went wrong deleting the match.' });
   }

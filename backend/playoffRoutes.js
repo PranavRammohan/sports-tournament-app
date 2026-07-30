@@ -2,7 +2,8 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('./db');
-const { calculateNewRatings } = require('./ratingEngine');
+const { calculateNewRatings, reverseRatingChange } = require('./ratingEngine');
+const { RouteError } = pool;
 
 // Generates standard tournament bracket seed order for any power-of-two size,
 // e.g. size=8 -> [1,8,4,5,2,7,3,6] (grouped in pairs: 1v8, 4v5, 2v7, 3v6),
@@ -25,6 +26,17 @@ function isPowerOfTwo(n) {
   return n > 0 && (n & (n - 1)) === 0;
 }
 
+// Same guard leagueRoutes.js/matchRoutes.js use — kept as a local copy here
+// since this file has no shared module with them. Returns a user-facing
+// error string if the league has been marked completed (read-only), or null
+// if it's still active.
+function checkNotCompleted(league) {
+  if (league.status === 'completed') {
+    return 'This tournament has been marked completed and is now read-only.';
+  }
+  return null;
+}
+
 // Same validation as matchRoutes.js — kept separate here since this file
 // has no shared module with matchRoutes.js.
 const MAX_PLAUSIBLE_UNITS = 500;
@@ -43,8 +55,8 @@ function isValidSetScores(setScores) {
   });
 }
 
-async function getRating(userId, sport, format) {
-  const result = await pool.query(
+async function getRating(db, userId, sport, format) {
+  const result = await db.query(
     'SELECT rating FROM user_sports WHERE user_id = $1 AND sport = $2 AND format = $3',
     [userId, sport, format]
   );
@@ -52,16 +64,16 @@ async function getRating(userId, sport, format) {
   return parseFloat(result.rows[0].rating);
 }
 
-async function updateUserSportsRow(userId, sport, format, newRating, won) {
+async function updateUserSportsRow(db, userId, sport, format, newRating, won) {
   if (sport === 'table_tennis') {
-    await pool.query(
+    await db.query(
       `UPDATE user_sports SET rating = $1, matches_played = matches_played + 1,
        wins = wins + $2, losses = losses + $3
        WHERE user_id = $4 AND sport = $5`,
       [newRating, won ? 1 : 0, won ? 0 : 1, userId, sport]
     );
   } else {
-    await pool.query(
+    await db.query(
       `UPDATE user_sports SET rating = $1, matches_played = matches_played + 1,
        wins = wins + $2, losses = losses + $3
        WHERE user_id = $4 AND sport = $5 AND format = $6`,
@@ -155,13 +167,13 @@ function resolveDoublesTeams(league, members) {
 // ratings; the engine's resulting delta is then applied equally to each
 // partner's own current rating — same approach matchRoutes.js already uses
 // for round-robin/custom doubles matches.
-async function finalizePlayoffMatch(match, league) {
+async function finalizePlayoffMatch(db, match, league) {
   const { sport, format } = league;
   const isDoubles = format === 'doubles' && match.player1_partner_id && match.player2_partner_id;
 
   if (!isDoubles) {
-    const rating1 = await getRating(match.player1_id, sport, format);
-    const rating2 = await getRating(match.player2_id, sport, format);
+    const rating1 = await getRating(db, match.player1_id, sport, format);
+    const rating2 = await getRating(db, match.player2_id, sport, format);
     const team1Won = match.winner_id === match.player1_id;
 
     const { newRating1, newRating2 } = calculateNewRatings(
@@ -173,20 +185,20 @@ async function finalizePlayoffMatch(match, league) {
     const change1 = Math.round((updatedRating1 - rating1) * 100) / 100;
     const change2 = Math.round((updatedRating2 - rating2) * 100) / 100;
 
-    await updateUserSportsRow(match.player1_id, sport, format, updatedRating1, team1Won);
-    await updateUserSportsRow(match.player2_id, sport, format, updatedRating2, !team1Won);
+    await updateUserSportsRow(db, match.player1_id, sport, format, updatedRating1, team1Won);
+    await updateUserSportsRow(db, match.player2_id, sport, format, updatedRating2, !team1Won);
 
-    await pool.query(
+    await db.query(
       `UPDATE playoff_matches SET status = 'confirmed',
         player1_rating_change = $1, player2_rating_change = $2
        WHERE id = $3`,
       [change1, change2, match.id]
     );
   } else {
-    const r1a = await getRating(match.player1_id, sport, format);
-    const r1b = await getRating(match.player1_partner_id, sport, format);
-    const r2a = await getRating(match.player2_id, sport, format);
-    const r2b = await getRating(match.player2_partner_id, sport, format);
+    const r1a = await getRating(db, match.player1_id, sport, format);
+    const r1b = await getRating(db, match.player1_partner_id, sport, format);
+    const r2a = await getRating(db, match.player2_id, sport, format);
+    const r2b = await getRating(db, match.player2_partner_id, sport, format);
 
     const team1Rating = (r1a + r1b) / 2;
     const team2Rating = (r2a + r2b) / 2;
@@ -209,12 +221,12 @@ async function finalizePlayoffMatch(match, league) {
     const change2a = Math.round((updated2a - r2a) * 100) / 100;
     const change2b = Math.round((updated2b - r2b) * 100) / 100;
 
-    await updateUserSportsRow(match.player1_id, sport, format, updated1a, team1Won);
-    await updateUserSportsRow(match.player1_partner_id, sport, format, updated1b, team1Won);
-    await updateUserSportsRow(match.player2_id, sport, format, updated2a, !team1Won);
-    await updateUserSportsRow(match.player2_partner_id, sport, format, updated2b, !team1Won);
+    await updateUserSportsRow(db, match.player1_id, sport, format, updated1a, team1Won);
+    await updateUserSportsRow(db, match.player1_partner_id, sport, format, updated1b, team1Won);
+    await updateUserSportsRow(db, match.player2_id, sport, format, updated2a, !team1Won);
+    await updateUserSportsRow(db, match.player2_partner_id, sport, format, updated2b, !team1Won);
 
-    await pool.query(
+    await db.query(
       `UPDATE playoff_matches SET status = 'confirmed',
         player1_rating_change = $1, player1_partner_rating_change = $2,
         player2_rating_change = $3, player2_partner_rating_change = $4
@@ -223,45 +235,26 @@ async function finalizePlayoffMatch(match, league) {
     );
   }
 
-  await advanceWinner({ ...match, status: 'confirmed' });
+  await advanceWinner(db, { ...match, status: 'confirmed' });
 }
 
 // Undoes the rating/stat effects of a previously confirmed playoff match —
 // used when the host edits a confirmed score, or cancels the whole bracket.
-async function reversePlayoffEffects(match, league) {
+async function reversePlayoffEffects(db, match, league) {
   const { sport, format } = league;
   const team1Won = match.winner_id === match.player1_id;
 
-  const reverseOne = async (playerId, ratingChange, won) => {
-    if (playerId == null || ratingChange == null) return;
-    if (sport === 'table_tennis') {
-      await pool.query(
-        `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
-         wins = wins - $2, losses = losses - $3
-         WHERE user_id = $4 AND sport = $5`,
-        [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport]
-      );
-    } else {
-      await pool.query(
-        `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
-         wins = wins - $2, losses = losses - $3
-         WHERE user_id = $4 AND sport = $5 AND format = $6`,
-        [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport, format]
-      );
-    }
-  };
-
-  await reverseOne(match.player1_id, match.player1_rating_change, team1Won);
-  await reverseOne(match.player2_id, match.player2_rating_change, !team1Won);
-  await reverseOne(match.player1_partner_id, match.player1_partner_rating_change, team1Won);
-  await reverseOne(match.player2_partner_id, match.player2_partner_rating_change, !team1Won);
+  await reverseRatingChange(db, match.player1_id, sport, format, match.player1_rating_change, team1Won);
+  await reverseRatingChange(db, match.player2_id, sport, format, match.player2_rating_change, !team1Won);
+  await reverseRatingChange(db, match.player1_partner_id, sport, format, match.player1_partner_rating_change, team1Won);
+  await reverseRatingChange(db, match.player2_partner_id, sport, format, match.player2_partner_rating_change, !team1Won);
 }
 
 // Checks if any participant in this playoff match has played another
 // confirmed match (regular or knockout, same sport/format) since this one
 // happened — mirrors matchRoutes.js's checkForRatingDrift, kept separate
 // here since this file has no shared module with matchRoutes.js.
-async function checkForRatingDriftPlayoff(match, league) {
+async function checkForRatingDriftPlayoff(db, match, league) {
   const participantIds = [
     match.player1_id, match.player2_id, match.player1_partner_id, match.player2_partner_id,
   ].filter(Boolean);
@@ -270,7 +263,7 @@ async function checkForRatingDriftPlayoff(match, league) {
   // note in matchRoutes.js's checkForRatingDrift.
   const formatFilter = league.sport === 'table_tennis' ? null : league.format;
 
-  const result = await pool.query(
+  const result = await db.query(
     `SELECT COUNT(*) FROM (
        SELECT pm.id FROM playoff_matches pm
        JOIN leagues l ON l.id = pm.league_id
@@ -467,31 +460,36 @@ router.delete('/:leagueId', async (req, res) => {
   const leagueId = req.params.leagueId;
 
   try {
-    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
-    if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
-    }
-    const league = leagueResult.rows[0];
+    await pool.withTransaction(async (client) => {
+      const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+      if (leagueResult.rows.length === 0) {
+        throw new RouteError(404, 'League not found.');
+      }
+      const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
-      return res.status(403).json({ error: 'Only the league host can remove the playoff bracket.' });
-    }
+      if (league.created_by !== userId) {
+        throw new RouteError(403, 'Only the league host can remove the playoff bracket.');
+      }
 
-    const confirmedMatches = await pool.query(
-      `SELECT * FROM playoff_matches WHERE league_id = $1 AND status = 'confirmed'`,
-      [leagueId]
-    );
-    for (const match of confirmedMatches.rows) {
-      await reversePlayoffEffects(match, league);
-    }
+      const confirmedMatches = await client.query(
+        `SELECT * FROM playoff_matches WHERE league_id = $1 AND status = 'confirmed'`,
+        [leagueId]
+      );
+      for (const match of confirmedMatches.rows) {
+        await reversePlayoffEffects(client, match, league);
+      }
 
-    const result = await pool.query('DELETE FROM playoff_matches WHERE league_id = $1', [leagueId]);
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: 'No playoff bracket exists for this league.' });
-    }
+      const result = await client.query('DELETE FROM playoff_matches WHERE league_id = $1', [leagueId]);
+      if (result.rowCount === 0) {
+        throw new RouteError(404, 'No playoff bracket exists for this league.');
+      }
+    });
 
     res.status(200).json({ message: 'Playoff bracket removed.' });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Remove playoffs error:', err);
     res.status(500).json({ error: 'Something went wrong removing the bracket.' });
   }
@@ -522,36 +520,71 @@ router.get('/:leagueId', async (req, res) => {
   }
 });
 
-async function advanceWinner(match) {
+// ---------- GET ONE GROUP'S KNOCKOUT BRACKET ----------
+// Same shape as GET /:leagueId above, just scoped to a single knockout-format
+// group within a Groups tournament — that group's bracket is generated at
+// lock time (see POST /leagues/:id/groups/:groupId/lock), not through the
+// /generate route above, but every per-match action route below is already
+// matchId-scoped and works unmodified for these rows.
+router.get('/:leagueId/group/:groupId', async (req, res) => {
+  const { leagueId, groupId } = req.params;
+
+  try {
+    const result = await pool.query(
+      `SELECT pm.*,
+              p1.username as player1_username, p2.username as player2_username,
+              pp1.username as player1_partner_username, pp2.username as player2_partner_username
+       FROM playoff_matches pm
+       LEFT JOIN users p1 ON p1.id = pm.player1_id
+       LEFT JOIN users p2 ON p2.id = pm.player2_id
+       LEFT JOIN users pp1 ON pp1.id = pm.player1_partner_id
+       LEFT JOIN users pp2 ON pp2.id = pm.player2_partner_id
+       WHERE pm.league_id = $1 AND pm.group_id = $2
+       ORDER BY pm.round_number ASC, pm.position ASC`,
+      [leagueId, groupId]
+    );
+    res.status(200).json({ bracket: result.rows });
+  } catch (err) {
+    console.error('Get group bracket error:', err);
+    res.status(500).json({ error: "Something went wrong fetching this group's bracket." });
+  }
+});
+
+async function advanceWinner(db, match) {
   const nextRound = match.round_number + 1;
   const nextPosition = Math.ceil(match.position / 2);
   const isUpperSlot = match.position % 2 === 1;
 
   const winnerPartnerId = match.winner_id === match.player1_id ? match.player1_partner_id : match.player2_partner_id;
 
-  const nextMatchResult = await pool.query(
-    'SELECT * FROM playoff_matches WHERE league_id = $1 AND round_number = $2 AND position = $3',
-    [match.league_id, nextRound, nextPosition]
+  // group_id must match too (via IS NOT DISTINCT FROM, since group_id is
+  // nullable and plain `=` never matches NULL to NULL) — otherwise two
+  // different knockout-format groups in the same league, whose round/
+  // position numbering both restart at 1, could collide and advance a
+  // winner into the wrong group's bracket.
+  const nextMatchResult = await db.query(
+    'SELECT * FROM playoff_matches WHERE league_id = $1 AND round_number = $2 AND position = $3 AND group_id IS NOT DISTINCT FROM $4',
+    [match.league_id, nextRound, nextPosition, match.group_id]
   );
 
   if (nextMatchResult.rows.length > 0) {
     const nextMatch = nextMatchResult.rows[0];
     if (isUpperSlot) {
-      await pool.query(
+      await db.query(
         'UPDATE playoff_matches SET player1_id = $1, player1_partner_id = $2 WHERE id = $3',
         [match.winner_id, winnerPartnerId, nextMatch.id]
       );
     } else {
-      await pool.query(
+      await db.query(
         'UPDATE playoff_matches SET player2_id = $1, player2_partner_id = $2 WHERE id = $3',
         [match.winner_id, winnerPartnerId, nextMatch.id]
       );
     }
 
-    const updatedNextMatch = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [nextMatch.id]);
+    const updatedNextMatch = await db.query('SELECT * FROM playoff_matches WHERE id = $1', [nextMatch.id]);
     const um = updatedNextMatch.rows[0];
     if (um.player1_id && um.player2_id) {
-      await pool.query(`UPDATE playoff_matches SET status = 'ready' WHERE id = $1`, [nextMatch.id]);
+      await db.query(`UPDATE playoff_matches SET status = 'ready' WHERE id = $1`, [nextMatch.id]);
     }
   }
 }
@@ -646,6 +679,14 @@ router.put('/match/:matchId/edit-report', async (req, res) => {
       return res.status(403).json({ error: 'Only the player who reported this result can edit it.' });
     }
 
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+    const league = leagueResult.rows[0];
+
+    const completedError = checkNotCompleted(league);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
+    }
+
     const onSideOne = userId === match.player1_id || userId === match.player1_partner_id;
     const winnerId = iWon ? (onSideOne ? match.player1_id : match.player2_id)
                           : (onSideOne ? match.player2_id : match.player1_id);
@@ -682,46 +723,51 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
   }
 
   try {
-    const matchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
-    if (matchResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Match not found.' });
-    }
-    const match = matchResult.rows[0];
+    await pool.withTransaction(async (client) => {
+      const matchResult = await client.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
+      if (matchResult.rows.length === 0) {
+        throw new RouteError(404, 'Match not found.');
+      }
+      const match = matchResult.rows[0];
 
-    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
-    const league = leagueResult.rows[0];
+      const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+      const league = leagueResult.rows[0];
 
-    if (!league.host_enters_scores || league.created_by !== userId) {
-      return res.status(403).json({ error: 'Only the host can enter scores directly for this league.' });
-    }
-    if (league.status === 'completed') {
-      return res.status(400).json({ error: 'This tournament has been marked completed and is now read-only.' });
-    }
+      if (!league.host_enters_scores || league.created_by !== userId) {
+        throw new RouteError(403, 'Only the host can enter scores directly for this league.');
+      }
+      if (league.status === 'completed') {
+        throw new RouteError(400, 'This tournament has been marked completed and is now read-only.');
+      }
 
-    if (match.status !== 'ready') {
-      return res.status(409).json({ error: 'This match is not ready to be reported.' });
-    }
-    if (!match.player1_id || !match.player2_id) {
-      return res.status(400).json({ error: 'Both players for this match are not yet determined.' });
-    }
-    if (league.format === 'doubles' && (!match.player1_partner_id || !match.player2_partner_id)) {
-      return res.status(400).json({ error: 'Both teams for this match are not yet fully determined.' });
-    }
+      if (match.status !== 'ready') {
+        throw new RouteError(409, 'This match is not ready to be reported.');
+      }
+      if (!match.player1_id || !match.player2_id) {
+        throw new RouteError(400, 'Both players for this match are not yet determined.');
+      }
+      if (league.format === 'doubles' && (!match.player1_partner_id || !match.player2_partner_id)) {
+        throw new RouteError(400, 'Both teams for this match are not yet fully determined.');
+      }
 
-    const winnerId = player1Won ? match.player1_id : match.player2_id;
+      const winnerId = player1Won ? match.player1_id : match.player2_id;
 
-    await pool.query(
-      `UPDATE playoff_matches SET reported_by = $1,
-        player1_units = $2, player2_units = $3, winner_id = $4, set_scores = $5
-       WHERE id = $6`,
-      [userId, player1Units, player2Units, winnerId, JSON.stringify(setScores || []), matchId]
-    );
+      await client.query(
+        `UPDATE playoff_matches SET reported_by = $1,
+          player1_units = $2, player2_units = $3, winner_id = $4, set_scores = $5
+         WHERE id = $6`,
+        [userId, player1Units, player2Units, winnerId, JSON.stringify(setScores || []), matchId]
+      );
 
-    const updatedMatchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
-    await finalizePlayoffMatch(updatedMatchResult.rows[0], league);
+      const updatedMatchResult = await client.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
+      await finalizePlayoffMatch(client, updatedMatchResult.rows[0], league);
+    });
 
     res.status(200).json({ message: 'Match confirmed.' });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Host report playoff match error:', err);
     res.status(500).json({ error: 'Something went wrong entering the score.' });
   }
@@ -748,149 +794,152 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
   }
 
   try {
-    const matchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
-    if (matchResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Match not found.' });
-    }
-    const match = matchResult.rows[0];
+    let hasDrift = false;
+    let winnerChanged = false;
 
-    if (match.status !== 'confirmed') {
-      return res.status(400).json({ error: 'Only confirmed matches can be edited.' });
-    }
+    await pool.withTransaction(async (client) => {
+      const matchResult = await client.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
+      if (matchResult.rows.length === 0) {
+        throw new RouteError(404, 'Match not found.');
+      }
+      const match = matchResult.rows[0];
 
-    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
-    const league = leagueResult.rows[0];
-    if (league.created_by !== userId) {
-      return res.status(403).json({ error: 'Only the league host can edit match scores.' });
-    }
+      if (match.status !== 'confirmed') {
+        throw new RouteError(400, 'Only confirmed matches can be edited.');
+      }
 
-    const newWinnerId = player1Won ? match.player1_id : match.player2_id;
-    const winnerChanged = newWinnerId !== match.winner_id;
+      const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+      const league = leagueResult.rows[0];
+      if (league.created_by !== userId) {
+        throw new RouteError(403, 'Only the league host can edit match scores.');
+      }
 
-    if (winnerChanged) {
-      const nextRound = match.round_number + 1;
-      const nextPosition = Math.ceil(match.position / 2);
-      const nextMatchResult = await pool.query(
-        'SELECT * FROM playoff_matches WHERE league_id = $1 AND round_number = $2 AND position = $3',
-        [match.league_id, nextRound, nextPosition]
-      );
+      const newWinnerId = player1Won ? match.player1_id : match.player2_id;
+      winnerChanged = newWinnerId !== match.winner_id;
 
-      if (nextMatchResult.rows.length > 0) {
-        const nextMatch = nextMatchResult.rows[0];
-        if (nextMatch.status === 'reported' || nextMatch.status === 'confirmed') {
-          return res.status(400).json({
-            error: 'The next round has already been played with the old winner. Cancel and restart the playoffs to fix this.',
-          });
+      if (winnerChanged) {
+        const nextRound = match.round_number + 1;
+        const nextPosition = Math.ceil(match.position / 2);
+        const nextMatchResult = await client.query(
+          'SELECT * FROM playoff_matches WHERE league_id = $1 AND round_number = $2 AND position = $3 AND group_id IS NOT DISTINCT FROM $4',
+          [match.league_id, nextRound, nextPosition, match.group_id]
+        );
+
+        if (nextMatchResult.rows.length > 0) {
+          const nextMatch = nextMatchResult.rows[0];
+          if (nextMatch.status === 'reported' || nextMatch.status === 'confirmed') {
+            throw new RouteError(400, 'The next round has already been played with the old winner. Cancel and restart the playoffs to fix this.');
+          }
         }
       }
-    }
 
-    // Check for drift BEFORE reversing, since the reversal itself inserts a
-    // change that would otherwise be picked up by the same query.
-    const hasDrift = await checkForRatingDriftPlayoff(match, league);
+      // Check for drift BEFORE reversing, since the reversal itself inserts a
+      // change that would otherwise be picked up by the same query.
+      hasDrift = await checkForRatingDriftPlayoff(client, match, league);
 
-    // Reverse the old rating effects before touching anything else.
-    await reversePlayoffEffects(match, league);
+      // Reverse the old rating effects before touching anything else.
+      await reversePlayoffEffects(client, match, league);
 
-    await pool.query(
-      `UPDATE playoff_matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4
-       WHERE id = $5`,
-      [player1Units, player2Units, newWinnerId, JSON.stringify(setScores || []), matchId]
-    );
-
-    if (winnerChanged) {
-      const nextRound = match.round_number + 1;
-      const nextPosition = Math.ceil(match.position / 2);
-      const nextMatchResult = await pool.query(
-        'SELECT * FROM playoff_matches WHERE league_id = $1 AND round_number = $2 AND position = $3',
-        [match.league_id, nextRound, nextPosition]
+      await client.query(
+        `UPDATE playoff_matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4
+         WHERE id = $5`,
+        [player1Units, player2Units, newWinnerId, JSON.stringify(setScores || []), matchId]
       );
-      if (nextMatchResult.rows.length > 0) {
-        const nextMatch = nextMatchResult.rows[0];
-        const isUpperSlot = match.position % 2 === 1;
-        const newWinnerPartnerId = newWinnerId === match.player1_id ? match.player1_partner_id : match.player2_partner_id;
-        if (isUpperSlot) {
-          await pool.query(
-            'UPDATE playoff_matches SET player1_id = $1, player1_partner_id = $2 WHERE id = $3',
-            [newWinnerId, newWinnerPartnerId, nextMatch.id]
-          );
-        } else {
-          await pool.query(
-            'UPDATE playoff_matches SET player2_id = $1, player2_partner_id = $2 WHERE id = $3',
-            [newWinnerId, newWinnerPartnerId, nextMatch.id]
+
+      if (winnerChanged) {
+        const nextRound = match.round_number + 1;
+        const nextPosition = Math.ceil(match.position / 2);
+        const nextMatchResult = await client.query(
+          'SELECT * FROM playoff_matches WHERE league_id = $1 AND round_number = $2 AND position = $3 AND group_id IS NOT DISTINCT FROM $4',
+          [match.league_id, nextRound, nextPosition, match.group_id]
+        );
+        if (nextMatchResult.rows.length > 0) {
+          const nextMatch = nextMatchResult.rows[0];
+          const isUpperSlot = match.position % 2 === 1;
+          const newWinnerPartnerId = newWinnerId === match.player1_id ? match.player1_partner_id : match.player2_partner_id;
+          if (isUpperSlot) {
+            await client.query(
+              'UPDATE playoff_matches SET player1_id = $1, player1_partner_id = $2 WHERE id = $3',
+              [newWinnerId, newWinnerPartnerId, nextMatch.id]
+            );
+          } else {
+            await client.query(
+              'UPDATE playoff_matches SET player2_id = $1, player2_partner_id = $2 WHERE id = $3',
+              [newWinnerId, newWinnerPartnerId, nextMatch.id]
+            );
+          }
+          const refreshedNext = await client.query('SELECT * FROM playoff_matches WHERE id = $1', [nextMatch.id]);
+          const rn = refreshedNext.rows[0];
+          await client.query(
+            `UPDATE playoff_matches SET status = $1 WHERE id = $2`,
+            [rn.player1_id && rn.player2_id ? 'ready' : 'pending', nextMatch.id]
           );
         }
-        const refreshedNext = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [nextMatch.id]);
-        const rn = refreshedNext.rows[0];
-        await pool.query(
-          `UPDATE playoff_matches SET status = $1 WHERE id = $2`,
-          [rn.player1_id && rn.player2_id ? 'ready' : 'pending', nextMatch.id]
+      }
+
+      // Reapply ratings fresh, based on current (post-reversal) standings.
+      const updatedMatchResult = await client.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
+      const updatedMatch = updatedMatchResult.rows[0];
+      const isDoubles = league.format === 'doubles' && updatedMatch.player1_partner_id && updatedMatch.player2_partner_id;
+
+      if (!isDoubles) {
+        const rating1 = await getRating(client, updatedMatch.player1_id, league.sport, league.format);
+        const rating2 = await getRating(client, updatedMatch.player2_id, league.sport, league.format);
+        const team1Won = updatedMatch.winner_id === updatedMatch.player1_id;
+        const { newRating1, newRating2 } = calculateNewRatings(
+          league.sport, rating1, rating2, team1Won, updatedMatch.player1_units, updatedMatch.player2_units
+        );
+        const updatedRating1 = Math.round(newRating1 * 10) / 10;
+        const updatedRating2 = Math.round(newRating2 * 10) / 10;
+        const change1 = Math.round((updatedRating1 - rating1) * 100) / 100;
+        const change2 = Math.round((updatedRating2 - rating2) * 100) / 100;
+
+        await updateUserSportsRow(client, updatedMatch.player1_id, league.sport, league.format, updatedRating1, team1Won);
+        await updateUserSportsRow(client, updatedMatch.player2_id, league.sport, league.format, updatedRating2, !team1Won);
+        await client.query(
+          `UPDATE playoff_matches SET player1_rating_change = $1, player2_rating_change = $2,
+            player1_partner_rating_change = NULL, player2_partner_rating_change = NULL WHERE id = $3`,
+          [change1, change2, matchId]
+        );
+      } else {
+        const r1a = await getRating(client, updatedMatch.player1_id, league.sport, league.format);
+        const r1b = await getRating(client, updatedMatch.player1_partner_id, league.sport, league.format);
+        const r2a = await getRating(client, updatedMatch.player2_id, league.sport, league.format);
+        const r2b = await getRating(client, updatedMatch.player2_partner_id, league.sport, league.format);
+
+        const team1Rating = (r1a + r1b) / 2;
+        const team2Rating = (r2a + r2b) / 2;
+        const team1Won = updatedMatch.winner_id === updatedMatch.player1_id;
+
+        const { newRating1: newTeam1Rating, newRating2: newTeam2Rating } = calculateNewRatings(
+          league.sport, team1Rating, team2Rating, team1Won, updatedMatch.player1_units, updatedMatch.player2_units
+        );
+
+        const team1Delta = newTeam1Rating - team1Rating;
+        const team2Delta = newTeam2Rating - team2Rating;
+
+        const updated1a = Math.round((r1a + team1Delta) * 10) / 10;
+        const updated1b = Math.round((r1b + team1Delta) * 10) / 10;
+        const updated2a = Math.round((r2a + team2Delta) * 10) / 10;
+        const updated2b = Math.round((r2b + team2Delta) * 10) / 10;
+
+        const change1a = Math.round((updated1a - r1a) * 100) / 100;
+        const change1b = Math.round((updated1b - r1b) * 100) / 100;
+        const change2a = Math.round((updated2a - r2a) * 100) / 100;
+        const change2b = Math.round((updated2b - r2b) * 100) / 100;
+
+        await updateUserSportsRow(client, updatedMatch.player1_id, league.sport, league.format, updated1a, team1Won);
+        await updateUserSportsRow(client, updatedMatch.player1_partner_id, league.sport, league.format, updated1b, team1Won);
+        await updateUserSportsRow(client, updatedMatch.player2_id, league.sport, league.format, updated2a, !team1Won);
+        await updateUserSportsRow(client, updatedMatch.player2_partner_id, league.sport, league.format, updated2b, !team1Won);
+
+        await client.query(
+          `UPDATE playoff_matches SET player1_rating_change = $1, player1_partner_rating_change = $2,
+            player2_rating_change = $3, player2_partner_rating_change = $4 WHERE id = $5`,
+          [change1a, change1b, change2a, change2b, matchId]
         );
       }
-    }
-
-    // Reapply ratings fresh, based on current (post-reversal) standings.
-    const updatedMatchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
-    const updatedMatch = updatedMatchResult.rows[0];
-    const isDoubles = league.format === 'doubles' && updatedMatch.player1_partner_id && updatedMatch.player2_partner_id;
-
-    if (!isDoubles) {
-      const rating1 = await getRating(updatedMatch.player1_id, league.sport, league.format);
-      const rating2 = await getRating(updatedMatch.player2_id, league.sport, league.format);
-      const team1Won = updatedMatch.winner_id === updatedMatch.player1_id;
-      const { newRating1, newRating2 } = calculateNewRatings(
-        league.sport, rating1, rating2, team1Won, updatedMatch.player1_units, updatedMatch.player2_units
-      );
-      const updatedRating1 = Math.round(newRating1 * 10) / 10;
-      const updatedRating2 = Math.round(newRating2 * 10) / 10;
-      const change1 = Math.round((updatedRating1 - rating1) * 100) / 100;
-      const change2 = Math.round((updatedRating2 - rating2) * 100) / 100;
-
-      await updateUserSportsRow(updatedMatch.player1_id, league.sport, league.format, updatedRating1, team1Won);
-      await updateUserSportsRow(updatedMatch.player2_id, league.sport, league.format, updatedRating2, !team1Won);
-      await pool.query(
-        `UPDATE playoff_matches SET player1_rating_change = $1, player2_rating_change = $2,
-          player1_partner_rating_change = NULL, player2_partner_rating_change = NULL WHERE id = $3`,
-        [change1, change2, matchId]
-      );
-    } else {
-      const r1a = await getRating(updatedMatch.player1_id, league.sport, league.format);
-      const r1b = await getRating(updatedMatch.player1_partner_id, league.sport, league.format);
-      const r2a = await getRating(updatedMatch.player2_id, league.sport, league.format);
-      const r2b = await getRating(updatedMatch.player2_partner_id, league.sport, league.format);
-
-      const team1Rating = (r1a + r1b) / 2;
-      const team2Rating = (r2a + r2b) / 2;
-      const team1Won = updatedMatch.winner_id === updatedMatch.player1_id;
-
-      const { newRating1: newTeam1Rating, newRating2: newTeam2Rating } = calculateNewRatings(
-        league.sport, team1Rating, team2Rating, team1Won, updatedMatch.player1_units, updatedMatch.player2_units
-      );
-
-      const team1Delta = newTeam1Rating - team1Rating;
-      const team2Delta = newTeam2Rating - team2Rating;
-
-      const updated1a = Math.round((r1a + team1Delta) * 10) / 10;
-      const updated1b = Math.round((r1b + team1Delta) * 10) / 10;
-      const updated2a = Math.round((r2a + team2Delta) * 10) / 10;
-      const updated2b = Math.round((r2b + team2Delta) * 10) / 10;
-
-      const change1a = Math.round((updated1a - r1a) * 100) / 100;
-      const change1b = Math.round((updated1b - r1b) * 100) / 100;
-      const change2a = Math.round((updated2a - r2a) * 100) / 100;
-      const change2b = Math.round((updated2b - r2b) * 100) / 100;
-
-      await updateUserSportsRow(updatedMatch.player1_id, league.sport, league.format, updated1a, team1Won);
-      await updateUserSportsRow(updatedMatch.player1_partner_id, league.sport, league.format, updated1b, team1Won);
-      await updateUserSportsRow(updatedMatch.player2_id, league.sport, league.format, updated2a, !team1Won);
-      await updateUserSportsRow(updatedMatch.player2_partner_id, league.sport, league.format, updated2b, !team1Won);
-
-      await pool.query(
-        `UPDATE playoff_matches SET player1_rating_change = $1, player1_partner_rating_change = $2,
-          player2_rating_change = $3, player2_partner_rating_change = $4 WHERE id = $5`,
-        [change1a, change1b, change2a, change2b, matchId]
-      );
-    }
+    });
 
     const warnings = [];
     if (winnerChanged) {
@@ -905,6 +954,9 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
       warning: warnings.length > 0 ? warnings.join(' ') : null,
     });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Edit playoff score error:', err);
     res.status(500).json({ error: 'Something went wrong updating the score.' });
   }
@@ -916,30 +968,42 @@ router.post('/match/:matchId/confirm', async (req, res) => {
   const matchId = req.params.matchId;
 
   try {
-    const matchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
-    if (matchResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Match not found.' });
-    }
-    const match = matchResult.rows[0];
+    await pool.withTransaction(async (client) => {
+      // Lock the row for the duration of the transaction — see the same
+      // pattern (and why) in matchRoutes.js's /:id/confirm.
+      const matchResult = await client.query('SELECT * FROM playoff_matches WHERE id = $1 FOR UPDATE', [matchId]);
+      if (matchResult.rows.length === 0) {
+        throw new RouteError(404, 'Match not found.');
+      }
+      const match = matchResult.rows[0];
 
-    if (match.status !== 'reported') {
-      return res.status(409).json({ error: 'This match has no pending report to confirm.' });
-    }
-    const participantIds = [match.player1_id, match.player2_id, match.player1_partner_id, match.player2_partner_id].filter(Boolean);
-    if (!participantIds.includes(userId)) {
-      return res.status(403).json({ error: 'You are not part of this match.' });
-    }
-    if (userId === match.reported_by) {
-      return res.status(400).json({ error: 'You cannot confirm your own report.' });
-    }
+      if (match.status !== 'reported') {
+        throw new RouteError(409, 'This match has no pending report to confirm.');
+      }
+      const participantIds = [match.player1_id, match.player2_id, match.player1_partner_id, match.player2_partner_id].filter(Boolean);
+      if (!participantIds.includes(userId)) {
+        throw new RouteError(403, 'You are not part of this match.');
+      }
+      if (userId === match.reported_by) {
+        throw new RouteError(400, 'You cannot confirm your own report.');
+      }
 
-    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
-    const league = leagueResult.rows[0];
+      const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+      const league = leagueResult.rows[0];
 
-    await finalizePlayoffMatch(match, league);
+      const completedError = checkNotCompleted(league);
+      if (completedError) {
+        throw new RouteError(400, completedError);
+      }
+
+      await finalizePlayoffMatch(client, match, league);
+    });
 
     res.status(200).json({ message: 'Match confirmed.' });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Confirm playoff match error:', err);
     res.status(500).json({ error: 'Something went wrong confirming the match.' });
   }
@@ -966,6 +1030,14 @@ router.post('/match/:matchId/reject', async (req, res) => {
     }
     if (userId === match.reported_by) {
       return res.status(400).json({ error: 'You cannot reject your own report.' });
+    }
+
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+    const league = leagueResult.rows[0];
+
+    const completedError = checkNotCompleted(league);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
     }
 
     await pool.query(

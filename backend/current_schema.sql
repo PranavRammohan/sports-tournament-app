@@ -1,6 +1,13 @@
 --
 -- PostgreSQL database dump
 --
+-- NOTE: this dump predates the Groups feature and is STALE with respect to
+-- it — it has no `league_groups` table and is missing the group-related
+-- columns on `league_members`/`scheduled_matches`/`playoff_matches`. Those
+-- were hand-applied to the live DB without ever being captured in a fresh
+-- dump. See `migration_group_formats.sql` for the authoritative, up-to-date
+-- shape of the Groups-related schema (including the per-group format/lock
+-- columns added there) until this file is regenerated via a real pg_dump.
 
 \restrict Jsi5gZP2x6Y7okLwm5r2zFg2zp6JvqYLA35STEb6a7mSBkrRRxosLw2yAUq8IPb
 

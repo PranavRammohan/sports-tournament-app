@@ -14,7 +14,11 @@ function authMiddleware(req, res, next) {
 
   jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
     if (err) {
-      return res.status(403).json({ error: 'Invalid or expired token.' });
+      // 401, not 403 — this means "not authenticated" (bad/expired token),
+      // distinct from the 403s used elsewhere for "authenticated but not
+      // allowed to do this." The mobile client's ApiClient relies on that
+      // distinction to redirect to login only on genuine auth failures.
+      return res.status(401).json({ error: 'Invalid or expired token.' });
     }
     req.userId = decoded.userId;
     next();

@@ -101,4 +101,32 @@ function calculateNewRatings(sport, team1Rating, team2Rating, team1Won, team1Uni
   return calculateContinuousRating(sport, team1Rating, team2Rating, team1Won, team1Units, team2Units);
 }
 
-module.exports = { calculateNewRatings };
+// Undoes a single player's previously-applied rating/stat change. Shared by
+// matchRoutes.js, playoffRoutes.js, and leagueRoutes.js, all of which need to
+// reverse a confirmed match's effects (host edits/deletes, schedule
+// regeneration, group unlock, stage-2 reset) — kept here so the six former
+// copies of this logic can't drift out of sync with each other.
+// - playerId/ratingChange may be null (e.g. a singles slot, or a match that
+//   was never actually applied) — a no-op in that case.
+// - table tennis shares one rating across singles/doubles, so its UPDATE
+//   omits the format filter; every other sport scopes to sport+format.
+async function reverseRatingChange(pool, playerId, sport, format, ratingChange, won) {
+  if (playerId == null || ratingChange == null) return;
+  if (sport === 'table_tennis') {
+    await pool.query(
+      `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
+       wins = wins - $2, losses = losses - $3
+       WHERE user_id = $4 AND sport = $5`,
+      [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport]
+    );
+  } else {
+    await pool.query(
+      `UPDATE user_sports SET rating = rating - $1, matches_played = matches_played - 1,
+       wins = wins - $2, losses = losses - $3
+       WHERE user_id = $4 AND sport = $5 AND format = $6`,
+      [ratingChange, won ? 1 : 0, won ? 0 : 1, playerId, sport, format]
+    );
+  }
+}
+
+module.exports = { calculateNewRatings, reverseRatingChange };
