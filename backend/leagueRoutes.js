@@ -726,8 +726,14 @@ async function getGroupsWithStandings(league, leagueId) {
     [leagueId]
   );
 
+  // Membership is many-to-many (group_members) — a player can belong to
+  // several groups at once (their history in earlier groups is never
+  // erased when they're picked into a new one). group_ids is every group
+  // this league member currently belongs to, used below to work out who's
+  // in which group and who isn't in any group at all yet.
   const membersResult = await pool.query(
-    `SELECT u.id, u.username, us.rating, lm.group_id,
+    `SELECT u.id, u.username, us.rating,
+            COALESCE(gm.group_ids, ARRAY[]::int[]) AS group_ids,
             COALESCE(stats.matches_played, 0) AS matches_played,
             COALESCE(stats.wins, 0) AS wins,
             COALESCE(stats.losses, 0) AS losses,
@@ -735,6 +741,13 @@ async function getGroupsWithStandings(league, leagueId) {
      FROM league_members lm
      JOIN users u ON u.id = lm.user_id
      JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+     LEFT JOIN (
+       SELECT g.user_id, ARRAY_AGG(g.group_id) AS group_ids
+       FROM group_members g
+       JOIN league_groups lg ON lg.id = g.group_id
+       WHERE lg.league_id = $3
+       GROUP BY g.user_id
+     ) gm ON gm.user_id = u.id
      LEFT JOIN (
        SELECT player_id, COUNT(*) AS matches_played,
               SUM(won) AS wins, SUM(1 - won) AS losses, SUM(points_if_won) AS points
@@ -763,9 +776,9 @@ async function getGroupsWithStandings(league, leagueId) {
 
   const groups = groupsResult.rows.map((g) => ({
     ...g,
-    members: members.filter((m) => m.group_id === g.id),
+    members: members.filter((m) => m.group_ids.includes(g.id)),
   }));
-  const unassignedMembers = members.filter((m) => m.group_id === null);
+  const unassignedMembers = members.filter((m) => m.group_ids.length === 0);
 
   return { groups, unassignedMembers };
 }
@@ -853,10 +866,7 @@ router.delete('/:id/groups/:groupId', async (req, res) => {
       return res.status(400).json({ error: 'This group is locked and can no longer be changed.' });
     }
 
-    await pool.query(
-      'UPDATE league_members SET group_id = NULL WHERE league_id = $1 AND group_id = $2',
-      [leagueId, groupId]
-    );
+    await pool.query('DELETE FROM group_members WHERE group_id = $1', [groupId]);
     await pool.query('DELETE FROM league_groups WHERE id = $1', [groupId]);
 
     res.status(200).json({ message: 'Group deleted.' });
@@ -866,11 +876,11 @@ router.delete('/:id/groups/:groupId', async (req, res) => {
   }
 });
 
-// ---------- MANUALLY ASSIGN (OR MOVE) A PLAYER INTO A GROUP (host only) ----------
-// Works both for placing a never-assigned player and for moving someone who
-// is already in a different group — e.g. hand-picking top players from
-// several groups into a brand-new round. Moving out of a group clears that
-// player's own not-yet-played fixtures there (confirmed history stays put).
+// ---------- ADD A PLAYER TO A GROUP (host only) ----------
+// Purely additive — a player can belong to any number of groups at once.
+// Adding someone already in other groups does not remove them from those;
+// it's how a player finishes one round and is picked into the next while
+// keeping their seat and history in every earlier group intact.
 router.post('/:id/groups/:groupId/assign', async (req, res) => {
   const userId = req.userId;
   const { id: leagueId, groupId } = req.params;
@@ -881,119 +891,103 @@ router.post('/:id/groups/:groupId/assign', async (req, res) => {
   }
 
   try {
-    await pool.withTransaction(async (client) => {
-      const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
-      if (leagueResult.rows.length === 0) {
-        throw new RouteError(404, 'League not found.');
-      }
-      const league = leagueResult.rows[0];
-
-      if (league.created_by !== userId) {
-        throw new RouteError(403, 'Only the league host can assign players to groups.');
-      }
-
-      const groupCheck = await client.query(
-        'SELECT * FROM league_groups WHERE id = $1 AND league_id = $2',
-        [groupId, leagueId]
-      );
-      if (groupCheck.rows.length === 0) {
-        throw new RouteError(404, 'Group not found.');
-      }
-      if (groupCheck.rows[0].locked) {
-        throw new RouteError(400, 'This group is locked and can no longer be changed.');
-      }
-
-      const memberResult = await client.query(
-        'SELECT group_id FROM league_members WHERE league_id = $1 AND user_id = $2',
-        [leagueId, targetUserId]
-      );
-      if (memberResult.rows.length === 0) {
-        throw new RouteError(404, 'This player is not a member of this league.');
-      }
-      const previousGroupId = memberResult.rows[0].group_id;
-
-      await client.query(
-        'UPDATE league_members SET group_id = $1 WHERE league_id = $2 AND user_id = $3',
-        [groupId, leagueId, targetUserId]
-      );
-
-      if (previousGroupId != null && previousGroupId !== parseInt(groupId, 10)) {
-        await clearUnplayedGroupFixturesForPlayer(client, leagueId, previousGroupId, targetUserId);
-      }
-    });
-
-    res.status(200).json({ message: 'Player assigned to group.' });
-  } catch (err) {
-    if (err instanceof RouteError) {
-      return res.status(err.statusCode).json({ error: err.message });
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
     }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can assign players to groups.' });
+    }
+
+    const groupCheck = await pool.query(
+      'SELECT * FROM league_groups WHERE id = $1 AND league_id = $2',
+      [groupId, leagueId]
+    );
+    if (groupCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Group not found.' });
+    }
+    if (groupCheck.rows[0].locked) {
+      return res.status(400).json({ error: 'This group is locked and can no longer be changed.' });
+    }
+
+    const memberCheck = await pool.query(
+      'SELECT 1 FROM league_members WHERE league_id = $1 AND user_id = $2',
+      [leagueId, targetUserId]
+    );
+    if (memberCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'This player is not a member of this league.' });
+    }
+
+    await pool.query(
+      `INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)
+       ON CONFLICT (group_id, user_id) DO NOTHING`,
+      [groupId, targetUserId]
+    );
+
+    res.status(200).json({ message: 'Player added to group.' });
+  } catch (err) {
     console.error('Assign to group error:', err);
     res.status(500).json({ error: 'Something went wrong assigning this player.' });
   }
 });
 
-// ---------- UNASSIGN A PLAYER FROM THEIR GROUP (host only) ----------
-router.post('/:id/groups/unassign', async (req, res) => {
+// ---------- REMOVE A PLAYER FROM ONE SPECIFIC GROUP (host only) ----------
+// This is "undo a mis-click before it matters," not a way to make someone
+// graduate — it only ever affects this one group's roster (pre-lock), and
+// never touches any other group the player belongs to.
+router.post('/:id/groups/:groupId/unassign', async (req, res) => {
   const userId = req.userId;
-  const leagueId = req.params.id;
+  const { id: leagueId, groupId } = req.params;
   const { userId: targetUserId } = req.body;
 
   if (!targetUserId) {
-    return res.status(400).json({ error: 'Please specify which player to unassign.' });
+    return res.status(400).json({ error: 'Please specify which player to remove.' });
   }
 
   try {
-    await pool.withTransaction(async (client) => {
-      const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
-      if (leagueResult.rows.length === 0) {
-        throw new RouteError(404, 'League not found.');
-      }
-      const league = leagueResult.rows[0];
-
-      if (league.created_by !== userId) {
-        throw new RouteError(403, 'Only the league host can unassign players.');
-      }
-
-      const memberResult = await client.query(
-        'SELECT group_id FROM league_members WHERE league_id = $1 AND user_id = $2',
-        [leagueId, targetUserId]
-      );
-      if (memberResult.rows.length === 0) {
-        throw new RouteError(404, 'This player is not a member of this league.');
-      }
-      const previousGroupId = memberResult.rows[0].group_id;
-      if (previousGroupId == null) {
-        return; // Already unassigned — nothing to do.
-      }
-
-      const groupCheck = await client.query('SELECT locked FROM league_groups WHERE id = $1', [previousGroupId]);
-      if (groupCheck.rows[0]?.locked) {
-        throw new RouteError(400, 'This group is locked and can no longer be changed.');
-      }
-
-      await client.query(
-        'UPDATE league_members SET group_id = NULL WHERE league_id = $1 AND user_id = $2',
-        [leagueId, targetUserId]
-      );
-      await clearUnplayedGroupFixturesForPlayer(client, leagueId, previousGroupId, targetUserId);
-    });
-
-    res.status(200).json({ message: 'Player unassigned from group.' });
-  } catch (err) {
-    if (err instanceof RouteError) {
-      return res.status(err.statusCode).json({ error: err.message });
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
     }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can remove players from groups.' });
+    }
+
+    const groupCheck = await pool.query(
+      'SELECT locked FROM league_groups WHERE id = $1 AND league_id = $2',
+      [groupId, leagueId]
+    );
+    if (groupCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Group not found.' });
+    }
+    if (groupCheck.rows[0].locked) {
+      return res.status(400).json({ error: 'This group is locked and can no longer be changed.' });
+    }
+
+    await pool.query(
+      'DELETE FROM group_members WHERE group_id = $1 AND user_id = $2',
+      [groupId, targetUserId]
+    );
+
+    res.status(200).json({ message: 'Player removed from group.' });
+  } catch (err) {
     console.error('Unassign from group error:', err);
-    res.status(500).json({ error: 'Something went wrong unassigning this player.' });
+    res.status(500).json({ error: 'Something went wrong removing this player.' });
   }
 });
 
-// ---------- AUTO-ASSIGN PLAYERS ACROSS UNLOCKED GROUPS (host only) ----------
+// ---------- AUTO-ASSIGN NEVER-GROUPED PLAYERS ACROSS UNLOCKED GROUPS (host only) ----------
 // Straight distribution by rating: highest rated -> group 1, next -> group 2,
 // next -> group 3, then back to group 1, and so on (not a snake draft).
-// Only touches UNLOCKED groups and players not currently sitting in an
-// already-locked group — a locked group's membership (and the fixtures
-// already generated from it) is never disturbed by this.
+// Only touches players who aren't in ANY group yet (initial setup) and only
+// places them into unlocked groups — anyone already placed somewhere (any
+// group, locked or not) is left exactly where they are, since assignment is
+// additive now and this isn't meant to pile already-placed players into
+// more groups on top of wherever a host put them by hand.
 router.post('/:id/groups/auto-assign', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.id;
@@ -1017,23 +1011,28 @@ router.post('/:id/groups/auto-assign', async (req, res) => {
     if (targetGroups.length < 2) {
       return res.status(400).json({ error: 'Create at least 2 unlocked groups before auto-assigning.' });
     }
-    const lockedGroupIds = new Set(groupsResult.rows.filter((g) => g.locked).map((g) => g.id));
 
     const membersResult = await pool.query(
-      `SELECT lm.user_id, lm.group_id, us.rating
+      `SELECT lm.user_id, us.rating
        FROM league_members lm
        JOIN user_sports us ON us.user_id = lm.user_id AND us.sport = $1 AND us.format = $2
        WHERE lm.league_id = $3
+         AND NOT EXISTS (
+           SELECT 1 FROM group_members gm
+           JOIN league_groups lg ON lg.id = gm.group_id
+           WHERE lg.league_id = $3 AND gm.user_id = lm.user_id
+         )
        ORDER BY us.rating DESC`,
       [league.sport, league.format, leagueId]
     );
-    const members = membersResult.rows.filter((m) => !lockedGroupIds.has(m.group_id));
+    const members = membersResult.rows;
 
     for (let i = 0; i < members.length; i++) {
       const targetGroup = targetGroups[i % targetGroups.length];
       await pool.query(
-        'UPDATE league_members SET group_id = $1 WHERE league_id = $2 AND user_id = $3',
-        [targetGroup.id, leagueId, members[i].user_id]
+        `INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)
+         ON CONFLICT (group_id, user_id) DO NOTHING`,
+        [targetGroup.id, members[i].user_id]
       );
     }
 
@@ -1087,35 +1086,6 @@ async function reverseGroupPlayoffMatches(db, leagueId, groupId, league) {
   }
 }
 
-// Clears a player's not-yet-played fixtures in one specific group — used
-// when moving them to a different group. Confirmed history (and the rating/
-// points it already applied) is left completely untouched, mirroring the
-// same surgical cleanup already done in DELETE /:id/members/:userId.
-async function clearUnplayedGroupFixturesForPlayer(db, leagueId, groupId, targetUserId) {
-  await db.query(
-    `DELETE FROM matches
-     WHERE league_id = $1 AND status IN ('pending', 'rejected')
-       AND (player1_id = $2 OR player2_id = $2)
-       AND scheduled_match_id IN (SELECT id FROM scheduled_matches WHERE group_id = $3)`,
-    [leagueId, targetUserId, groupId]
-  );
-  await db.query(
-    `DELETE FROM scheduled_matches
-     WHERE league_id = $1 AND group_id = $3
-       AND (player1_id = $2 OR player2_id = $2)
-       AND id NOT IN (
-         SELECT scheduled_match_id FROM matches WHERE scheduled_match_id IS NOT NULL AND status = 'confirmed'
-       )`,
-    [leagueId, targetUserId, groupId]
-  );
-  await db.query(
-    `DELETE FROM playoff_matches
-     WHERE league_id = $1 AND group_id = $3 AND status != 'confirmed'
-       AND (player1_id = $2 OR player2_id = $2)`,
-    [leagueId, targetUserId, groupId]
-  );
-}
-
 // ---------- LOCK ONE GROUP AND GENERATE ITS SCHEDULE (host only) ----------
 // Each group locks independently, in whatever format IT was created with —
 // a knockout group's lock generates its bracket, a custom group's lock just
@@ -1153,12 +1123,12 @@ router.post('/:id/groups/:groupId/lock', async (req, res) => {
 
       const membersResult = await client.query(
         `SELECT u.id, us.rating
-         FROM league_members lm
-         JOIN users u ON u.id = lm.user_id
+         FROM group_members gm
+         JOIN users u ON u.id = gm.user_id
          JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
-         WHERE lm.league_id = $3 AND lm.group_id = $4
+         WHERE gm.group_id = $3
          ORDER BY us.rating DESC`,
-        [league.sport, league.format, leagueId, groupId]
+        [league.sport, league.format, groupId]
       );
       const members = membersResult.rows;
 
@@ -1437,8 +1407,9 @@ router.post('/:id/groups/advance', async (req, res) => {
 
     for (const qualifier of qualifiers) {
       await pool.query(
-        'UPDATE league_members SET group_id = $1 WHERE league_id = $2 AND user_id = $3',
-        [newGroup.id, leagueId, qualifier.id]
+        `INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)
+         ON CONFLICT (group_id, user_id) DO NOTHING`,
+        [newGroup.id, qualifier.id]
       );
     }
 
@@ -1581,6 +1552,11 @@ router.post('/:id/leave', async (req, res) => {
     }
     const partnerId = memberResult.rows[0].partner_id;
 
+    await pool.query(
+      `DELETE FROM group_members
+       WHERE user_id = $1 AND group_id IN (SELECT id FROM league_groups WHERE league_id = $2)`,
+      [userId, leagueId]
+    );
     await pool.query('DELETE FROM league_members WHERE league_id = $1 AND user_id = $2', [leagueId, userId]);
 
     if (partnerId) {
@@ -1647,6 +1623,11 @@ router.delete('/:id/members/:userId', async (req, res) => {
        WHERE league_id = $1 AND status != 'confirmed'
          AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)`,
       [leagueId, targetUserId]
+    );
+    await pool.query(
+      `DELETE FROM group_members
+       WHERE user_id = $1 AND group_id IN (SELECT id FROM league_groups WHERE league_id = $2)`,
+      [targetUserId, leagueId]
     );
 
     await pool.query(
