@@ -2,10 +2,9 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import '../widgets/sport_icon.dart';
 import 'my_leagues_screen.dart';
 import 'match_history_screen.dart';
@@ -31,6 +30,7 @@ class _HomeScreenState extends State<HomeScreen> {
   int? _currentUserId;
   String? _profilePicUrl;
   bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
@@ -43,10 +43,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadEverything() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
       final userJson = prefs.getString('user');
       if (userJson != null) {
         final userData = jsonDecode(userJson);
@@ -54,41 +56,47 @@ class _HomeScreenState extends State<HomeScreen> {
         _currentUserId = userData['id'];
       }
 
-      if (_currentUserId != null) {
+      Future<ApiResponse?> fetchProfilePic() async {
+        if (_currentUserId == null) return null;
         try {
-          final profileRes = await http.get(
-            Uri.parse('$baseApiUrl/sports/user/$_currentUserId'),
-            headers: {'Authorization': 'Bearer $token'},
-          );
-          if (profileRes.statusCode == 200) {
-            final profileData = jsonDecode(profileRes.body);
-            _profilePicUrl = profileData['user']?['profile_pic_url'];
-          }
+          return await ApiClient.get('/sports/user/$_currentUserId');
         } catch (err) {
           // Non-critical — the welcome card just falls back to an initial.
+          return null;
         }
       }
 
-      final leaguesRes = await http.get(
-        Uri.parse('$baseApiUrl/leagues/mine'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final leaguesData = jsonDecode(leaguesRes.body);
-      if (leaguesRes.statusCode == 200) {
-        _leagueCount = (leaguesData['leagues'] as List).length;
+      // Fire the profile-pic fetch and the four core fetches concurrently —
+      // none of these depend on each other's results.
+      final profileFuture = fetchProfilePic();
+      final coreResults = await Future.wait([
+        ApiClient.get('/leagues/mine'),
+        ApiClient.get('/sports/mine'),
+        ApiClient.get('/matches/pending'),
+        ApiClient.get('/matches/upcoming'),
+        ApiClient.get('/matches/history'),
+      ]);
+      final profileRes = await profileFuture;
+      final leaguesRes = coreResults[0];
+      final sportsRes = coreResults[1];
+      final pendingRes = coreResults[2];
+      final upcomingRes = coreResults[3];
+      final historyRes = coreResults[4];
+
+      if (profileRes != null && profileRes.statusCode == 200) {
+        _profilePicUrl = profileRes.data['user']?['profile_pic_url'];
       }
 
-      final sportsRes = await http.get(
-        Uri.parse('$baseApiUrl/sports/mine'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final sportsData = jsonDecode(sportsRes.body);
+      if (leaguesRes.statusCode == 200) {
+        _leagueCount = (leaguesRes.data['leagues'] as List).length;
+      }
+
       if (sportsRes.statusCode == 200) {
         // IMPORTANT: aggregate matches/wins from the RAW rows, before any
         // grouping. A sport like badminton can have both a singles row and
         // a doubles row — both are shown in "Your Sports" below, but the
         // grouping step must not affect these totals.
-        final List rawSports = sportsData['sports'];
+        final List rawSports = sportsRes.data['sports'];
         _matchesPlayed = rawSports.fold<int>(
           0,
           (sum, r) => sum + (r['matches_played'] as int),
@@ -104,35 +112,20 @@ class _HomeScreenState extends State<HomeScreen> {
         _sportsGrouped = grouped;
       }
 
-      final pendingRes = await http.get(
-        Uri.parse('$baseApiUrl/matches/pending'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final pendingData = jsonDecode(pendingRes.body);
       if (pendingRes.statusCode == 200) {
-        _pendingMatches = pendingData['matches'];
+        _pendingMatches = pendingRes.data['matches'];
       }
 
-      final upcomingRes = await http.get(
-        Uri.parse('$baseApiUrl/matches/upcoming'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final upcomingData = jsonDecode(upcomingRes.body);
       if (upcomingRes.statusCode == 200) {
-        _upcomingMatches = upcomingData['upcoming'];
+        _upcomingMatches = upcomingRes.data['upcoming'];
       }
 
-      final historyRes = await http.get(
-        Uri.parse('$baseApiUrl/matches/history'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final historyData = jsonDecode(historyRes.body);
       if (historyRes.statusCode == 200 &&
-          (historyData['matches'] as List).isNotEmpty) {
-        _recentMatch = historyData['matches'][0];
+          (historyRes.data['matches'] as List).isNotEmpty) {
+        _recentMatch = historyRes.data['matches'][0];
       }
     } catch (err) {
-      // fail silently, pull-to-refresh available
+      setState(() => _error = 'Could not reach the server.');
     } finally {
       setState(() => _loading = false);
     }
@@ -185,6 +178,23 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(title: const Text('RallyX')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _error != null
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_error!, textAlign: TextAlign.center),
+                    const SizedBox(height: 12),
+                    TextButton(
+                      onPressed: _loadEverything,
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            )
           : RefreshIndicator(
               onRefresh: _loadEverything,
               child: ListView(

@@ -2,10 +2,9 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
@@ -20,6 +19,7 @@ class PendingMatchesScreen extends StatefulWidget {
 class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
   List<dynamic> _matches = [];
   bool _loading = true;
+  String? _error;
   int? _currentUserId;
 
   @override
@@ -33,26 +33,27 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
   }
 
   Future<void> _loadMatches() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
       final userJson = prefs.getString('user');
       if (userJson != null) {
         _currentUserId = jsonDecode(userJson)['id'];
       }
 
-      final response = await http.get(
-        Uri.parse('$baseApiUrl/matches/pending'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-
-      final data = jsonDecode(response.body);
-      if (response.statusCode == 200) {
-        setState(() => _matches = data['matches']);
+      final res = await ApiClient.get('/matches/pending');
+      if (res.statusCode == 200) {
+        setState(() => _matches = res.data['matches']);
+      } else {
+        setState(
+          () => _error = res.errorOr('Could not load pending matches.'),
+        );
       }
     } catch (err) {
-      // fail silently
+      setState(() => _error = 'Could not reach the server.');
     } finally {
       setState(() => _loading = false);
     }
@@ -67,22 +68,14 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
   Future<void> _confirmMatch(dynamic m) async {
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
+      final path = _isPlayoff(m)
+          ? '/playoffs/match/${m['id']}/confirm'
+          : '/matches/${m['id']}/confirm';
 
-      final url = _isPlayoff(m)
-          ? '$baseApiUrl/playoffs/match/${m['id']}/confirm'
-          : '$baseApiUrl/matches/${m['id']}/confirm';
-
-      final response = await http.post(
-        Uri.parse(url),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.post(path);
 
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Match confirmed! Ratings updated.'),
@@ -93,7 +86,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not confirm.'),
+            content: Text(res.errorOr('Could not confirm.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -134,22 +127,14 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
 
     HapticFeedback.mediumImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
+      final path = _isPlayoff(m)
+          ? '/playoffs/match/${m['id']}/reject'
+          : '/matches/${m['id']}/reject';
 
-      final url = _isPlayoff(m)
-          ? '$baseApiUrl/playoffs/match/${m['id']}/reject'
-          : '$baseApiUrl/matches/${m['id']}/reject';
-
-      final response = await http.post(
-        Uri.parse(url),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.post(path);
 
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Match rejected.'),
@@ -160,7 +145,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not reject.'),
+            content: Text(res.errorOr('Could not reject.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -247,6 +232,23 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
       appBar: AppBar(title: const Text('Pending Confirmations')),
       body: _loading
           ? const SkeletonList()
+          : _error != null
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_error!, textAlign: TextAlign.center),
+                    const SizedBox(height: 12),
+                    TextButton(
+                      onPressed: _loadMatches,
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            )
           : RefreshIndicator(
               onRefresh: _loadMatches,
               child: _matches.isEmpty

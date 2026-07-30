@@ -2,68 +2,13 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:typed_data';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import 'change_password_screen.dart';
-
-const List<String> bangaloreAreas = [
-  'Koramangala',
-  'Indiranagar',
-  'HSR Layout',
-  'BTM Layout',
-  'Jayanagar',
-  'JP Nagar',
-  'Whitefield',
-  'Marathahalli',
-  'Electronic City',
-  'Bellandur',
-  'Sarjapur Road',
-  'Hebbal',
-  'Yelahanka',
-  'Malleshwaram',
-  'Rajajinagar',
-  'Basavanagudi',
-  'Banashankari',
-  'RT Nagar',
-  'Frazer Town',
-  'Ulsoor',
-  'MG Road',
-  'Domlur',
-  'CV Raman Nagar',
-  'Kalyan Nagar',
-  'Banaswadi',
-  'Vijayanagar',
-  'Rajarajeshwari Nagar',
-  'Kengeri',
-  'Yeshwanthpur',
-  'Nagarbhavi',
-  'Hennur',
-  'Bannerghatta Road',
-  'KR Puram',
-  'Mahadevapura',
-  'Uttarahalli',
-  'Kanakapura Road',
-  'Konanakunte',
-  'Anjanapura',
-  'Padmanabhanagar',
-  'Girinagar',
-  'Kumaraswamy Layout',
-  'Vasanthapura',
-  'Chikkalasandra',
-  'Hulimavu',
-  'Bommanahalli',
-  'Begur',
-  'Arekere',
-  'Gottigere',
-  'Silk Board',
-  'Madiwala',
-  'Bilekahalli',
-  'Kudlu',
-];
+import '../constants/areas.dart';
 
 class EditProfileScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
@@ -148,9 +93,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     setState(() => _loading = true);
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
       final body = <String, dynamic>{
         'username': username,
         'phoneNumber': phoneNumber,
@@ -163,26 +105,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         body['profilePicUrl'] = null;
       }
 
-      final response = await http.patch(
-        Uri.parse('$baseApiUrl/auth/profile'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(body),
-      );
+      final res = await ApiClient.patch('/auth/profile', body: body);
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode != 200) {
-        _showAlert(
-          'Something went wrong',
-          data['error'] ?? 'Please try again.',
-        );
+      if (res.statusCode != 200) {
+        _showAlert('Something went wrong', res.errorOr('Please try again.'));
         return;
       }
 
-      await prefs.setString('user', jsonEncode(data['user']));
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('user', jsonEncode(res.data['user']));
 
       if (!mounted) return;
       Navigator.pop(context, true);

@@ -1,11 +1,7 @@
 // join_by_code_screen.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
-import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import 'league_detail_screen.dart';
 
 class JoinByCodeScreen extends StatefulWidget {
@@ -30,22 +26,13 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
     setState(() => _loading = true);
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/join-by-code'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({'code': code}),
+      final res = await ApiClient.post(
+        '/leagues/join-by-code',
+        body: {'code': code},
       );
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode != 201) {
-        _showAlert('Could not join', data['error'] ?? 'Please try again.');
+      if (res.statusCode != 201) {
+        _showAlert('Could not join', res.errorOr('Please try again.'));
         return;
       }
 
@@ -53,7 +40,7 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => LeagueDetailScreen(leagueId: data['leagueId']),
+          builder: (_) => LeagueDetailScreen(leagueId: res.data['leagueId']),
         ),
       );
     } catch (err) {

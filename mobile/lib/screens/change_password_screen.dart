@@ -1,10 +1,7 @@
 // change_password_screen.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
-import '../config.dart';
+import '../api_client.dart';
 
 class ChangePasswordScreen extends StatefulWidget {
   const ChangePasswordScreen({super.key});
@@ -44,25 +41,16 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
     setState(() => _loading = true);
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.patch(
-        Uri.parse('$baseApiUrl/auth/change-password'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({'currentPassword': current, 'newPassword': newPass}),
+      // skipAuthRedirect: this endpoint reuses 401 for "current password is
+      // wrong," not just session-expiry — must not trigger a forced logout.
+      final res = await ApiClient.patch(
+        '/auth/change-password',
+        body: {'currentPassword': current, 'newPassword': newPass},
+        skipAuthRedirect: true,
       );
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode != 200) {
-        _showAlert(
-          'Something went wrong',
-          data['error'] ?? 'Please try again.',
-        );
+      if (res.statusCode != 200) {
+        _showAlert('Something went wrong', res.errorOr('Please try again.'));
         return;
       }
 

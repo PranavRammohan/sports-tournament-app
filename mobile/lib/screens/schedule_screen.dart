@@ -1,11 +1,8 @@
 // schedule_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-
-const String apiUrl = 'http://localhost:3000/api';
+import '../api_client.dart';
 
 class ScheduleScreen extends StatefulWidget {
   final int leagueId;
@@ -35,17 +32,9 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   Future<void> _loadSchedule() async {
     setState(() => _loading = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.get(
-        Uri.parse('$apiUrl/leagues/${widget.leagueId}/schedule'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-
-      final data = jsonDecode(response.body);
-      if (response.statusCode == 200) {
-        setState(() => _schedule = data['schedule']);
+      final res = await ApiClient.get('/leagues/${widget.leagueId}/schedule');
+      if (res.statusCode == 200) {
+        setState(() => _schedule = res.data['schedule']);
       }
     } catch (err) {
       // fail silently, pull-to-refresh available
@@ -57,21 +46,17 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   Future<void> _generateSchedule() async {
     setState(() => _generating = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$apiUrl/leagues/${widget.leagueId}/generate-schedule'),
-        headers: {'Authorization': 'Bearer $token'},
+      final res = await ApiClient.post(
+        '/leagues/${widget.leagueId}/generate-schedule',
       );
 
-      final data = jsonDecode(response.body);
-
       if (!mounted) return;
-      if (response.statusCode == 201) {
+      if (res.statusCode == 201) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Schedule generated: ${data['matchCount']} matches'),
+            content: Text(
+              'Schedule generated: ${res.data['matchCount']} matches',
+            ),
             backgroundColor: AppColors.success,
             behavior: SnackBarBehavior.floating,
           ),
@@ -80,7 +65,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not generate schedule.'),
+            content: Text(res.errorOr('Could not generate schedule.')),
             backgroundColor: AppColors.danger,
             behavior: SnackBarBehavior.floating,
           ),

@@ -1,72 +1,15 @@
 // create_league_screen.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:share_plus/share_plus.dart';
-import '../config.dart';
+import '../api_client.dart';
+import '../constants/areas.dart';
 
 const List<String> sportsList = [
   'Badminton',
   'Tennis',
   'Table Tennis',
   'Pickleball',
-];
-
-const List<String> bangaloreAreas = [
-  'Koramangala',
-  'Indiranagar',
-  'HSR Layout',
-  'BTM Layout',
-  'Jayanagar',
-  'JP Nagar',
-  'Whitefield',
-  'Marathahalli',
-  'Electronic City',
-  'Bellandur',
-  'Sarjapur Road',
-  'Hebbal',
-  'Yelahanka',
-  'Malleshwaram',
-  'Rajajinagar',
-  'Basavanagudi',
-  'Banashankari',
-  'RT Nagar',
-  'Frazer Town',
-  'Ulsoor',
-  'MG Road',
-  'Domlur',
-  'CV Raman Nagar',
-  'Kalyan Nagar',
-  'Banaswadi',
-  'Vijayanagar',
-  'Rajarajeshwari Nagar',
-  'Kengeri',
-  'Yeshwanthpur',
-  'Nagarbhavi',
-  'Hennur',
-  'Bannerghatta Road',
-  'KR Puram',
-  'Mahadevapura',
-  'Uttarahalli',
-  'Kanakapura Road',
-  'Konanakunte',
-  'Anjanapura',
-  'Padmanabhanagar',
-  'Girinagar',
-  'Kumaraswamy Layout',
-  'Vasanthapura',
-  'Chikkalasandra',
-  'Hulimavu',
-  'Bommanahalli',
-  'Begur',
-  'Arekere',
-  'Gottigere',
-  'Silk Board',
-  'Madiwala',
-  'Bilekahalli',
-  'Kudlu',
 ];
 
 class CreateLeagueScreen extends StatefulWidget {
@@ -91,12 +34,6 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   final TextEditingController _matchesPerPlayerController =
       TextEditingController();
 
-  // Only meaningful when _scheduleType == 'groups'. Groups format (v1) is
-  // singles-only — see backend for why.
-  String _groupStageScheduleType = 'round_robin';
-  final TextEditingController _groupStageMatchesPerPlayerController =
-      TextEditingController();
-
   bool _hostEntersScores = false;
   bool _hostPlays = true;
   bool _isPrivate = false;
@@ -118,11 +55,16 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   DateTime? _registrationEnd;
 
   Future<void> _pickDate({required bool isStart}) async {
+    final now = DateTime.now();
+    var initialDate = now.add(const Duration(days: 1));
+    if (!isStart && _startDate != null && _startDate!.isAfter(now)) {
+      initialDate = _startDate!;
+    }
     final picked = await showDatePicker(
       context: context,
-      initialDate: DateTime.now().add(const Duration(days: 1)),
-      firstDate: DateTime.now(),
-      lastDate: DateTime.now().add(const Duration(days: 365)),
+      initialDate: initialDate,
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365)),
     );
     if (picked != null) {
       setState(() {
@@ -221,22 +163,6 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
       }
     }
 
-    int? groupStageMatchesPerPlayer;
-    if (_scheduleType == 'groups' &&
-        _groupStageScheduleType == 'matches_per_player') {
-      groupStageMatchesPerPlayer = int.tryParse(
-        _groupStageMatchesPerPlayerController.text.trim(),
-      );
-      if (groupStageMatchesPerPlayer == null ||
-          groupStageMatchesPerPlayer < 1) {
-        _showAlert(
-          'Missing info',
-          'Please enter how many matches each player should play within their group.',
-        );
-        return;
-      }
-    }
-
     double? minRating;
     double? maxRating;
     if (_restrictByRating) {
@@ -281,16 +207,9 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
     setState(() => _loading = true);
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/create'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
+      final res = await ApiClient.post(
+        '/leagues/create',
+        body: {
           'name': name,
           'sport': _selectedSport!.toLowerCase().replaceAll(' ', '_'),
           'area': _selectedArea,
@@ -302,12 +221,6 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               : 'womens',
           'scheduleType': _scheduleType,
           'matchesPerPlayer': matchesPerPlayer,
-          'groupStageScheduleType': _scheduleType == 'groups'
-              ? _groupStageScheduleType
-              : null,
-          'groupStageMatchesPerPlayer': _scheduleType == 'groups'
-              ? groupStageMatchesPerPlayer
-              : null,
           'hostEntersScores': _hostEntersScores,
           'hostPlays': _hostPlays,
           'isPrivate': _isPrivate,
@@ -323,22 +236,17 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               ? _registrationEnd?.toIso8601String()
               : null,
           'partnerMode': _selectedFormat == 'Doubles' ? _partnerMode : null,
-        }),
+        },
       );
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode != 201) {
-        _showAlert(
-          'Something went wrong',
-          data['error'] ?? 'Please try again.',
-        );
+      if (res.statusCode != 201) {
+        _showAlert('Something went wrong', res.errorOr('Please try again.'));
         return;
       }
 
       if (!mounted) return;
 
-      final league = data['league'];
+      final league = res.data['league'];
       if (_isPrivate && league['join_code'] != null) {
         await showDialog(
           context: context,
@@ -602,65 +510,13 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                 contentPadding: EdgeInsets.zero,
                 value: 'groups',
                 groupValue: _scheduleType,
-                title: const Text('Groups (pools, then advance)'),
+                title: const Text('Groups (many rounds, your call)'),
                 subtitle: const Text(
-                  'Split players into named groups; top players from each group advance to a second stage you choose later',
+                  'Create named groups any time, pick who\'s in each one, and choose that group\'s own format (round robin, knockout, fixed matches, or add matches by hand) — after the tournament is created.',
                   style: TextStyle(fontSize: 11),
                 ),
                 onChanged: (v) => setState(() => _scheduleType = v!),
               ),
-            if (isSingles && _scheduleType == 'groups') ...[
-              Padding(
-                padding: const EdgeInsets.only(left: 16, top: 4, bottom: 4),
-                child: Text(
-                  'You\'ll create groups and assign players after the tournament is created. Choose how matches work within each group:',
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(left: 16),
-                child: RadioListTile<String>(
-                  contentPadding: EdgeInsets.zero,
-                  value: 'round_robin',
-                  groupValue: _groupStageScheduleType,
-                  dense: true,
-                  title: const Text(
-                    'Round Robin within each group',
-                    style: TextStyle(fontSize: 13),
-                  ),
-                  onChanged: (v) =>
-                      setState(() => _groupStageScheduleType = v!),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(left: 16),
-                child: RadioListTile<String>(
-                  contentPadding: EdgeInsets.zero,
-                  value: 'matches_per_player',
-                  groupValue: _groupStageScheduleType,
-                  dense: true,
-                  title: const Text(
-                    'Fixed number of matches within each group',
-                    style: TextStyle(fontSize: 13),
-                  ),
-                  onChanged: (v) =>
-                      setState(() => _groupStageScheduleType = v!),
-                ),
-              ),
-              if (_groupStageScheduleType == 'matches_per_player')
-                Padding(
-                  padding: const EdgeInsets.only(left: 32, top: 4, bottom: 4),
-                  child: TextField(
-                    controller: _groupStageMatchesPerPlayerController,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Matches per player, within each group',
-                      isDense: true,
-                      hintText: 'e.g. 3',
-                    ),
-                  ),
-                ),
-            ],
 
             if (_selectedFormat == 'Doubles') ...[
               const SizedBox(height: 20),

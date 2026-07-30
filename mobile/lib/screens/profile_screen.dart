@@ -2,10 +2,9 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import '../widgets/sport_icon.dart';
 import 'add_sport_screen.dart';
 import 'edit_profile_screen.dart';
@@ -53,19 +52,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       setState(() => _user = jsonDecode(userJson));
 
-      final response = await http.get(
-        Uri.parse('$baseApiUrl/sports/mine'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
+      final res = await ApiClient.get('/sports/mine');
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode != 200) {
-        setState(() => _error = data['error'] ?? 'Could not load sports.');
+      if (res.statusCode != 200) {
+        setState(() => _error = res.errorOr('Could not load sports.'));
         return;
       }
 
-      setState(() => _sports = data['sports']);
+      setState(() => _sports = res.data['sports']);
     } catch (err) {
       setState(
         () => _error = 'Could not reach the server. Check your connection.',
@@ -86,7 +80,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _handleLogout() async {
     HapticFeedback.mediumImpact();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.clear();
+    // Clear only the session, not app-level preferences like darkMode/
+    // hasSeenOnboarding — those should survive a logout.
+    await prefs.remove('authToken');
+    await prefs.remove('user');
     if (!mounted) return;
     Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
   }

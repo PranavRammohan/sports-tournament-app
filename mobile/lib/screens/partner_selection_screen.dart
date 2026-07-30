@@ -146,7 +146,7 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
     }
   }
 
-  Future<void> _respond(bool accept) async {
+  Future<void> _respond(int requesterId, bool accept) async {
     HapticFeedback.lightImpact();
     setState(() => _submitting = true);
     try {
@@ -158,7 +158,7 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
-        body: jsonEncode({'accept': accept}),
+        body: jsonEncode({'accept': accept, 'requesterId': requesterId}),
       );
       final data = jsonDecode(res.body);
       if (!mounted) return;
@@ -345,14 +345,18 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     TextButton(
-                      onPressed: _submitting ? null : () => _respond(false),
+                      onPressed: _submitting
+                          ? null
+                          : () => _respond(r['id'] as int, false),
                       child: const Text(
                         'Decline',
                         style: TextStyle(color: AppColors.danger),
                       ),
                     ),
                     ElevatedButton(
-                      onPressed: _submitting ? null : () => _respond(true),
+                      onPressed: _submitting
+                          ? null
+                          : () => _respond(r['id'] as int, true),
                       child: const Text('Accept'),
                     ),
                   ],

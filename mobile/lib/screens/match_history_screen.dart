@@ -2,10 +2,9 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
@@ -22,6 +21,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
   List<dynamic> _matches = [];
   int? _currentUserId;
   bool _loading = true;
+  String? _error;
   String? _filter; // null = all, 'win', 'loss'
 
   @override
@@ -31,26 +31,27 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
   }
 
   Future<void> _loadHistory() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
       final userJson = prefs.getString('user');
       if (userJson != null) {
         _currentUserId = jsonDecode(userJson)['id'];
       }
 
-      final response = await http.get(
-        Uri.parse('$baseApiUrl/matches/history'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-
-      final data = jsonDecode(response.body);
-      if (response.statusCode == 200) {
-        setState(() => _matches = data['matches']);
+      final res = await ApiClient.get('/matches/history');
+      if (res.statusCode == 200) {
+        setState(() => _matches = res.data['matches']);
+      } else {
+        setState(
+          () => _error = res.errorOr('Could not load match history.'),
+        );
       }
     } catch (err) {
-      // fail silently
+      setState(() => _error = 'Could not reach the server.');
     } finally {
       setState(() => _loading = false);
     }
@@ -118,6 +119,23 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
           Expanded(
             child: _loading
                 ? const SkeletonList()
+                : _error != null
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(_error!, textAlign: TextAlign.center),
+                          const SizedBox(height: 12),
+                          TextButton(
+                            onPressed: _loadHistory,
+                            child: const Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
                 : RefreshIndicator(
                     onRefresh: _loadHistory,
                     child: matches.isEmpty

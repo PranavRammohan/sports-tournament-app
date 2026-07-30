@@ -1,52 +1,11 @@
 // select_sports_screen.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import '../widgets/sport_icon.dart';
-
-const Map<String, Map<String, num>> sportLevels = {
-  'Badminton': {
-    'beginner': 6000,
-    'intermediate': 6500,
-    'higher intermediate': 7000,
-    'advanced': 7500,
-    'pro': 8500,
-  },
-  'Tennis': {
-    'beginner': 2.5,
-    'lower intermediate': 4.5,
-    'intermediate': 6.5,
-    'intermediate advanced': 8.5,
-    'advanced': 10.5,
-    'pro': 13,
-  },
-  'Table Tennis': {
-    'beginner': 1000,
-    'early intermediate': 1400,
-    'intermediate': 1600,
-    'higher intermediate': 1800,
-    'advanced': 2200,
-    'pro': 2500,
-  },
-  'Pickleball': {
-    'beginner': 2.5,
-    'intermediate': 3.5,
-    'mid-intermediate': 4,
-    'advanced': 5,
-    'pro': 7,
-  },
-};
-
-String _capitalizeLevel(String level) {
-  return level
-      .split(' ')
-      .map((w) => w.isEmpty ? w : w[0].toUpperCase() + w.substring(1))
-      .join(' ');
-}
+import '../constants/sports.dart';
 
 class SelectSportsScreen extends StatefulWidget {
   const SelectSportsScreen({super.key});
@@ -82,7 +41,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
 
   String _levelLabel(String sport, String level) {
     final rating = sportLevels[sport]?[level];
-    return '${_capitalizeLevel(level)} (starts at $rating)';
+    return '${capitalizeLevel(level)} (starts at $rating)';
   }
 
   Future<void> _handleContinue() async {
@@ -110,22 +69,13 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
         };
       }).toList();
 
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/sports/select'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({'sports': sportsPayload}),
+      final res = await ApiClient.post(
+        '/sports/select',
+        body: {'sports': sportsPayload},
       );
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode != 201) {
-        _showAlert(
-          'Something went wrong',
-          data['error'] ?? 'Please try again.',
-        );
+      if (res.statusCode != 201) {
+        _showAlert('Something went wrong', res.errorOr('Please try again.'));
         return;
       }
 

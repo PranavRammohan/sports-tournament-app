@@ -2,11 +2,10 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:share_plus/share_plus.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import '../utils.dart';
 import '../widgets/sport_icon.dart';
 import 'report_match_screen.dart';
@@ -132,46 +131,35 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
       final userJson = prefs.getString('user');
       if (userJson != null) {
         _currentUserId = jsonDecode(userJson)['id'];
       }
 
-      final leagueRes = await http.get(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final leagueData = jsonDecode(leagueRes.body);
+      final leagueRes = await ApiClient.get('/leagues/${widget.leagueId}');
       if (leagueRes.statusCode != 200) {
         setState(
-          () => _error = leagueData['error'] ?? 'Could not load tournament.',
+          () => _error = leagueRes.errorOr('Could not load tournament.'),
         );
         return;
       }
       setState(() {
-        _league = leagueData['league'];
-        _leaderboard = leagueData['leaderboard'];
-        _pairLeaderboard = leagueData['pairLeaderboard'];
+        _league = leagueRes.data['league'];
+        _leaderboard = leagueRes.data['leaderboard'];
+        _pairLeaderboard = leagueRes.data['pairLeaderboard'];
       });
 
       if (_isKnockout) {
-        final bracketRes = await http.get(
-          Uri.parse('$baseApiUrl/playoffs/${widget.leagueId}'),
-          headers: {'Authorization': 'Bearer $token'},
-        );
-        final bracketData = jsonDecode(bracketRes.body);
+        final bracketRes = await ApiClient.get('/playoffs/${widget.leagueId}');
         if (bracketRes.statusCode == 200) {
-          setState(() => _bracket = bracketData['bracket']);
+          setState(() => _bracket = bracketRes.data['bracket']);
         }
       } else {
-        final scheduleRes = await http.get(
-          Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/schedule'),
-          headers: {'Authorization': 'Bearer $token'},
+        final scheduleRes = await ApiClient.get(
+          '/leagues/${widget.leagueId}/schedule',
         );
-        final scheduleData = jsonDecode(scheduleRes.body);
         if (scheduleRes.statusCode == 200) {
-          setState(() => _schedule = scheduleData['schedule']);
+          setState(() => _schedule = scheduleRes.data['schedule']);
         }
       }
     } catch (err) {
@@ -187,17 +175,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     HapticFeedback.lightImpact();
     setState(() => _joining = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/join'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.post('/leagues/${widget.leagueId}/join');
 
       if (!mounted) return;
-      if (response.statusCode == 201) {
+      if (res.statusCode == 201) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Joined tournament!'),
@@ -208,7 +189,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not join.'),
+            content: Text(res.errorOr('Could not join.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -227,29 +208,21 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     HapticFeedback.lightImpact();
     setState(() => _generating = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/generate-schedule'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({'force': force}),
+      final res = await ApiClient.post(
+        '/leagues/${widget.leagueId}/generate-schedule',
+        body: {'force': force},
       );
-      final data = jsonDecode(response.body);
 
       if (!mounted) return;
-      if (response.statusCode == 201) {
+      if (res.statusCode == 201) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['message'] ?? 'Schedule generated.'),
+            content: Text(res.data?['message'] ?? 'Schedule generated.'),
             backgroundColor: AppColors.success,
           ),
         );
         _loadAll();
-      } else if (data['estimatedMatches'] != null) {
+      } else if (res.data is Map && res.data['estimatedMatches'] != null) {
         setState(() => _generating = false);
         final proceed = await showDialog<bool>(
           context: context,
@@ -258,7 +231,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               borderRadius: BorderRadius.circular(10),
             ),
             title: const Text('That\'s a lot of matches'),
-            content: Text('${data['error']} Continue anyway?'),
+            content: Text('${res.data['error']} Continue anyway?'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
@@ -278,7 +251,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not generate schedule.'),
+            content: Text(res.errorOr('Could not generate schedule.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -340,33 +313,25 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     HapticFeedback.mediumImpact();
     setState(() => _regenerating = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/regenerate-schedule'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
+      final res = await ApiClient.post(
+        '/leagues/${widget.leagueId}/regenerate-schedule',
+        body: {
           'scheduleType': result.scheduleType,
           'matchesPerPlayer': result.matchesPerPlayer,
           'force': force,
-        }),
+        },
       );
-      final data = jsonDecode(response.body);
 
       if (!mounted) return;
-      if (response.statusCode == 201 || response.statusCode == 200) {
+      if (res.statusCode == 201 || res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['message'] ?? 'Schedule regenerated.'),
+            content: Text(res.data?['message'] ?? 'Schedule regenerated.'),
             backgroundColor: AppColors.success,
           ),
         );
         _loadAll();
-      } else if (data['estimatedMatches'] != null) {
+      } else if (res.data is Map && res.data['estimatedMatches'] != null) {
         setState(() => _regenerating = false);
         final proceed = await showDialog<bool>(
           context: context,
@@ -375,7 +340,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               borderRadius: BorderRadius.circular(10),
             ),
             title: const Text('That\'s a lot of matches'),
-            content: Text('${data['error']} Continue anyway?'),
+            content: Text('${res.data['error']} Continue anyway?'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
@@ -395,7 +360,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not regenerate schedule.'),
+            content: Text(res.errorOr('Could not regenerate schedule.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -439,21 +404,15 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     HapticFeedback.mediumImpact();
     setState(() => _deleting = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.delete(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.delete('/leagues/${widget.leagueId}');
 
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         Navigator.pop(context, 'deleted');
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not delete tournament.'),
+            content: Text(res.errorOr('Could not delete tournament.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -495,21 +454,15 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     HapticFeedback.mediumImpact();
     setState(() => _leaving = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/leave'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.post('/leagues/${widget.leagueId}/leave');
 
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         Navigator.pop(context, 'left');
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not leave tournament.'),
+            content: Text(res.errorOr('Could not leave tournament.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -550,16 +503,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     HapticFeedback.mediumImpact();
     setState(() => _completing = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/complete'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.post('/leagues/${widget.leagueId}/complete');
 
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Tournament marked completed.'),
@@ -570,7 +517,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not mark completed.'),
+            content: Text(res.errorOr('Could not mark completed.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -611,16 +558,12 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     HapticFeedback.mediumImpact();
     setState(() => _completing = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/reactivate'),
-        headers: {'Authorization': 'Bearer $token'},
+      final res = await ApiClient.post(
+        '/leagues/${widget.leagueId}/reactivate',
       );
-      final data = jsonDecode(response.body);
 
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Tournament reactivated.'),
@@ -631,7 +574,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not reactivate.'),
+            content: Text(res.errorOr('Could not reactivate.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -655,19 +598,12 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/playoffs/match/$matchId/report'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(result),
+      final res = await ApiClient.post(
+        '/playoffs/match/$matchId/report',
+        body: result,
       );
-      final data = jsonDecode(response.body);
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Result reported!'),
@@ -678,7 +614,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not report.'),
+            content: Text(res.errorOr('Could not report.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -708,19 +644,12 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/playoffs/match/$matchId/report-as-host'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(result),
+      final res = await ApiClient.post(
+        '/playoffs/match/$matchId/report-as-host',
+        body: result,
       );
-      final data = jsonDecode(response.body);
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Match confirmed!'),
@@ -731,7 +660,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not enter score.'),
+            content: Text(res.errorOr('Could not enter score.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -747,15 +676,9 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   Future<void> _confirmKnockoutMatch(int matchId) async {
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/playoffs/match/$matchId/confirm'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.post('/playoffs/match/$matchId/confirm');
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Match confirmed!'),
@@ -766,7 +689,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not confirm.'),
+            content: Text(res.errorOr('Could not confirm.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -782,15 +705,9 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   Future<void> _rejectKnockoutMatch(int matchId) async {
     HapticFeedback.mediumImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/playoffs/match/$matchId/reject'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.post('/playoffs/match/$matchId/reject');
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Result rejected.'),
@@ -801,7 +718,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not reject.'),
+            content: Text(res.errorOr('Could not reject.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -842,17 +759,11 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
     HapticFeedback.mediumImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.delete(
-        Uri.parse(
-          '$baseApiUrl/leagues/${widget.leagueId}/schedule/$scheduledMatchId',
-        ),
-        headers: {'Authorization': 'Bearer $token'},
+      final res = await ApiClient.delete(
+        '/leagues/${widget.leagueId}/schedule/$scheduledMatchId',
       );
-      final data = jsonDecode(response.body);
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Match removed.'),
@@ -863,7 +774,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not remove match.'),
+            content: Text(res.errorOr('Could not remove match.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -893,25 +804,18 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.put(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/schedule/${f['id']}'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
+      final res = await ApiClient.put(
+        '/leagues/${widget.leagueId}/schedule/${f['id']}',
+        body: {
           'player1Id': result['player1Id'],
           'player1PartnerId': result['player1PartnerId'],
           'player2Id': result['player2Id'],
           'player2PartnerId': result['player2PartnerId'],
           'scheduledTime': result['scheduledTime'],
-        }),
+        },
       );
-      final data = jsonDecode(response.body);
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Match updated.'),
@@ -922,7 +826,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not update match.'),
+            content: Text(res.errorOr('Could not update match.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -971,25 +875,19 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.put(
-        Uri.parse('$baseApiUrl/matches/${f['match_id']}/edit'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(result),
+      final res = await ApiClient.put(
+        '/matches/${f['match_id']}/edit',
+        body: result,
       );
-      final data = jsonDecode(response.body);
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              data['warning'] ?? 'Score updated and ratings recalculated.',
+              res.data?['warning'] ??
+                  'Score updated and ratings recalculated.',
             ),
-            backgroundColor: data['warning'] != null
+            backgroundColor: res.data?['warning'] != null
                 ? AppColors.warning
                 : AppColors.success,
           ),
@@ -998,7 +896,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not update score.'),
+            content: Text(res.errorOr('Could not update score.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -1035,15 +933,9 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/matches/report-as-host'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
+      final res = await ApiClient.post(
+        '/matches/report-as-host',
+        body: {
           'leagueId': widget.leagueId,
           'player1Id': f['player1_id'],
           'player1PartnerId': f['player1_partner_id'],
@@ -1053,11 +945,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           'player2Units': result['player2Units'],
           'player1Won': result['player1Won'],
           'setScores': result['setScores'],
-        }),
+        },
       );
-      final data = jsonDecode(response.body);
       if (!mounted) return;
-      if (response.statusCode == 200 || response.statusCode == 201) {
+      if (res.statusCode == 200 || res.statusCode == 201) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Match confirmed!'),
@@ -1068,7 +959,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not enter score.'),
+            content: Text(res.errorOr('Could not enter score.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -1122,19 +1013,12 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     if (result == null) return;
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.put(
-        Uri.parse('$baseApiUrl/matches/${f['match_id']}/edit-report'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(result),
+      final res = await ApiClient.put(
+        '/matches/${f['match_id']}/edit-report',
+        body: result,
       );
-      final data = jsonDecode(response.body);
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Report updated.'),
@@ -1145,7 +1029,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not update report.'),
+            content: Text(res.errorOr('Could not update report.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -1186,19 +1070,13 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
     HapticFeedback.mediumImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.delete(
-        Uri.parse('$baseApiUrl/matches/$matchId'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.delete('/matches/$matchId');
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['warning'] ?? 'Match deleted.'),
-            backgroundColor: data['warning'] != null
+            content: Text(res.data?['warning'] ?? 'Match deleted.'),
+            backgroundColor: res.data?['warning'] != null
                 ? AppColors.warning
                 : AppColors.success,
           ),
@@ -1207,7 +1085,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not delete match.'),
+            content: Text(res.errorOr('Could not delete match.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -1248,15 +1126,11 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
     HapticFeedback.mediumImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.delete(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/members/$userId'),
-        headers: {'Authorization': 'Bearer $token'},
+      final res = await ApiClient.delete(
+        '/leagues/${widget.leagueId}/members/$userId',
       );
-      final data = jsonDecode(response.body);
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Player removed.'),
@@ -1267,7 +1141,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not remove player.'),
+            content: Text(res.errorOr('Could not remove player.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -2934,6 +2808,7 @@ class _SelfReportSetsDialog extends StatefulWidget {
 
 class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
   late List<_SetScore> _sets;
+  String? _error;
 
   @override
   void initState() {
@@ -2959,6 +2834,14 @@ class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: AppColors.danger, fontSize: 13),
+                ),
+              ),
             ..._sets.asMap().entries.map((entry) {
               final index = entry.key;
               final set = entry.value;
@@ -3022,7 +2905,14 @@ class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
             for (final s in _sets) {
               final my = int.tryParse(s.myScore.text.trim());
               final opp = int.tryParse(s.opponentScore.text.trim());
-              if (my == null || opp == null || my == opp) return;
+              if (my == null || opp == null) {
+                setState(() => _error = 'Please fill in every ${widget.unitLabel.toLowerCase()} score.');
+                return;
+              }
+              if (my == opp) {
+                setState(() => _error = 'A ${widget.unitLabel.toLowerCase()} cannot end in a tie.');
+                return;
+              }
               setScores.add({'me': my, 'opponent': opp});
               totalMy += my;
               totalOpp += opp;
@@ -3032,7 +2922,10 @@ class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
                 setsWonByOpp++;
               }
             }
-            if (setsWonByMe == setsWonByOpp) return;
+            if (setsWonByMe == setsWonByOpp) {
+              setState(() => _error = 'The match needs an overall winner.');
+              return;
+            }
             Navigator.pop(context, {
               'myUnits': totalMy,
               'opponentUnits': totalOpp,
@@ -3068,6 +2961,7 @@ class _HostReportSetsDialog extends StatefulWidget {
 
 class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
   late List<_SetScore> _sets;
+  String? _error;
 
   @override
   void initState() {
@@ -3093,6 +2987,14 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: AppColors.danger, fontSize: 13),
+                ),
+              ),
             ..._sets.asMap().entries.map((entry) {
               final index = entry.key;
               final set = entry.value;
@@ -3157,7 +3059,14 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
             for (final s in _sets) {
               final p1 = int.tryParse(s.myScore.text.trim());
               final p2 = int.tryParse(s.opponentScore.text.trim());
-              if (p1 == null || p2 == null || p1 == p2) return;
+              if (p1 == null || p2 == null) {
+                setState(() => _error = 'Please fill in every ${widget.unitLabel.toLowerCase()} score.');
+                return;
+              }
+              if (p1 == p2) {
+                setState(() => _error = 'A ${widget.unitLabel.toLowerCase()} cannot end in a tie.');
+                return;
+              }
               setScores.add({'me': p1, 'opponent': p2});
               totalP1 += p1;
               totalP2 += p2;
@@ -3167,7 +3076,10 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
                 setsWonByP2++;
               }
             }
-            if (setsWonByP1 == setsWonByP2) return;
+            if (setsWonByP1 == setsWonByP2) {
+              setState(() => _error = 'The match needs an overall winner.');
+              return;
+            }
             Navigator.pop(context, {
               'player1Units': totalP1,
               'player2Units': totalP2,
@@ -3211,6 +3123,7 @@ class _EditFixtureDialogState extends State<_EditFixtureDialog> {
   int? _player2Id;
   int? _player2PartnerId;
   DateTime? _scheduledDateTime;
+  String? _error;
 
   bool get _isDoubles => widget.format == 'doubles';
 
@@ -3300,6 +3213,14 @@ class _EditFixtureDialogState extends State<_EditFixtureDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: AppColors.danger, fontSize: 13),
+                ),
+              ),
             DropdownButtonFormField<int>(
               initialValue: _player1Id,
               decoration: const InputDecoration(
@@ -3392,8 +3313,14 @@ class _EditFixtureDialogState extends State<_EditFixtureDialog> {
               if (_isDoubles) _player1PartnerId,
               if (_isDoubles) _player2PartnerId,
             ];
-            if (ids.contains(null)) return;
-            if (ids.toSet().length != ids.length) return;
+            if (ids.contains(null)) {
+              setState(() => _error = 'Please select every player slot.');
+              return;
+            }
+            if (ids.toSet().length != ids.length) {
+              setState(() => _error = 'The same player can\'t appear in more than one slot.');
+              return;
+            }
             Navigator.pop(context, {
               'player1Id': _player1Id,
               'player1PartnerId': _player1PartnerId,

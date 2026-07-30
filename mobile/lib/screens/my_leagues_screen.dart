@@ -1,11 +1,8 @@
 // my_leagues_screen.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import '../utils.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/loading_skeleton.dart';
@@ -24,6 +21,7 @@ class MyLeaguesScreen extends StatefulWidget {
 class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
   List<dynamic> _leagues = [];
   bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
@@ -36,22 +34,21 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
   }
 
   Future<void> _loadLeagues() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.get(
-        Uri.parse('$baseApiUrl/leagues/mine'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-
-      final data = jsonDecode(response.body);
-      if (response.statusCode == 200) {
-        setState(() => _leagues = data['leagues']);
+      final res = await ApiClient.get('/leagues/mine');
+      if (res.statusCode == 200) {
+        setState(() => _leagues = res.data['leagues']);
+      } else {
+        setState(
+          () => _error = res.errorOr('Could not load your tournaments.'),
+        );
       }
     } catch (err) {
-      // fail silently
+      setState(() => _error = 'Could not reach the server.');
     } finally {
       setState(() => _loading = false);
     }
@@ -98,6 +95,23 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
       ),
       body: _loading
           ? const SkeletonList()
+          : _error != null
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_error!, textAlign: TextAlign.center),
+                    const SizedBox(height: 12),
+                    TextButton(
+                      onPressed: _loadLeagues,
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            )
           : RefreshIndicator(
               onRefresh: _loadLeagues,
               child: _leagues.isEmpty

@@ -40,6 +40,10 @@ class _LoadingSkeletonState extends State<LoadingSkeleton>
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final colors = isDark
+        ? [Colors.grey.shade800, Colors.grey.shade700, Colors.grey.shade800]
+        : [Colors.grey.shade200, Colors.grey.shade100, Colors.grey.shade200];
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, child) {
@@ -52,11 +56,7 @@ class _LoadingSkeletonState extends State<LoadingSkeleton>
             gradient: LinearGradient(
               begin: Alignment(-1 + t * 2, 0),
               end: Alignment(1 + t * 2, 0),
-              colors: [
-                Colors.grey.shade200,
-                Colors.grey.shade100,
-                Colors.grey.shade200,
-              ],
+              colors: colors,
             ),
           ),
         );
@@ -72,13 +72,16 @@ class CardRowSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(
+          color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
+        ),
       ),
       child: Row(
         children: [

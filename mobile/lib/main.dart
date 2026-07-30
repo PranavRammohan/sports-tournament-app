@@ -50,6 +50,10 @@ final ValueNotifier<ThemeMode> themeModeNotifier = ValueNotifier(
   ThemeMode.light,
 );
 
+// Lets ApiClient navigate to /login on a 401 without a BuildContext of its
+// own — it isn't called from a widget, just from screens' network code.
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
 Future<void> _loadSavedThemeMode() async {
   final prefs = await SharedPreferences.getInstance();
   final isDark = prefs.getBool('darkMode') ?? false;
@@ -79,6 +83,7 @@ class RallyXApp extends StatelessWidget {
       valueListenable: themeModeNotifier,
       builder: (context, mode, _) {
         return MaterialApp(
+          navigatorKey: navigatorKey,
           initialRoute: initialRoute,
           theme: _buildLightTheme(),
           darkTheme: _buildDarkTheme(),

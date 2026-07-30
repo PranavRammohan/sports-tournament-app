@@ -1,13 +1,11 @@
 // browse_leagues_screen.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import '../utils.dart';
 import '../widgets/sport_icon.dart';
+import '../constants/areas.dart';
 import 'create_league_screen.dart';
 import 'league_detail_screen.dart';
 
@@ -28,6 +26,7 @@ class BrowseLeaguesScreen extends StatefulWidget {
 class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
   List<dynamic> _leagues = [];
   bool _loading = true;
+  String? _error;
   bool _didJoinAny = false;
 
   String? _filterFormat;
@@ -52,11 +51,11 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
   }
 
   Future<void> _loadLeagues() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
       final queryParams = <String, String>{};
       if (_filterFormat != null) queryParams['format'] = _filterFormat!;
       if (_filterSport != null) queryParams['sport'] = _filterSport!;
@@ -64,21 +63,15 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
         queryParams['area'] = _filterAreas.join(',');
       }
 
-      final uri = Uri.parse(
-        '$baseApiUrl/leagues',
-      ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+      final res = await ApiClient.get('/leagues', queryParams: queryParams);
 
-      final response = await http.get(
-        uri,
-        headers: {'Authorization': 'Bearer $token'},
-      );
-
-      final data = jsonDecode(response.body);
-      if (response.statusCode == 200) {
-        setState(() => _leagues = data['leagues']);
+      if (res.statusCode == 200) {
+        setState(() => _leagues = res.data['leagues']);
+      } else {
+        setState(() => _error = res.errorOr('Could not load tournaments.'));
       }
     } catch (err) {
-      // fail silently
+      setState(() => _error = 'Could not reach the server.');
     } finally {
       setState(() => _loading = false);
     }
@@ -144,18 +137,10 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
   Future<void> _joinLeague(int leagueId) async {
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/$leagueId/join'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.post('/leagues/$leagueId/join');
 
       if (!mounted) return;
-      if (response.statusCode == 201) {
+      if (res.statusCode == 201) {
         _didJoinAny = true;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -167,7 +152,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not join.'),
+            content: Text(res.errorOr('Could not join.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -196,25 +181,16 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
     setState(() => _joiningByCode = true);
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/join-by-code'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({'code': code}),
+      final res = await ApiClient.post(
+        '/leagues/join-by-code',
+        body: {'code': code},
       );
 
-      final data = jsonDecode(response.body);
-
       if (!mounted) return;
-      if (response.statusCode != 201) {
+      if (res.statusCode != 201) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not join.'),
+            content: Text(res.errorOr('Could not join.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -225,7 +201,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => LeagueDetailScreen(leagueId: data['leagueId']),
+          builder: (_) => LeagueDetailScreen(leagueId: res.data['leagueId']),
         ),
       );
     } catch (err) {
@@ -412,6 +388,23 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator())
+              : _error != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(_error!, textAlign: TextAlign.center),
+                        const SizedBox(height: 12),
+                        TextButton(
+                          onPressed: _loadLeagues,
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
               : Builder(
                   builder: (context) {
                     final query = _searchQuery.trim().toLowerCase();

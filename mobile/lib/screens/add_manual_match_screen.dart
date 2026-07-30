@@ -1,21 +1,22 @@
 // add_manual_match_screen.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
-import '../config.dart';
+import '../api_client.dart';
 
 class AddManualMatchScreen extends StatefulWidget {
   final int leagueId;
   final String format;
   final List<dynamic> members;
+  // Set when adding a match to a specific custom-format group within a
+  // Groups tournament; null for a plain custom-format league.
+  final int? groupId;
 
   const AddManualMatchScreen({
     super.key,
     required this.leagueId,
     required this.format,
     required this.members,
+    this.groupId,
   });
 
   @override
@@ -61,30 +62,19 @@ class _AddManualMatchScreenState extends State<AddManualMatchScreen> {
     setState(() => _submitting = true);
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/add-manual-match'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
+      final res = await ApiClient.post(
+        '/leagues/${widget.leagueId}/add-manual-match',
+        body: {
           'player1Id': _player1Id,
           'player1PartnerId': _player1PartnerId,
           'player2Id': _player2Id,
           'player2PartnerId': _player2PartnerId,
-        }),
+          'groupId': widget.groupId,
+        },
       );
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode != 201) {
-        _showAlert(
-          'Something went wrong',
-          data['error'] ?? 'Please try again.',
-        );
+      if (res.statusCode != 201) {
+        _showAlert('Something went wrong', res.errorOr('Please try again.'));
         return;
       }
 

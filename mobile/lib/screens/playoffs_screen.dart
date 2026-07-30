@@ -11,12 +11,23 @@ class PlayoffsScreen extends StatefulWidget {
   final int leagueId;
   final bool isHost;
   final String format;
+  // Set when this is one knockout-format group's bracket within a Groups
+  // tournament, rather than a whole-tournament knockout league. A group's
+  // bracket is generated when the host locks that group (see
+  // group_management_screen.dart) — not through this screen's own
+  // generate/cancel flow, which stays league-wide-only.
+  final int? groupId;
+  final String? groupName;
+  final bool groupLocked;
 
   const PlayoffsScreen({
     super.key,
     required this.leagueId,
     required this.isHost,
     this.format = 'singles',
+    this.groupId,
+    this.groupName,
+    this.groupLocked = false,
   });
 
   @override
@@ -27,6 +38,7 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   List<dynamic> _bracket = [];
   int? _currentUserId;
   bool _loading = true;
+  String? _error;
   bool _generating = false;
   bool _cancelling = false;
   bool _hostEntersScores = false;
@@ -56,7 +68,10 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   }
 
   Future<void> _loadBracket() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('authToken');
@@ -75,16 +90,21 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
         _sport = leagueData['league']['sport'] ?? '';
       }
 
+      final bracketPath = widget.groupId != null
+          ? '$baseApiUrl/playoffs/${widget.leagueId}/group/${widget.groupId}'
+          : '$baseApiUrl/playoffs/${widget.leagueId}';
       final response = await http.get(
-        Uri.parse('$baseApiUrl/playoffs/${widget.leagueId}'),
+        Uri.parse(bracketPath),
         headers: {'Authorization': 'Bearer $token'},
       );
       final data = jsonDecode(response.body);
       if (response.statusCode == 200) {
         setState(() => _bracket = data['bracket']);
+      } else {
+        setState(() => _error = data['error'] ?? 'Could not load bracket.');
       }
     } catch (err) {
-      // fail silently
+      setState(() => _error = 'Could not reach the server.');
     } finally {
       setState(() => _loading = false);
     }
@@ -572,9 +592,9 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Playoffs'),
+        title: Text(widget.groupName ?? 'Playoffs'),
         actions: [
-          if (widget.isHost && _bracket.isNotEmpty)
+          if (widget.groupId == null && widget.isHost && _bracket.isNotEmpty)
             IconButton(
               icon: _cancelling
                   ? const SizedBox(
@@ -593,6 +613,23 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _error != null
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_error!, textAlign: TextAlign.center),
+                    const SizedBox(height: 12),
+                    TextButton(
+                      onPressed: _loadBracket,
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            )
           : _bracket.isEmpty
           ? _buildEmptyState()
           : _buildBracket(),
@@ -601,6 +638,27 @@ class _PlayoffsScreenState extends State<PlayoffsScreen> {
 
   Widget _buildEmptyState() {
     final unit = _isDoubles ? 'teams' : 'players';
+
+    if (widget.groupId != null) {
+      // A group's bracket is generated when the host locks that group, from
+      // whoever is already in it — there's no separate qualifier-count step
+      // here the way there is for a whole-tournament knockout league.
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            widget.groupLocked
+                ? 'No bracket yet.'
+                : (widget.isHost
+                      ? 'Lock this group from Manage Groups to generate its bracket.'
+                      : "The host hasn't locked this group yet."),
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ),
+      );
+    }
+
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -957,6 +1015,7 @@ class _SetScore {
 
 class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
   late List<_SetScore> _sets;
+  String? _error;
 
   @override
   void initState() {
@@ -982,6 +1041,14 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: AppColors.danger, fontSize: 13),
+                ),
+              ),
             ..._sets.asMap().entries.map((entry) {
               final index = entry.key;
               final set = entry.value;
@@ -1049,7 +1116,14 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
             for (final s in _sets) {
               final my = int.tryParse(s.myScore.text.trim());
               final opp = int.tryParse(s.opponentScore.text.trim());
-              if (my == null || opp == null || my == opp) return;
+              if (my == null || opp == null) {
+                setState(() => _error = 'Please fill in every ${widget.unitLabel.toLowerCase()} score.');
+                return;
+              }
+              if (my == opp) {
+                setState(() => _error = 'A ${widget.unitLabel.toLowerCase()} cannot end in a tie.');
+                return;
+              }
               setScores.add({'me': my, 'opponent': opp});
               totalMy += my;
               totalOpp += opp;
@@ -1059,7 +1133,10 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
                 setsWonByOpp++;
               }
             }
-            if (setsWonByMe == setsWonByOpp) return;
+            if (setsWonByMe == setsWonByOpp) {
+              setState(() => _error = 'The match needs an overall winner.');
+              return;
+            }
 
             Navigator.pop(context, {
               'myUnits': totalMy,
@@ -1097,6 +1174,7 @@ class _HostPlayoffReportDialog extends StatefulWidget {
 
 class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
   late List<_SetScore> _sets;
+  String? _error;
 
   @override
   void initState() {
@@ -1122,6 +1200,14 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: AppColors.danger, fontSize: 13),
+                ),
+              ),
             ..._sets.asMap().entries.map((entry) {
               final index = entry.key;
               final set = entry.value;
@@ -1190,7 +1276,14 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
             for (final s in _sets) {
               final p1 = int.tryParse(s.myScore.text.trim());
               final p2 = int.tryParse(s.opponentScore.text.trim());
-              if (p1 == null || p2 == null || p1 == p2) return;
+              if (p1 == null || p2 == null) {
+                setState(() => _error = 'Please fill in every ${widget.unitLabel.toLowerCase()} score.');
+                return;
+              }
+              if (p1 == p2) {
+                setState(() => _error = 'A ${widget.unitLabel.toLowerCase()} cannot end in a tie.');
+                return;
+              }
               setScores.add({'me': p1, 'opponent': p2});
               totalP1 += p1;
               totalP2 += p2;
@@ -1200,7 +1293,10 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
                 setsWonByP2++;
               }
             }
-            if (setsWonByP1 == setsWonByP2) return;
+            if (setsWonByP1 == setsWonByP2) {
+              setState(() => _error = 'The match needs an overall winner.');
+              return;
+            }
 
             Navigator.pop(context, {
               'player1Units': totalP1,

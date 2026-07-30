@@ -1,11 +1,8 @@
 // host_report_match_screen.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 
 class HostReportMatchScreen extends StatefulWidget {
   final int leagueId;
@@ -99,16 +96,9 @@ class _HostReportMatchScreenState extends State<HostReportMatchScreen> {
     setState(() => _submitting = true);
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/matches/report-as-host'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
+      final res = await ApiClient.post(
+        '/matches/report-as-host',
+        body: {
           'leagueId': widget.leagueId,
           'player1Id': _selectedFixture!['player1_id'],
           'player1PartnerId': _selectedFixture!['player1_partner_id'],
@@ -118,16 +108,11 @@ class _HostReportMatchScreenState extends State<HostReportMatchScreen> {
           'player2Units': totalP2,
           'player1Won': setsWonByP1 > setsWonByP2,
           'setScores': setScores,
-        }),
+        },
       );
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode != 201) {
-        _showAlert(
-          'Something went wrong',
-          data['error'] ?? 'Please try again.',
-        );
+      if (res.statusCode != 201) {
+        _showAlert('Something went wrong', res.errorOr('Please try again.'));
         return;
       }
 

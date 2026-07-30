@@ -1,10 +1,7 @@
 // main_shell.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import 'home_screen.dart';
 import 'my_leagues_screen.dart';
 import 'pending_matches_screen.dart';
@@ -41,16 +38,9 @@ class _MainShellState extends State<MainShell> {
 
   Future<void> _loadPendingCount() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.get(
-        Uri.parse('$baseApiUrl/matches/pending'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
-      if (response.statusCode == 200 && mounted) {
-        setState(() => _pendingCount = (data['matches'] as List).length);
+      final res = await ApiClient.get('/matches/pending');
+      if (res.statusCode == 200 && mounted) {
+        setState(() => _pendingCount = (res.data['matches'] as List).length);
       }
     } catch (err) {
       // fail silently

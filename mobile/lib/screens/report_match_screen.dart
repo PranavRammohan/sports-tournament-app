@@ -2,10 +2,9 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 
 class ReportMatchScreen extends StatefulWidget {
   final int leagueId;
@@ -33,6 +32,7 @@ class _SetScore {
 class _ReportMatchScreenState extends State<ReportMatchScreen> {
   bool _loadingFixtures = true;
   bool _scheduleExists = false;
+  String? _loadError;
   List<dynamic> _myPendingFixtures = [];
   int? _currentUserId;
 
@@ -53,23 +53,21 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
   }
 
   Future<void> _loadFixtures() async {
-    setState(() => _loadingFixtures = true);
+    setState(() {
+      _loadingFixtures = true;
+      _loadError = null;
+    });
     try {
       final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
       final userJson = prefs.getString('user');
       if (userJson != null) {
         _currentUserId = jsonDecode(userJson)['id'];
       }
 
-      final response = await http.get(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/schedule'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
+      final res = await ApiClient.get('/leagues/${widget.leagueId}/schedule');
 
-      final data = jsonDecode(response.body);
-      if (response.statusCode == 200) {
-        final List allFixtures = data['schedule'];
+      if (res.statusCode == 200) {
+        final List allFixtures = res.data['schedule'];
         setState(() => _scheduleExists = allFixtures.isNotEmpty);
 
         final myFixtures = allFixtures.where((f) {
@@ -84,9 +82,15 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
         }).toList();
 
         setState(() => _myPendingFixtures = myFixtures);
+      } else {
+        // A real fetch failure — distinct from "there's genuinely no
+        // schedule yet" — must not silently fall through to free-pick mode.
+        setState(
+          () => _loadError = res.errorOr('Could not load the schedule.'),
+        );
       }
     } catch (err) {
-      // fall back to free mode silently
+      setState(() => _loadError = 'Could not reach the server.');
     } finally {
       setState(() => _loadingFixtures = false);
     }
@@ -213,16 +217,9 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
     setState(() => _submitting = true);
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/matches/report'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
+      final res = await ApiClient.post(
+        '/matches/report',
+        body: {
           'leagueId': widget.leagueId,
           'opponentId': _opponentId,
           'partnerId': _partnerId,
@@ -231,16 +228,11 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
           'opponentUnits': totalOpponentUnits,
           'iWon': iWon,
           'setScores': setScores,
-        }),
+        },
       );
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode != 201) {
-        _showAlert(
-          'Something went wrong',
-          data['error'] ?? 'Please try again.',
-        );
+      if (res.statusCode != 201) {
+        _showAlert('Something went wrong', res.errorOr('Please try again.'));
         return;
       }
 
@@ -287,6 +279,28 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
       return Scaffold(
         appBar: AppBar(title: const Text('Report Match')),
         body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (_loadError != null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Report Match')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_loadError!, textAlign: TextAlign.center),
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: _loadFixtures,
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          ),
+        ),
       );
     }
 

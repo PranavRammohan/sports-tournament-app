@@ -2,12 +2,11 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import 'report_match_screen.dart';
 import 'playoffs_screen.dart';
+import 'add_manual_match_screen.dart';
 
 class GroupsOverviewScreen extends StatefulWidget {
   final int leagueId;
@@ -28,27 +27,11 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
   Map<String, dynamic>? _league;
   List<dynamic> _groups = [];
   Map<int, List<dynamic>> _groupSchedules = {};
-  bool _groupsLocked = false;
-
-  bool _stage2Started = false;
-  String? _stage2ScheduleType;
-  int? _groupAdvanceCount;
-  bool _stage2IsKnockout = false;
-  List<dynamic> _stage2Leaderboard = [];
-  List<dynamic> _stage2Schedule = [];
 
   int? _currentUserId;
   bool _loading = true;
-  bool _startingStage2 = false;
+  String? _error;
   TabController? _tabController;
-
-  // Stage 2 setup form state (host only, pre-start).
-  final TextEditingController _advanceCountController = TextEditingController(
-    text: '2',
-  );
-  String _setupScheduleType = 'knockout';
-  final TextEditingController _setupMatchesPerPlayerController =
-      TextEditingController();
 
   @override
   void initState() {
@@ -59,88 +42,58 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
   @override
   void dispose() {
     _tabController?.dispose();
-    _advanceCountController.dispose();
-    _setupMatchesPerPlayerController.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final userJson = prefs.getString('user');
-      if (userJson != null) {
-        _currentUserId = jsonDecode(userJson)['id'];
-      }
+      // League and groups don't depend on each other — fetch concurrently.
+      final results = await Future.wait([
+        ApiClient.get('/leagues/${widget.leagueId}'),
+        ApiClient.get('/leagues/${widget.leagueId}/groups'),
+      ]);
+      final leagueRes = results[0];
+      final groupsRes = results[1];
 
-      final leagueRes = await http.get(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final leagueData = jsonDecode(leagueRes.body);
       if (leagueRes.statusCode == 200) {
-        _league = leagueData['league'];
+        _league = leagueRes.data['league'];
       }
 
-      final groupsRes = await http.get(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/groups'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final groupsData = jsonDecode(groupsRes.body);
       if (groupsRes.statusCode == 200) {
-        _groups = groupsData['groups'];
-        _groupsLocked = groupsData['groupsLocked'] == true;
+        _groups = groupsRes.data['groups'];
       }
 
-      final Map<int, List<dynamic>> schedules = {};
-      for (final g in _groups) {
-        final schedRes = await http.get(
-          Uri.parse(
-            '$baseApiUrl/leagues/${widget.leagueId}/groups/${g['id']}/schedule',
+      // Each non-knockout group's schedule fetch is independent of the
+      // others too — knockout groups render a bracket instead (fetched by
+      // PlayoffsScreen itself when the host/player opens that group's tab).
+      final scheduledGroups = _groups.where((g) => g['schedule_type'] != 'knockout').toList();
+      if (scheduledGroups.isNotEmpty) {
+        final schedResults = await Future.wait(
+          scheduledGroups.map(
+            (g) => ApiClient.get('/leagues/${widget.leagueId}/groups/${g['id']}/schedule'),
           ),
-          headers: {'Authorization': 'Bearer $token'},
         );
-        if (schedRes.statusCode == 200) {
-          schedules[g['id']] = jsonDecode(schedRes.body)['schedule'];
-        }
-      }
-      _groupSchedules = schedules;
-
-      final stage2Res = await http.get(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/stage2'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      if (stage2Res.statusCode == 200) {
-        final stage2Data = jsonDecode(stage2Res.body);
-        _stage2Started = stage2Data['stage2Started'] == true;
-        if (_stage2Started) {
-          _stage2ScheduleType = stage2Data['scheduleType'];
-          _groupAdvanceCount = stage2Data['groupAdvanceCount'];
-          _stage2IsKnockout = stage2Data['isKnockout'] == true;
-          _stage2Leaderboard = stage2Data['leaderboard'] ?? [];
-
-          if (!_stage2IsKnockout) {
-            final stage2SchedRes = await http.get(
-              Uri.parse(
-                '$baseApiUrl/leagues/${widget.leagueId}/stage2/schedule',
-              ),
-              headers: {'Authorization': 'Bearer $token'},
-            );
-            if (stage2SchedRes.statusCode == 200) {
-              _stage2Schedule = jsonDecode(stage2SchedRes.body)['schedule'];
-            }
+        final Map<int, List<dynamic>> schedules = {};
+        for (var i = 0; i < scheduledGroups.length; i++) {
+          final schedRes = schedResults[i];
+          if (schedRes.statusCode == 200) {
+            schedules[scheduledGroups[i]['id']] = schedRes.data['schedule'];
           }
         }
+        _groupSchedules = schedules;
       }
 
-      final newLength = _groups.length + 1;
-      if (_tabController == null || _tabController!.length != newLength) {
+      final newLength = _groups.length;
+      if (newLength > 0 && (_tabController == null || _tabController!.length != newLength)) {
         _tabController?.dispose();
         _tabController = TabController(length: newLength, vsync: this);
       }
     } catch (err) {
-      // fail silently, pull-to-refresh available
+      setState(() => _error = 'Could not reach the server.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -157,171 +110,62 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
     }
   }
 
-  Future<void> _startStage2({bool force = false}) async {
-    final advanceCount = int.tryParse(_advanceCountController.text.trim());
-    if (advanceCount == null || advanceCount < 1) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Enter how many players advance per group.'),
-        ),
-      );
-      return;
-    }
-    int? matchesPerPlayer;
-    if (_setupScheduleType == 'matches_per_player') {
-      matchesPerPlayer = int.tryParse(
-        _setupMatchesPerPlayerController.text.trim(),
-      );
-      if (matchesPerPlayer == null || matchesPerPlayer < 1) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Enter how many matches each player should play.'),
-          ),
-        );
-        return;
-      }
-    }
-
-    HapticFeedback.mediumImpact();
-    setState(() => _startingStage2 = true);
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/stage2/start'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
-          'advanceCount': advanceCount,
-          'scheduleType': _setupScheduleType,
-          'matchesPerPlayer': matchesPerPlayer,
-          'force': force,
-        }),
-      );
-      final data = jsonDecode(response.body);
-
-      if (!mounted) return;
-      if (response.statusCode == 201) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Next Round started!'),
-            backgroundColor: AppColors.success,
-          ),
-        );
-        _load();
-      } else if (data['incompleteMatches'] != null) {
-        setState(() => _startingStage2 = false);
-        final proceed = await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            title: const Text('Group play not finished yet'),
-            content: Text('${data['error']} Start the Next Round anyway?'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Start Anyway'),
-              ),
-            ],
-          ),
-        );
-        if (proceed == true) {
-          await _startStage2(force: true);
-        }
-        return;
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(data['error'] ?? 'Could not start the Next Round.'),
-            backgroundColor: AppColors.danger,
-          ),
-        );
-      }
-    } catch (err) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Network error.')));
-    } finally {
-      if (mounted) setState(() => _startingStage2 = false);
-    }
-  }
-
-  Future<void> _resetStage2() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        title: const Text('Reset the Next Round?'),
-        content: const Text(
-          'This reverses every result, rating change, and point earned in the Next Round, and wipes its schedule/bracket entirely. Group standings are untouched. You can then start the Next Round again with a different format, or leave it unstarted. This cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text(
-              'Reset',
-              style: TextStyle(color: AppColors.danger),
-            ),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-
-    HapticFeedback.mediumImpact();
-    setState(() => _startingStage2 = true);
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/stage2/reset'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
-
-      if (!mounted) return;
-      if (response.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(data['message'] ?? 'Next Round reset.'),
-            backgroundColor: AppColors.success,
-          ),
-        );
-        _load();
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(data['error'] ?? 'Could not reset the Next Round.'),
-            backgroundColor: AppColors.danger,
-          ),
-        );
-      }
-    } catch (err) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Network error.')));
-    } finally {
-      if (mounted) setState(() => _startingStage2 = false);
+  String _formatLabel(dynamic group) {
+    switch (group['schedule_type']) {
+      case 'matches_per_player':
+        return '${group['matches_per_player']} matches/player';
+      case 'knockout':
+        return 'Knockout';
+      case 'custom':
+        return 'Custom';
+      default:
+        return 'Round Robin';
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading || _tabController == null) {
+    if (_loading) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Groups')),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_error != null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Groups')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_error!, textAlign: TextAlign.center),
+                const SizedBox(height: 12),
+                TextButton(onPressed: _load, child: const Text('Retry')),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    if (_groups.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Groups')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              widget.isHost
+                  ? 'No groups yet. Create one from Manage Groups to get started.'
+                  : "The host hasn't created any groups yet.",
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+      );
+    }
+    if (_tabController == null) {
       return Scaffold(
         appBar: AppBar(title: const Text('Groups')),
         body: const Center(child: CircularProgressIndicator()),
@@ -337,24 +181,33 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
           indicatorColor: AppColors.accent,
           labelColor: Colors.white,
           unselectedLabelColor: Colors.white70,
-          tabs: [
-            ..._groups.map((g) => Tab(text: g['name'])),
-            const Tab(text: 'Next Round'),
-          ],
+          tabs: _groups.map<Tab>((g) => Tab(text: g['name'])).toList(),
         ),
       ),
       body: TabBarView(
         controller: _tabController,
-        children: [..._groups.map((g) => _buildGroupTab(g)), _buildStage2Tab()],
+        children: _groups.map<Widget>((g) => _buildGroupTab(g)).toList(),
       ),
     );
   }
 
   Widget _buildGroupTab(dynamic group) {
+    if (group['schedule_type'] == 'knockout') {
+      return PlayoffsScreen(
+        leagueId: widget.leagueId,
+        isHost: widget.isHost,
+        format: 'singles',
+        groupId: group['id'] as int,
+        groupName: group['name'],
+        groupLocked: group['locked'] == true,
+      );
+    }
+
     final members = group['members'] as List;
     final schedule = _groupSchedules[group['id']] ?? [];
     final isMemberOfGroup = members.any((m) => m['id'] == _currentUserId);
     final hostEntersScores = _league?['host_enters_scores'] == true;
+    final isCustom = group['schedule_type'] == 'custom';
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return RefreshIndicator(
@@ -362,7 +215,24 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Text('Standings', style: Theme.of(context).textTheme.titleMedium),
+          Row(
+            children: [
+              Expanded(
+                child: Text('Standings', style: Theme.of(context).textTheme.titleMedium),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  _formatLabel(group),
+                  style: const TextStyle(fontSize: 11, color: AppColors.accent, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 8),
           if (members.isEmpty)
             const Text('No players in this group yet.')
@@ -425,6 +295,26 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
+              if (widget.isHost && isCustom)
+                TextButton.icon(
+                  onPressed: () async {
+                    HapticFeedback.selectionClick();
+                    final added = await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => AddManualMatchScreen(
+                          leagueId: widget.leagueId,
+                          format: 'singles',
+                          members: members,
+                          groupId: group['id'] as int,
+                        ),
+                      ),
+                    );
+                    if (added == true) _load();
+                  },
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('Add Match'),
+                ),
               if (!hostEntersScores && isMemberOfGroup)
                 TextButton.icon(
                   onPressed: () async {
@@ -505,23 +395,16 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
 
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.put(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/schedule/${f['id']}'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
+      final res = await ApiClient.put(
+        '/leagues/${widget.leagueId}/schedule/${f['id']}',
+        body: {
           'player1Id': result['player1Id'],
           'player2Id': result['player2Id'],
           'scheduledTime': result['scheduledTime'],
-        }),
+        },
       );
-      final data = jsonDecode(response.body);
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Match updated.'),
@@ -532,7 +415,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not update match.'),
+            content: Text(res.errorOr('Could not update match.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -573,17 +456,9 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
 
     HapticFeedback.mediumImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.delete(
-        Uri.parse(
-          '$baseApiUrl/leagues/${widget.leagueId}/schedule/$scheduledMatchId',
-        ),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.delete('/leagues/${widget.leagueId}/schedule/$scheduledMatchId');
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Match removed.'),
@@ -594,7 +469,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not remove match.'),
+            content: Text(res.errorOr('Could not remove match.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -635,25 +510,15 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
 
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.put(
-        Uri.parse('$baseApiUrl/matches/${f['match_id']}/edit'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(result),
-      );
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.put('/matches/${f['match_id']}/edit', body: result);
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              data['warning'] ?? 'Score updated and ratings recalculated.',
+              res.data?['warning'] ?? 'Score updated and ratings recalculated.',
             ),
-            backgroundColor: data['warning'] != null
+            backgroundColor: res.data?['warning'] != null
                 ? AppColors.warning
                 : AppColors.success,
           ),
@@ -662,7 +527,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not update score.'),
+            content: Text(res.errorOr('Could not update score.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -691,15 +556,9 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
 
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/matches/report-as-host'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
+      final res = await ApiClient.post(
+        '/matches/report-as-host',
+        body: {
           'leagueId': widget.leagueId,
           'player1Id': f['player1_id'],
           'player1PartnerId': null,
@@ -709,11 +568,10 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
           'player2Units': result['player2Units'],
           'player1Won': result['player1Won'],
           'setScores': result['setScores'],
-        }),
+        },
       );
-      final data = jsonDecode(response.body);
       if (!mounted) return;
-      if (response.statusCode == 200 || response.statusCode == 201) {
+      if (res.statusCode == 200 || res.statusCode == 201) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Match confirmed!'),
@@ -724,7 +582,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not enter score.'),
+            content: Text(res.errorOr('Could not enter score.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -765,19 +623,13 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
 
     HapticFeedback.mediumImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.delete(
-        Uri.parse('$baseApiUrl/matches/$matchId'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.delete('/matches/$matchId');
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['warning'] ?? 'Match deleted.'),
-            backgroundColor: data['warning'] != null
+            content: Text(res.data?['warning'] ?? 'Match deleted.'),
+            backgroundColor: res.data?['warning'] != null
                 ? AppColors.warning
                 : AppColors.success,
           ),
@@ -786,7 +638,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not delete match.'),
+            content: Text(res.errorOr('Could not delete match.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -980,295 +832,6 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
       ),
     );
   }
-
-  Widget _buildStage2Tab() {
-    if (!_groupsLocked) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-            'Lock groups and finish group play before the Next Round can start.',
-            textAlign: TextAlign.center,
-          ),
-        ),
-      );
-    }
-
-    if (!_stage2Started) {
-      if (!widget.isHost) {
-        return const Center(
-          child: Padding(
-            padding: EdgeInsets.all(24),
-            child: Text(
-              "The host hasn't started the Next Round yet.",
-              textAlign: TextAlign.center,
-            ),
-          ),
-        );
-      }
-      return _buildStage2SetupForm();
-    }
-
-    if (_stage2IsKnockout) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Text(
-                'The Next Round is a knockout bracket.',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: () {
-                  HapticFeedback.selectionClick();
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => PlayoffsScreen(
-                        leagueId: widget.leagueId,
-                        isHost: widget.isHost,
-                        format: 'singles',
-                      ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.emoji_events_outlined),
-                label: const Text('View Bracket'),
-              ),
-              if (widget.isHost) ...[
-                const SizedBox(height: 8),
-                TextButton.icon(
-                  onPressed: _startingStage2 ? null : _resetStage2,
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.danger,
-                  ),
-                  icon: const Icon(Icons.restart_alt, size: 18),
-                  label: const Text('Reset Next Round'),
-                ),
-              ],
-            ],
-          ),
-        ),
-      );
-    }
-
-    final hostEntersScores = _league?['host_enters_scores'] == true;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isQualifier = _stage2Leaderboard.any(
-      (m) => m['id'] == _currentUserId,
-    );
-
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          if (widget.isHost)
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: _startingStage2 ? null : _resetStage2,
-                style: TextButton.styleFrom(foregroundColor: AppColors.danger),
-                icon: const Icon(Icons.restart_alt, size: 18),
-                label: const Text('Reset Next Round'),
-              ),
-            ),
-          Text('Standings', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          if (_stage2Leaderboard.isEmpty)
-            const Text('No results yet.')
-          else
-            ..._stage2Leaderboard.asMap().entries.map((entry) {
-              final rank = entry.key + 1;
-              final m = entry.value;
-              return Container(
-                margin: const EdgeInsets.only(bottom: 6),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).cardColor,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey.shade200),
-                  boxShadow: AppShadows.card(isDark),
-                ),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 20,
-                      child: Text(
-                        '$rank',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    Expanded(
-                      child: Text(
-                        m['username'],
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                    Text(
-                      '${m['matches_played']} matches · ${m['wins']}W ${m['losses']}L',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: AppColors.textGrey,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      '${m['points']} pts',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.accent,
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }),
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Schedule',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-              ),
-              if (!hostEntersScores && isQualifier)
-                TextButton.icon(
-                  onPressed: () async {
-                    HapticFeedback.selectionClick();
-                    final reported = await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ReportMatchScreen(
-                          leagueId: widget.leagueId,
-                          format: 'singles',
-                          sport: _league?['sport'] ?? '',
-                          members: _stage2Leaderboard,
-                        ),
-                      ),
-                    );
-                    if (reported == true) _load();
-                  },
-                  icon: const Icon(Icons.sports_score, size: 16),
-                  label: const Text('Report'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          if (_stage2Schedule.isEmpty)
-            const Text('No matches scheduled yet.')
-          else
-            ..._stage2Schedule.map(
-              (f) => _buildFixtureRow(
-                f,
-                isDark,
-                isHost: widget.isHost,
-                members: _stage2Leaderboard,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStage2SetupForm() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Text(
-          'Set Up the Next Round',
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'Choose how many players advance from each group, and what format they\'ll play in this stage.',
-          style: TextStyle(fontSize: 12),
-        ),
-        const SizedBox(height: 16),
-        TextField(
-          controller: _advanceCountController,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(
-            labelText: 'Players advancing per group',
-            isDense: true,
-            hintText: 'e.g. 2',
-          ),
-        ),
-        const SizedBox(height: 16),
-        Text('Format', style: Theme.of(context).textTheme.titleMedium),
-        RadioListTile<String>(
-          contentPadding: EdgeInsets.zero,
-          value: 'knockout',
-          groupValue: _setupScheduleType,
-          title: const Text('Knockout'),
-          subtitle: const Text(
-            'Needs an exact power-of-2 number of qualifiers',
-            style: TextStyle(fontSize: 11),
-          ),
-          onChanged: (v) => setState(() => _setupScheduleType = v!),
-        ),
-        RadioListTile<String>(
-          contentPadding: EdgeInsets.zero,
-          value: 'round_robin',
-          groupValue: _setupScheduleType,
-          title: const Text('Round Robin'),
-          subtitle: const Text(
-            'Everyone plays everyone',
-            style: TextStyle(fontSize: 11),
-          ),
-          onChanged: (v) => setState(() => _setupScheduleType = v!),
-        ),
-        RadioListTile<String>(
-          contentPadding: EdgeInsets.zero,
-          value: 'matches_per_player',
-          groupValue: _setupScheduleType,
-          title: const Text('Fixed matches per player'),
-          onChanged: (v) => setState(() => _setupScheduleType = v!),
-        ),
-        if (_setupScheduleType == 'matches_per_player')
-          Padding(
-            padding: const EdgeInsets.only(top: 8, bottom: 4),
-            child: TextField(
-              controller: _setupMatchesPerPlayerController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Matches per player',
-                isDense: true,
-                hintText: 'e.g. 3',
-              ),
-            ),
-          ),
-        RadioListTile<String>(
-          contentPadding: EdgeInsets.zero,
-          value: 'custom',
-          groupValue: _setupScheduleType,
-          title: const Text('Custom — I\'ll decide who plays who'),
-          onChanged: (v) => setState(() => _setupScheduleType = v!),
-        ),
-        const SizedBox(height: 20),
-        ElevatedButton(
-          onPressed: _startingStage2 ? null : () => _startStage2(),
-          child: _startingStage2
-              ? const SizedBox(
-                  height: 18,
-                  width: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
-                )
-              : const Text('Start Next Round'),
-        ),
-      ],
-    );
-  }
 }
 
 class _SetScore {
@@ -1295,6 +858,7 @@ class _HostScoreDialog extends StatefulWidget {
 
 class _HostScoreDialogState extends State<_HostScoreDialog> {
   late List<_SetScore> _sets;
+  String? _error;
 
   @override
   void initState() {
@@ -1320,6 +884,14 @@ class _HostScoreDialogState extends State<_HostScoreDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: AppColors.danger, fontSize: 13),
+                ),
+              ),
             ..._sets.asMap().entries.map((entry) {
               final index = entry.key;
               final set = entry.value;
@@ -1388,7 +960,14 @@ class _HostScoreDialogState extends State<_HostScoreDialog> {
             for (final s in _sets) {
               final p1 = int.tryParse(s.myScore.text.trim());
               final p2 = int.tryParse(s.opponentScore.text.trim());
-              if (p1 == null || p2 == null || p1 == p2) return;
+              if (p1 == null || p2 == null) {
+                setState(() => _error = 'Please fill in every game score.');
+                return;
+              }
+              if (p1 == p2) {
+                setState(() => _error = 'A game cannot end in a tie.');
+                return;
+              }
               setScores.add({'me': p1, 'opponent': p2});
               totalP1 += p1;
               totalP2 += p2;
@@ -1398,7 +977,10 @@ class _HostScoreDialogState extends State<_HostScoreDialog> {
                 setsWonByP2++;
               }
             }
-            if (setsWonByP1 == setsWonByP2) return;
+            if (setsWonByP1 == setsWonByP2) {
+              setState(() => _error = 'The match needs an overall winner.');
+              return;
+            }
 
             Navigator.pop(context, {
               'player1Units': totalP1,
@@ -1436,6 +1018,7 @@ class _EditGroupFixtureDialogState extends State<_EditGroupFixtureDialog> {
   int? _player1Id;
   int? _player2Id;
   DateTime? _scheduledDateTime;
+  String? _error;
 
   @override
   void initState() {
@@ -1523,6 +1106,14 @@ class _EditGroupFixtureDialogState extends State<_EditGroupFixtureDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: AppColors.danger, fontSize: 13),
+                ),
+              ),
             DropdownButtonFormField<int>(
               initialValue: _player1Id,
               decoration: const InputDecoration(
@@ -1585,9 +1176,12 @@ class _EditGroupFixtureDialogState extends State<_EditGroupFixtureDialog> {
         ),
         ElevatedButton(
           onPressed: () {
-            if (_player1Id == null ||
-                _player2Id == null ||
-                _player1Id == _player2Id) {
+            if (_player1Id == null || _player2Id == null) {
+              setState(() => _error = 'Please select both players.');
+              return;
+            }
+            if (_player1Id == _player2Id) {
+              setState(() => _error = 'The same player can\'t appear in both slots.');
               return;
             }
             Navigator.pop(context, {
