@@ -6,6 +6,9 @@ import '../main.dart';
 import '../api_client.dart';
 import 'report_match_screen.dart';
 import '../widgets/bracket_view.dart';
+import '../widgets/match_badges.dart';
+import '../widgets/loading_skeleton.dart';
+import '../widgets/friendly_empty_state.dart';
 import 'add_manual_match_screen.dart';
 
 class GroupsOverviewScreen extends StatefulWidget {
@@ -178,7 +181,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
     if (_loading) {
       return Scaffold(
         appBar: AppBar(title: const Text('Groups')),
-        body: const Center(child: CircularProgressIndicator()),
+        body: const SkeletonList(),
       );
     }
     if (_error != null) {
@@ -202,23 +205,19 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
     if (_groups.isEmpty) {
       return Scaffold(
         appBar: AppBar(title: const Text('Groups')),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              widget.isHost
-                  ? 'No groups yet. Create one from Manage Groups to get started.'
-                  : "The host hasn't created any groups yet.",
-              textAlign: TextAlign.center,
-            ),
-          ),
+        body: FriendlyEmptyState(
+          icon: Icons.groups_outlined,
+          title: 'No groups yet',
+          subtitle: widget.isHost
+              ? 'Create one from Manage Groups to get started.'
+              : "The host hasn't created any groups yet.",
         ),
       );
     }
     if (_tabController == null) {
       return Scaffold(
         appBar: AppBar(title: const Text('Groups')),
-        body: const Center(child: CircularProgressIndicator()),
+        body: const SkeletonList(),
       );
     }
 
@@ -301,7 +300,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                 decoration: BoxDecoration(
                   color: Theme.of(context).cardColor,
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey.shade200),
+                  border: Border.all(color: AppColors.cardBorder(isDark)),
                   boxShadow: AppShadows.card(isDark),
                 ),
                 child: Row(
@@ -328,13 +327,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                     ),
                     if (pointsEnabled) ...[
                       const SizedBox(width: 10),
-                      Text(
-                        '${m['points']} pts',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.accent,
-                        ),
-                      ),
+                      PointsBadge(points: m['points'], fontSize: 14),
                     ],
                   ],
                 ),

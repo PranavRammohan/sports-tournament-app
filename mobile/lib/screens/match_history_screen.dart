@@ -247,7 +247,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                                         color: Theme.of(context).cardColor,
                                         borderRadius: BorderRadius.circular(8),
                                         border: Border.all(
-                                          color: Colors.grey.shade200,
+                                          color: AppColors.cardBorder(isDark),
                                         ),
                                         boxShadow: AppShadows.card(isDark),
                                       ),

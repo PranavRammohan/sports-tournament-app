@@ -5,6 +5,9 @@ import '../main.dart';
 import '../api_client.dart';
 import '../utils.dart';
 import '../widgets/sport_icon.dart';
+import '../widgets/loading_skeleton.dart';
+import '../widgets/friendly_empty_state.dart';
+import '../widgets/fade_in_list_item.dart';
 import '../constants/areas.dart';
 import 'create_league_screen.dart';
 import 'league_detail_screen.dart';
@@ -356,7 +359,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
         ),
         Expanded(
           child: _loading
-              ? const Center(child: CircularProgressIndicator())
+              ? const SkeletonList()
               : _error != null
               ? Center(
                   child: Padding(
@@ -395,14 +398,12 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                 SizedBox(
                                   height:
                                       MediaQuery.of(context).size.height * 0.4,
-                                  child: Center(
-                                    child: Text(
-                                      query.isEmpty
-                                          ? 'No tournaments match these filters.'
-                                          : 'No tournaments match "$_searchQuery".',
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(color: subtleTextColor),
-                                    ),
+                                  child: FriendlyEmptyState(
+                                    icon: Icons.search_off,
+                                    title: query.isEmpty
+                                        ? 'No tournaments match these filters.'
+                                        : 'No tournaments match "$_searchQuery".',
+                                    subtitle: 'Try a different area, sport, or search term.',
                                   ),
                                 ),
                               ],
@@ -416,7 +417,9 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                 final league = visibleLeagues[index];
                                 final alreadyJoined =
                                     league['is_member'] == true;
-                                return Container(
+                                return FadeInListItem(
+                                  index: index,
+                                  child: Container(
                                   decoration: BoxDecoration(
                                     borderRadius: BorderRadius.circular(8),
                                     border: Border.all(color: borderColor),
@@ -543,6 +546,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                         ),
                                       ),
                                     ),
+                                  ),
                                   ),
                                 );
                               },

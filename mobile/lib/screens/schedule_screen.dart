@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../api_client.dart';
+import '../widgets/loading_skeleton.dart';
 
 class ScheduleScreen extends StatefulWidget {
   final int leagueId;
@@ -111,7 +112,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Schedule')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const SkeletonList()
           : RefreshIndicator(
               onRefresh: _loadSchedule,
               child: ListView(

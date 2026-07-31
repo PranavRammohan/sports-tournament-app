@@ -1,7 +1,15 @@
 // sport_icon.dart
 // Shared helper for showing a sport's icon consistently across the app.
-// Badminton/Tennis/Table Tennis use emoji (they render fine).
-// Pickleball has no standard emoji yet, so we draw a simple original icon.
+// Badminton/Tennis/Table Tennis render as emoji by default (they render
+// fine in their natural multi-color form) — but a plain emoji Text widget
+// ignores any `color:` override, so it could never be tinted to match a
+// badge/chip's accent color. When a `color` IS passed, tennis switches to
+// the real Material `sports_tennis` icon (a proper tintable vector), and
+// the other emoji get wrapped in a ColorFiltered srcIn tint that turns the
+// glyph into a solid silhouette of that color — same trick used for any
+// icon font, applied to emoji. Pickleball has no emoji at all, so it's
+// always the hand-drawn PickleballIcon below, which now also honors an
+// optional single-color override the same way.
 import 'package:flutter/material.dart';
 
 const Map<String, String> _sportEmojis = {
@@ -12,32 +20,48 @@ const Map<String, String> _sportEmojis = {
 
 Widget sportIcon(String sportKey, {double size = 20, Color? color}) {
   final key = sportKey.toLowerCase().replaceAll(' ', '_');
+
   if (key == 'pickleball') {
-    return PickleballIcon(size: size);
+    return PickleballIcon(size: size, color: color);
   }
-  return Text(_sportEmojis[key] ?? '🏅', style: TextStyle(fontSize: size));
+
+  if (key == 'tennis' && color != null) {
+    return Icon(Icons.sports_tennis, size: size, color: color);
+  }
+
+  final emoji = Text(_sportEmojis[key] ?? '🏅', style: TextStyle(fontSize: size));
+  if (color == null) return emoji;
+  return ColorFiltered(
+    colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+    child: emoji,
+  );
 }
 
 class PickleballIcon extends StatelessWidget {
   final double size;
+  final Color? color;
 
-  const PickleballIcon({super.key, this.size = 20});
+  const PickleballIcon({super.key, this.size = 20, this.color});
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       width: size,
       height: size,
-      child: CustomPaint(painter: _PickleballPainter()),
+      child: CustomPaint(painter: _PickleballPainter(color)),
     );
   }
 }
 
 class _PickleballPainter extends CustomPainter {
+  final Color? tint;
+  _PickleballPainter(this.tint);
+
   @override
   void paint(Canvas canvas, Size size) {
-    // Paddle face — teal
-    final paddlePaint = Paint()..color = const Color(0xFF0F766E);
+    // Natural multi-color illustration when no tint is requested; a single
+    // flat color for every shape when one is (e.g. inside an accent chip).
+    final paddlePaint = Paint()..color = tint ?? const Color(0xFF0F766E);
     final paddleRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(
         size.width * 0.04,
@@ -49,8 +73,7 @@ class _PickleballPainter extends CustomPainter {
     );
     canvas.drawRRect(paddleRect, paddlePaint);
 
-    // Handle — dark gray
-    final handlePaint = Paint()..color = const Color(0xFF374151);
+    final handlePaint = Paint()..color = tint ?? const Color(0xFF374151);
     final handleRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(
         size.width * 0.30,
@@ -62,14 +85,13 @@ class _PickleballPainter extends CustomPainter {
     );
     canvas.drawRRect(handleRect, handlePaint);
 
-    // Ball — yellow-green, like a real pickleball
-    final ballPaint = Paint()..color = const Color(0xFFCFE94A);
+    final ballPaint = Paint()..color = tint ?? const Color(0xFFCFE94A);
     final ballCenter = Offset(size.width * 0.80, size.height * 0.78);
     final ballRadius = size.width * 0.16;
     canvas.drawCircle(ballCenter, ballRadius, ballPaint);
 
-    // Ball holes/dimples — darker olive dots
-    final holePaint = Paint()..color = const Color(0xFF5B6B0E);
+    final holePaint = Paint()
+      ..color = tint ?? const Color(0xFF5B6B0E);
     final holeOffsets = [
       Offset(
         ballCenter.dx - ballRadius * 0.4,
@@ -87,5 +109,6 @@ class _PickleballPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _PickleballPainter oldDelegate) =>
+      oldDelegate.tint != tint;
 }

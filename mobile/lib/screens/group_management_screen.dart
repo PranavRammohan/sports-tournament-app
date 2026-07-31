@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../main.dart';
 import '../api_client.dart';
+import '../widgets/loading_skeleton.dart';
 
 class GroupManagementScreen extends StatefulWidget {
   final int leagueId;
@@ -916,7 +917,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Manage Groups')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const SkeletonList()
           : _error != null
           ? Center(
               child: Padding(
@@ -1005,7 +1006,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: AppColors.cardBorder(isDark)),
         boxShadow: AppShadows.card(isDark),
       ),
       child: Padding(
@@ -1149,7 +1150,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: AppColors.cardBorder(isDark)),
         boxShadow: AppShadows.card(isDark),
       ),
       child: Row(

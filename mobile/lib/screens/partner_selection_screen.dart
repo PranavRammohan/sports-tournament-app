@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../config.dart';
+import '../widgets/loading_skeleton.dart';
 
 // Handles both doubles partner-selection flows:
 // - 'self_select': players send/accept/decline partner requests themselves
@@ -284,7 +285,7 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Partners')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const SkeletonList()
           : _error != null
           ? Center(
               child: Padding(
@@ -492,7 +493,7 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: AppColors.cardBorder(isDark)),
         boxShadow: AppShadows.card(isDark),
       ),
       child: ListTile(

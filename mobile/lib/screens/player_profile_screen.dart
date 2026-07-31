@@ -1,11 +1,13 @@
 // player_profile_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import '../widgets/sport_icon.dart';
+import '../widgets/player_avatar.dart';
+import '../widgets/match_badges.dart';
+import '../widgets/loading_skeleton.dart';
 
 class PlayerProfileScreen extends StatefulWidget {
   final int userId;
@@ -41,43 +43,35 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
     });
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final userJson = prefs.getString('user');
+      final userJson = (await SharedPreferences.getInstance()).getString(
+        'user',
+      );
       if (userJson != null) {
         _currentUserId = jsonDecode(userJson)['id'];
       }
 
-      final response = await http.get(
-        Uri.parse('$baseApiUrl/sports/user/${widget.userId}'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.get('/sports/user/${widget.userId}');
 
-      if (response.statusCode != 200) {
-        setState(
-          () => _error = data['error'] ?? 'Could not load this profile.',
-        );
+      if (res.statusCode != 200) {
+        setState(() => _error = res.errorOr('Could not load this profile.'));
         return;
       }
 
       setState(() {
-        _user = data['user'];
-        _sports = data['sports'];
+        _user = res.data['user'];
+        _sports = res.data['sports'];
       });
 
       // Head-to-head only makes sense when viewing someone else's profile.
       if (_currentUserId != null && _currentUserId != widget.userId) {
         try {
-          final h2hResponse = await http.get(
-            Uri.parse('$baseApiUrl/matches/head-to-head/${widget.userId}'),
-            headers: {'Authorization': 'Bearer $token'},
+          final h2hRes = await ApiClient.get(
+            '/matches/head-to-head/${widget.userId}',
           );
-          if (h2hResponse.statusCode == 200) {
-            final h2hData = jsonDecode(h2hResponse.body);
+          if (h2hRes.statusCode == 200) {
             setState(() {
-              _headToHead = h2hData['headToHead'];
-              _headToHeadMatches = h2hData['matches'];
+              _headToHead = h2hRes.data['headToHead'];
+              _headToHeadMatches = h2hRes.data['matches'];
             });
           }
         } catch (err) {
@@ -114,12 +108,19 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
     return Scaffold(
       appBar: AppBar(title: Text(_user?['username'] ?? 'Player')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const SkeletonList()
           : _error != null
           ? Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),
-                child: Text(_error!, textAlign: TextAlign.center),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_error!, textAlign: TextAlign.center),
+                    const SizedBox(height: 12),
+                    TextButton(onPressed: _load, child: const Text('Retry')),
+                  ],
+                ),
               ),
             )
           : _buildContent(context),
@@ -156,22 +157,11 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
             ),
             child: Column(
               children: [
-                CircleAvatar(
+                PlayerAvatar(
+                  username: _user?['username'] ?? '?',
+                  profilePicUrl: hasProfilePic ? profilePicUrl : null,
                   radius: 30,
                   backgroundColor: Colors.white,
-                  backgroundImage: hasProfilePic
-                      ? NetworkImage(profilePicUrl)
-                      : null,
-                  child: !hasProfilePic
-                      ? Text(
-                          (_user?['username'] ?? '?')[0].toUpperCase(),
-                          style: const TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.primary,
-                          ),
-                        )
-                      : null,
                 ),
                 const SizedBox(height: 12),
                 Text(
@@ -409,21 +399,7 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
       ),
       child: Row(
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: iWon ? AppColors.success : AppColors.danger,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text(
-              iWon ? 'WIN' : 'LOSS',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 9,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
+          WinLossPill(won: iWon, dense: true),
           const SizedBox(width: 8),
           sportIcon(m['sport'], size: 14),
           const SizedBox(width: 6),

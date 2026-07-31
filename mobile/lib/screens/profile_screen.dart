@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
 import '../widgets/sport_icon.dart';
+import '../widgets/player_avatar.dart';
+import '../widgets/loading_skeleton.dart';
 import 'add_sport_screen.dart';
 import 'edit_profile_screen.dart';
 
@@ -136,7 +138,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ],
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const SkeletonList()
           : _error != null
           ? Center(child: Text(_error!))
           : RefreshIndicator(
@@ -177,22 +179,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                           ),
                         ),
-                        CircleAvatar(
+                        PlayerAvatar(
+                          username: _user?['username'] ?? '?',
+                          profilePicUrl: hasProfilePic ? profilePicUrl : null,
                           radius: 30,
                           backgroundColor: Colors.white,
-                          backgroundImage: hasProfilePic
-                              ? NetworkImage(profilePicUrl)
-                              : null,
-                          child: !hasProfilePic
-                              ? Text(
-                                  (_user?['username'] ?? '?')[0].toUpperCase(),
-                                  style: const TextStyle(
-                                    fontSize: 24,
-                                    fontWeight: FontWeight.bold,
-                                    color: AppColors.primary,
-                                  ),
-                                )
-                              : null,
                         ),
                         const SizedBox(height: 12),
                         Text(

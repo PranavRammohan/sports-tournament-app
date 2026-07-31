@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../config.dart';
+import '../widgets/loading_skeleton.dart';
 
 class AddPlayersScreen extends StatefulWidget {
   final int leagueId;
@@ -158,7 +159,7 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
             ),
             Expanded(
               child: _searching
-                  ? const Center(child: CircularProgressIndicator())
+                  ? const SkeletonList(count: 3)
                   : _results.isEmpty
                   ? Center(
                       child: Padding(

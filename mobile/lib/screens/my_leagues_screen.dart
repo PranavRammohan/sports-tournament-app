@@ -7,6 +7,7 @@ import '../utils.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
+import '../widgets/fade_in_list_item.dart';
 import 'league_detail_screen.dart';
 import 'browse_leagues_screen.dart';
 import 'join_by_code_screen.dart';
@@ -145,19 +146,14 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
                       itemBuilder: (context, index) {
                         final league = _leagues[index];
                         final isCompleted = league['status'] == 'completed';
-                        return TweenAnimationBuilder<double>(
-                          tween: Tween(begin: 0, end: 1),
-                          duration: Duration(
-                            milliseconds: 200 + (index * 40).clamp(0, 400),
-                          ),
-                          builder: (context, value, child) =>
-                              Opacity(opacity: value, child: child),
+                        return FadeInListItem(
+                          index: index,
                           child: Opacity(
                             opacity: isCompleted ? 0.65 : 1.0,
                             child: Container(
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.grey.shade200),
+                                border: Border.all(color: AppColors.cardBorder(isDark)),
                                 boxShadow: AppShadows.card(isDark),
                               ),
                               child: Material(

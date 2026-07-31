@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
+import '../widgets/loading_skeleton.dart';
 
 class ReportMatchScreen extends StatefulWidget {
   final int leagueId;
@@ -278,7 +279,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
     if (_loadingFixtures) {
       return Scaffold(
         appBar: AppBar(title: const Text('Report Match')),
-        body: const Center(child: CircularProgressIndicator()),
+        body: const SkeletonList(),
       );
     }
 

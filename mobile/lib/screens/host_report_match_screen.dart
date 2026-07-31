@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../main.dart';
 import '../api_client.dart';
+import '../widgets/friendly_empty_state.dart';
 
 class HostReportMatchScreen extends StatefulWidget {
   final int leagueId;
@@ -166,15 +167,9 @@ class _HostReportMatchScreenState extends State<HostReportMatchScreen> {
     if (widget.pendingFixtures.isEmpty) {
       return Scaffold(
         appBar: AppBar(title: const Text('Enter Match Score')),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              'No pending scheduled matches to enter.',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-          ),
+        body: const FriendlyEmptyState(
+          icon: Icons.sports_score,
+          title: 'No pending scheduled matches to enter.',
         ),
       );
     }

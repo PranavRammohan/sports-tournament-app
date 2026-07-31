@@ -8,6 +8,10 @@ import '../main.dart';
 import '../api_client.dart';
 import '../utils.dart';
 import '../widgets/sport_icon.dart';
+import '../widgets/player_avatar.dart';
+import '../widgets/match_badges.dart';
+import '../widgets/loading_skeleton.dart';
+import '../widgets/friendly_empty_state.dart';
 import 'report_match_screen.dart';
 import 'playoffs_screen.dart';
 import 'regenerate_schedule_dialog.dart';
@@ -1275,7 +1279,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     final isHost = _league != null && _league!['created_by'] == _currentUserId;
 
     if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(body: SkeletonList());
     }
     if (_error != null) {
       return Scaffold(
@@ -1386,7 +1390,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
             decoration: BoxDecoration(
               color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey.shade200),
+              border: Border.all(color: AppColors.cardBorder(isDark)),
               boxShadow: AppShadows.card(isDark),
             ),
             child: Column(
@@ -1473,22 +1477,30 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 ),
                 if (_league!['host_phone'] != null) ...[
                   const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.phone_outlined,
-                        size: 14,
-                        color: AppColors.textGrey,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        _league!['host_phone'],
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: AppColors.textGrey,
+                  InkWell(
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      launchPhoneCall(_league!['host_phone'] as String);
+                    },
+                    borderRadius: BorderRadius.circular(4),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.phone_outlined,
+                          size: 14,
+                          color: AppColors.primaryLight,
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 4),
+                        Text(
+                          _league!['host_phone'],
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.primaryLight,
+                            decoration: TextDecoration.underline,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
                 if (_isLeagueStyle) ...[
@@ -1522,7 +1534,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                     decoration: BoxDecoration(
                       color: AppColors.background,
                       borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: Colors.grey.shade200),
+                      border: Border.all(color: AppColors.cardBorder(isDark)),
                     ),
                     child: Row(
                       children: [
@@ -1858,7 +1870,11 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           if (_isDoublesLeague && _showPairs)
             _buildPairLeaderboardList(isDark)
           else if (_leaderboard.isEmpty)
-            const Text('No members yet.')
+            const FriendlyEmptyState(
+              icon: Icons.people_outline,
+              title: 'No members yet',
+              subtitle: 'Players will show up here once they join.',
+            )
           else
             ..._leaderboard.asMap().entries.map((entry) {
               final rank = entry.key + 1;
@@ -1879,7 +1895,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 decoration: BoxDecoration(
                   color: Theme.of(context).cardColor,
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey.shade200),
+                  border: Border.all(color: AppColors.cardBorder(isDark)),
                   boxShadow: AppShadows.card(isDark),
                 ),
                 child: Material(
@@ -1941,14 +1957,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
                             if (_isLeagueStyle && _pointsEnabled)
-                              Text(
-                                '${player['points']} pts',
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.accent,
-                                ),
-                              ),
+                              PointsBadge(points: player['points']),
                             Text(
                               'Rating: ${player['rating']}',
                               style: TextStyle(
@@ -1988,34 +1997,19 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   }
 
   Widget _playerAvatar(dynamic player, double radius) {
-    final picUrl = player['profile_pic_url'];
-    final hasPic = picUrl != null && (picUrl as String).isNotEmpty;
-    final username = (player['username'] ?? '?') as String;
-    return CircleAvatar(
+    return PlayerAvatar(
+      username: (player['username'] ?? '?') as String,
+      profilePicUrl: player['profile_pic_url'] as String?,
       radius: radius,
-      backgroundColor: AppColors.primary.withValues(alpha: 0.15),
-      backgroundImage: hasPic ? NetworkImage(picUrl) : null,
-      child: !hasPic
-          ? Text(
-              username.isNotEmpty ? username[0].toUpperCase() : '?',
-              style: TextStyle(
-                fontSize: radius * 0.8,
-                fontWeight: FontWeight.bold,
-                color: AppColors.primary,
-              ),
-            )
-          : null,
     );
   }
 
   Widget _buildPairLeaderboardList(bool isDark) {
     if (_pairLeaderboard == null || _pairLeaderboard!.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        child: Text(
-          'No confirmed doubles matches yet — pairs will appear here once matches are played.',
-          style: Theme.of(context).textTheme.bodyMedium,
-        ),
+      return const FriendlyEmptyState(
+        icon: Icons.groups_outlined,
+        title: 'No confirmed doubles matches yet',
+        subtitle: 'Pairs will appear here once matches are played.',
       );
     }
 
@@ -2037,40 +2031,57 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           decoration: BoxDecoration(
             color: Theme.of(context).cardColor,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.grey.shade200),
+            border: Border.all(color: AppColors.cardBorder(isDark)),
             boxShadow: AppShadows.card(isDark),
           ),
-          child: ListTile(
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 0,
-            ),
-            leading: CircleAvatar(
-              radius: 15,
-              backgroundColor: rankColor,
-              child: Text(
-                '$rank',
-                style: TextStyle(
-                  color: rankTextColor,
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 0,
+              ),
+              // Tapping a pair opens the first partner's profile — there's
+              // no single "team profile" screen, so this is the same
+              // navigation the singles leaderboard rows already use, just
+              // anchored to one half of the pair.
+              onTap: () {
+                HapticFeedback.selectionClick();
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        PlayerProfileScreen(userId: pair['player_a_id']),
+                  ),
+                );
+              },
+              leading: CircleAvatar(
+                radius: 15,
+                backgroundColor: rankColor,
+                child: Text(
+                  '$rank',
+                  style: TextStyle(
+                    color: rankTextColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
-            ),
-            title: Text(
-              '${pair['player_a_username']} & ${pair['player_b_username']}',
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-            ),
-            subtitle: Text(
-              '${pair['matches_played']} matches · ${pair['wins']}W ${pair['losses']}L',
-              style: const TextStyle(fontSize: 11),
-            ),
-            trailing: Text(
-              'Avg: ${pair['avg_rating']}',
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-                color: AppColors.accent,
+              title: Text(
+                '${pair['player_a_username']} & ${pair['player_b_username']}',
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+              ),
+              subtitle: Text(
+                '${pair['matches_played']} matches · ${pair['wins']}W ${pair['losses']}L',
+                style: const TextStyle(fontSize: 11),
+              ),
+              trailing: Text(
+                'Avg: ${pair['avg_rating']}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.accent,
+                ),
               ),
             ),
           ),
@@ -2083,29 +2094,18 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     if (!_isMember && !isHost) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            'Join this tournament to see the bracket.',
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ),
+      return const FriendlyEmptyState(
+        icon: Icons.lock_outline,
+        title: 'Join this tournament to see the bracket.',
       );
     }
     if (_bracket.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            isHost
-                ? 'No bracket yet. Generate one from the Leaderboard tab.'
-                : "The host hasn't generated the bracket yet.",
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ),
+      return FriendlyEmptyState(
+        icon: Icons.emoji_events_outlined,
+        title: 'No bracket yet',
+        subtitle: isHost
+            ? 'Generate one from the Leaderboard tab.'
+            : "The host hasn't generated the bracket yet.",
       );
     }
 
@@ -2292,34 +2292,25 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
   Widget _buildScheduleTab(bool isHost) {
     if (!_isMember) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            'Join this tournament to see the schedule.',
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ),
+      return const FriendlyEmptyState(
+        icon: Icons.lock_outline,
+        title: 'Join this tournament to see the schedule.',
       );
     }
 
     if (_schedule.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            _isCustom
-                ? (isHost
-                      ? 'No matches added yet. Use "Add Match" below.'
-                      : "The host hasn't added any matches yet.")
-                : (isHost
-                      ? 'No schedule yet. Generate one from the Leaderboard tab.'
-                      : "The host hasn't generated a schedule yet."),
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ),
+      return FriendlyEmptyState(
+        icon: Icons.calendar_today_outlined,
+        title: _isCustom
+            ? (isHost ? 'No matches added yet' : "No matches yet")
+            : (isHost ? 'No schedule yet' : "No schedule yet"),
+        subtitle: _isCustom
+            ? (isHost
+                  ? 'Use "Add Match" below.'
+                  : "The host hasn't added any matches yet.")
+            : (isHost
+                  ? 'Generate one from the Leaderboard tab.'
+                  : "The host hasn't generated a schedule yet."),
       );
     }
 
@@ -2397,15 +2388,9 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           )
           .toList();
       if (myMatches.isEmpty) {
-        return Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              'No bracket matches for you yet.',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-          ),
+        return const FriendlyEmptyState(
+          icon: Icons.emoji_events_outlined,
+          title: 'No bracket matches for you yet.',
         );
       }
       return ListView(
@@ -2425,7 +2410,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
             decoration: BoxDecoration(
               color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey.shade200),
+              border: Border.all(color: AppColors.cardBorder(isDark)),
               boxShadow: AppShadows.card(isDark),
             ),
             child: Row(
@@ -2460,15 +2445,9 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     }).toList();
 
     if (myFixtures.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            'No scheduled matches for you yet.',
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ),
+      return const FriendlyEmptyState(
+        icon: Icons.calendar_today_outlined,
+        title: 'No scheduled matches for you yet.',
       );
     }
 

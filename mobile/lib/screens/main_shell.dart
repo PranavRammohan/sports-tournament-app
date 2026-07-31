@@ -26,7 +26,7 @@ class _MainShellState extends State<MainShell> {
   late final _screens = [
     HomeScreen(key: _homeKey),
     MyLeaguesScreen(key: _leaguesKey),
-    PendingMatchesScreen(key: _pendingKey),
+    PendingMatchesScreen(key: _pendingKey, onPendingChanged: _loadPendingCount),
     ProfileScreen(key: _profileKey),
   ];
 
@@ -67,9 +67,11 @@ class _MainShellState extends State<MainShell> {
   void _onDestinationSelected(int i) {
     setState(() => _index = i);
     _refreshScreen(i);
-    if (i == 2) {
-      Future.delayed(const Duration(milliseconds: 400), _loadPendingCount);
-    }
+    // Belt-and-suspenders: PendingMatchesScreen already calls
+    // onPendingChanged the moment a match is confirmed/rejected, but this
+    // catches any other way the count could have changed while the user
+    // was on a different tab.
+    if (i == 2) _loadPendingCount();
   }
 
   @override

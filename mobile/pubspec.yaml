@@ -1,5 +1,5 @@
 name: mobile
-description: "A new Flutter project."
+description: "RallyX — sports league and tournament management for racquet sports."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -38,6 +38,9 @@ dependencies:
   shared_preferences: ^2.2.0
   image_picker: ^1.2.3
   share_plus: ^13.3.0
+  google_fonts: ^8.2.0
+  cached_network_image: ^3.4.1
+  url_launcher: ^6.3.2
 dev_dependencies:
   flutter_test:
     sdk: flutter

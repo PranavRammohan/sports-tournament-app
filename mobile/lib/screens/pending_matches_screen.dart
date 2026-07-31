@@ -8,9 +8,15 @@ import '../api_client.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
+import '../utils.dart';
 
 class PendingMatchesScreen extends StatefulWidget {
-  const PendingMatchesScreen({super.key});
+  // Lets MainShell keep its bottom-nav badge count in sync the moment a
+  // match is confirmed/rejected here, instead of only refreshing when the
+  // user happens to switch tabs.
+  final VoidCallback? onPendingChanged;
+
+  const PendingMatchesScreen({super.key, this.onPendingChanged});
 
   @override
   State<PendingMatchesScreen> createState() => _PendingMatchesScreenState();
@@ -83,6 +89,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
           ),
         );
         _loadMatches();
+        widget.onPendingChanged?.call();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -142,6 +149,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
           ),
         );
         _loadMatches();
+        widget.onPendingChanged?.call();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -348,22 +356,30 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                                   ..._opponentContacts(m).map(
                                     (c) => Padding(
                                       padding: const EdgeInsets.only(top: 2),
-                                      child: Row(
-                                        children: [
-                                          Icon(
-                                            Icons.phone,
-                                            size: 12,
-                                            color: subtleTextColor,
-                                          ),
-                                          const SizedBox(width: 4),
-                                          Text(
-                                            '${c['name']}: ${c['phone']}',
-                                            style: TextStyle(
-                                              fontSize: 11,
-                                              color: subtleTextColor,
+                                      child: InkWell(
+                                        onTap: () {
+                                          HapticFeedback.selectionClick();
+                                          launchPhoneCall(c['phone'] as String);
+                                        },
+                                        borderRadius: BorderRadius.circular(4),
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              Icons.phone,
+                                              size: 12,
+                                              color: AppColors.primaryLight,
                                             ),
-                                          ),
-                                        ],
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              '${c['name']}: ${c['phone']}',
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: AppColors.primaryLight,
+                                                decoration: TextDecoration.underline,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ),
                                   ),

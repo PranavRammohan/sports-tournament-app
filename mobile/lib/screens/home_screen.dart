@@ -6,6 +6,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
 import '../widgets/sport_icon.dart';
+import '../widgets/player_avatar.dart';
+import '../widgets/match_badges.dart';
+import '../widgets/loading_skeleton.dart';
+import '../widgets/friendly_empty_state.dart';
+import 'add_sport_screen.dart';
 import 'my_leagues_screen.dart';
 import 'match_history_screen.dart';
 import 'pending_matches_screen.dart';
@@ -177,7 +182,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('RallyX')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const SkeletonList()
           : _error != null
           ? Center(
               child: Padding(
@@ -213,28 +218,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     child: Row(
                       children: [
-                        CircleAvatar(
+                        PlayerAvatar(
+                          username: _username,
+                          profilePicUrl: _profilePicUrl,
                           radius: 26,
                           backgroundColor: Colors.white,
-                          backgroundImage:
-                              (_profilePicUrl != null &&
-                                  _profilePicUrl!.isNotEmpty)
-                              ? NetworkImage(_profilePicUrl!)
-                              : null,
-                          child:
-                              (_profilePicUrl != null &&
-                                  _profilePicUrl!.isNotEmpty)
-                              ? null
-                              : Text(
-                                  _username.isNotEmpty
-                                      ? _username[0].toUpperCase()
-                                      : '?',
-                                  style: const TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                    color: AppColors.primary,
-                                  ),
-                                ),
                         ),
                         const SizedBox(width: 14),
                         Expanded(
@@ -416,6 +404,26 @@ class _HomeScreenState extends State<HomeScreen> {
                         isDark,
                       ),
                     ),
+                  ] else ...[
+                    const SizedBox(height: 20),
+                    FriendlyEmptyState(
+                      icon: Icons.sports_tennis,
+                      title: 'Add a sport to get started',
+                      subtitle:
+                          'Once you add a sport, your matches and tournaments will show up here.',
+                      actionLabel: 'Add a sport',
+                      onAction: () async {
+                        HapticFeedback.selectionClick();
+                        final added = await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                const AddSportScreen(existingSports: []),
+                          ),
+                        );
+                        if (added == true) _loadEverything();
+                      },
+                    ),
                   ],
 
                   if (_upcomingMatches.isNotEmpty) ...[
@@ -512,11 +520,6 @@ class _HomeScreenState extends State<HomeScreen> {
     } else if (m['player2_partner_id'] == _currentUserId) {
       ratingChange = _toDouble(m['player2_partner_rating_change']);
     }
-    final changeText = ratingChange == null
-        ? ''
-        : (ratingChange >= 0
-              ? '+${ratingChange.toStringAsFixed(2)}'
-              : ratingChange.toStringAsFixed(2));
     final isPlayoff = m['match_type'] == 'playoff';
 
     return InkWell(
@@ -542,21 +545,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         child: Row(
           children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: iWon ? AppColors.success : AppColors.danger,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                iWon ? 'WIN' : 'LOSS',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
+            WinLossPill(won: iWon),
             const SizedBox(width: 8),
             sportIcon(m['sport'], size: 18),
             const SizedBox(width: 10),
@@ -592,17 +581,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            if (ratingChange != null)
-              Text(
-                changeText,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: ratingChange >= 0
-                      ? AppColors.success
-                      : AppColors.danger,
-                ),
-              ),
+            RatingDeltaText(delta: ratingChange),
           ],
         ),
       ),
