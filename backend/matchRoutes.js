@@ -1044,4 +1044,12 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// Attached the same way db.js attaches `withTransaction`/`RouteError` to the
+// exported pool: these are module-private helpers, but the test suite needs
+// to reach them without changing how server.js consumes this file
+// (`app.use('/api/matches', require('./matchRoutes'))` still gets a router).
+router.resolvePointsConfig = resolvePointsConfig;
+router.awardLeaguePoints = awardLeaguePoints;
+router.reverseMatchEffects = reverseMatchEffects;
+
 module.exports = router;
