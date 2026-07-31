@@ -1,5 +1,15 @@
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
 require('dotenv').config();
+
+// node-postgres parses BIGINT (OID 20) as a JS string by default, to avoid
+// silently losing precision for values beyond Number.MAX_SAFE_INTEGER.
+// SUM(...)/COUNT(...) over an integer column returns bigint in Postgres, so
+// every aggregated wins/losses/points/matches_played value in this app
+// (league standings, head-to-head records, etc.) comes back as a string
+// unless this is overridden — which crashes any mobile code expecting a
+// number (e.g. a widget typed to take an int). Nothing in this app deals in
+// counts anywhere near 2^53, so parsing bigint as a plain JS number is safe.
+types.setTypeParser(20, (value) => parseInt(value, 10));
 
 // Prefer a single connection string (DATABASE_URL) when present — this is
 // how Render/Neon/most hosts provide database credentials. Falls back to
