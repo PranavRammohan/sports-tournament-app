@@ -49,6 +49,10 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
   DateTime? _registrationStart;
   DateTime? _registrationEnd;
 
+  bool _pointsEnabled = true;
+  final TextEditingController _pointsWinController = TextEditingController();
+  final TextEditingController _pointsLossController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -74,6 +78,10 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
         : null;
     _restrictRegistration =
         _registrationStart != null || _registrationEnd != null;
+
+    _pointsEnabled = l['points_enabled'] != false;
+    _pointsWinController.text = (l['points_win'] ?? 2).toString();
+    _pointsLossController.text = (l['points_loss'] ?? 0).toString();
 
     if (_isDoubles) {
       _loadPartnerStatus();
@@ -110,6 +118,8 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
   void dispose() {
     _nameController.dispose();
     _academyController.dispose();
+    _pointsWinController.dispose();
+    _pointsLossController.dispose();
     super.dispose();
   }
 
@@ -156,6 +166,8 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
         return 'Knockout';
       case 'custom':
         return 'Custom';
+      case 'groups':
+        return 'Groups';
       default:
         return type;
     }
@@ -371,6 +383,20 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
       }
     }
 
+    int? pointsWin;
+    int? pointsLoss;
+    if (_pointsEnabled) {
+      pointsWin = int.tryParse(_pointsWinController.text.trim());
+      pointsLoss = int.tryParse(_pointsLossController.text.trim());
+      if (pointsWin == null || pointsWin < 0 || pointsLoss == null || pointsLoss < 0) {
+        _showAlert(
+          'Missing info',
+          'Please enter valid points for a win and a loss (0 or more).',
+        );
+        return;
+      }
+    }
+
     HapticFeedback.lightImpact();
     setState(() => _saving = true);
     try {
@@ -400,6 +426,9 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
           'registrationEnd': _restrictRegistration
               ? _registrationEnd?.toIso8601String()
               : null,
+          'pointsEnabled': _pointsEnabled,
+          'pointsWin': _pointsEnabled ? pointsWin : null,
+          'pointsLoss': _pointsEnabled ? pointsLoss : null,
         }),
       );
 
@@ -549,6 +578,50 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                 ],
               ),
             ),
+            const SizedBox(height: 20),
+            const Divider(),
+            const SizedBox(height: 8),
+            Text(
+              'Tournament Points',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Award points for a win/loss so players can be ranked on a leaderboard. Changes only affect matches confirmed from now on. A group can override this from Manage Groups.',
+              style: TextStyle(fontSize: 11),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _pointsEnabled,
+              onChanged: (v) => setState(() => _pointsEnabled = v),
+              title: const Text('Award tournament points'),
+            ),
+            if (_pointsEnabled)
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _pointsWinController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Points for a win',
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _pointsLossController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Points for a loss',
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             if (_isDoubles) ...[
               const SizedBox(height: 14),
               Text(

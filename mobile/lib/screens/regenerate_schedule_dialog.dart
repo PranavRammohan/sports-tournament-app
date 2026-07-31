@@ -126,6 +126,18 @@ class _RegenerateScheduleDialogState extends State<RegenerateScheduleDialog> {
               ),
               onChanged: (v) => setState(() => _scheduleType = v!),
             ),
+            if (widget.isSingles)
+              RadioListTile<String>(
+                contentPadding: EdgeInsets.zero,
+                value: 'groups',
+                groupValue: _scheduleType,
+                title: const Text('Groups', style: TextStyle(fontSize: 14)),
+                subtitle: const Text(
+                  'Create named groups any time, pick who\'s in each one, and choose that group\'s own format afterward.',
+                  style: TextStyle(fontSize: 11),
+                ),
+                onChanged: (v) => setState(() => _scheduleType = v!),
+              ),
           ],
         ),
       ),

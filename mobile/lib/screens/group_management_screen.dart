@@ -124,10 +124,85 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     );
   }
 
+  // Shared by the create-group dialog and the edit-format dialog — lets a
+  // group inherit the tournament's points config (the default, no override
+  // stored) or set its own win/loss point values. Hidden for knockout groups,
+  // which never award league points regardless of config (bracket matches
+  // don't call the points-resolution logic at all — see matchRoutes.js).
+  Widget _pointsOverrideSection({
+    required String scheduleType,
+    required bool overridePoints,
+    required bool pointsEnabled,
+    required ValueChanged<bool> onOverrideChanged,
+    required ValueChanged<bool> onPointsEnabledChanged,
+    required TextEditingController pointsWinController,
+    required TextEditingController pointsLossController,
+  }) {
+    if (scheduleType == 'knockout') return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 8),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          value: overridePoints,
+          onChanged: onOverrideChanged,
+          title: const Text(
+            'Override tournament points for this group',
+            style: TextStyle(fontSize: 13),
+          ),
+        ),
+        if (overridePoints) ...[
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: pointsEnabled,
+            onChanged: onPointsEnabledChanged,
+            title: const Text(
+              'Award points in this group',
+              style: TextStyle(fontSize: 13),
+            ),
+          ),
+          if (pointsEnabled)
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: pointsWinController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Points for a win',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: pointsLossController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Points for a loss',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ],
+    );
+  }
+
   Future<void> _createGroup() async {
     final nameController = TextEditingController();
     final matchesPerPlayerController = TextEditingController();
+    final pointsWinController = TextEditingController(text: '2');
+    final pointsLossController = TextEditingController(text: '0');
     String scheduleType = 'round_robin';
+    bool overridePoints = false;
+    bool overridePointsEnabled = true;
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -155,6 +230,15 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                   onChanged: (v) => setDialogState(() => scheduleType = v),
                   matchesPerPlayerController: matchesPerPlayerController,
                 ),
+                _pointsOverrideSection(
+                  scheduleType: scheduleType,
+                  overridePoints: overridePoints,
+                  pointsEnabled: overridePointsEnabled,
+                  onOverrideChanged: (v) => setDialogState(() => overridePoints = v),
+                  onPointsEnabledChanged: (v) => setDialogState(() => overridePointsEnabled = v),
+                  pointsWinController: pointsWinController,
+                  pointsLossController: pointsLossController,
+                ),
               ],
             ),
           ),
@@ -172,11 +256,22 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                   matchesPerPlayer = int.tryParse(matchesPerPlayerController.text.trim());
                   if (matchesPerPlayer == null || matchesPerPlayer < 1) return;
                 }
-                Navigator.pop(ctx, {
+                final body = <String, dynamic>{
                   'name': name,
                   'scheduleType': scheduleType,
                   'matchesPerPlayer': matchesPerPlayer,
-                });
+                };
+                if (overridePoints && scheduleType != 'knockout') {
+                  body['pointsEnabled'] = overridePointsEnabled;
+                  if (overridePointsEnabled) {
+                    final pointsWin = int.tryParse(pointsWinController.text.trim());
+                    final pointsLoss = int.tryParse(pointsLossController.text.trim());
+                    if (pointsWin == null || pointsWin < 0 || pointsLoss == null || pointsLoss < 0) return;
+                    body['pointsWin'] = pointsWin;
+                    body['pointsLoss'] = pointsLoss;
+                  }
+                }
+                Navigator.pop(ctx, body);
               },
               child: const Text('Create'),
             ),
@@ -220,6 +315,18 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     );
     String scheduleType = group['schedule_type'] ?? 'round_robin';
 
+    final hasPointsOverride = group['points_enabled'] != null ||
+        group['points_win'] != null ||
+        group['points_loss'] != null;
+    bool overridePoints = hasPointsOverride;
+    bool overridePointsEnabled = group['points_enabled'] ?? true;
+    final pointsWinController = TextEditingController(
+      text: (group['points_win'] ?? 2).toString(),
+    );
+    final pointsLossController = TextEditingController(
+      text: (group['points_loss'] ?? 0).toString(),
+    );
+
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -227,10 +334,25 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           title: Text('Edit Format — ${group['name']}'),
           content: SingleChildScrollView(
-            child: _scheduleTypeRadios(
-              value: scheduleType,
-              onChanged: (v) => setDialogState(() => scheduleType = v),
-              matchesPerPlayerController: matchesPerPlayerController,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _scheduleTypeRadios(
+                  value: scheduleType,
+                  onChanged: (v) => setDialogState(() => scheduleType = v),
+                  matchesPerPlayerController: matchesPerPlayerController,
+                ),
+                _pointsOverrideSection(
+                  scheduleType: scheduleType,
+                  overridePoints: overridePoints,
+                  pointsEnabled: overridePointsEnabled,
+                  onOverrideChanged: (v) => setDialogState(() => overridePoints = v),
+                  onPointsEnabledChanged: (v) => setDialogState(() => overridePointsEnabled = v),
+                  pointsWinController: pointsWinController,
+                  pointsLossController: pointsLossController,
+                ),
+              ],
             ),
           ),
           actions: [
@@ -245,10 +367,21 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                   matchesPerPlayer = int.tryParse(matchesPerPlayerController.text.trim());
                   if (matchesPerPlayer == null || matchesPerPlayer < 1) return;
                 }
-                Navigator.pop(ctx, {
+                final body = <String, dynamic>{
                   'scheduleType': scheduleType,
                   'matchesPerPlayer': matchesPerPlayer,
-                });
+                };
+                if (overridePoints && scheduleType != 'knockout') {
+                  body['pointsEnabled'] = overridePointsEnabled;
+                  if (overridePointsEnabled) {
+                    final pointsWin = int.tryParse(pointsWinController.text.trim());
+                    final pointsLoss = int.tryParse(pointsLossController.text.trim());
+                    if (pointsWin == null || pointsWin < 0 || pointsLoss == null || pointsLoss < 0) return;
+                    body['pointsWin'] = pointsWin;
+                    body['pointsLoss'] = pointsLoss;
+                  }
+                }
+                Navigator.pop(ctx, body);
               },
               child: const Text('Save'),
             ),

@@ -58,6 +58,14 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   String get _partnerMode =>
       _league != null ? (_league!['partner_mode'] ?? 'host_auto') : 'host_auto';
   bool get _isCompleted => _league != null && _league!['status'] == 'completed';
+  bool get _pointsEnabled =>
+      _league == null || _league!['points_enabled'] != false;
+  String get _pointsSubtitle {
+    if (!_pointsEnabled) return 'Ranked by wins, then rating';
+    final win = _league?['points_win'] ?? 2;
+    final loss = _league?['points_loss'] ?? 0;
+    return 'Ranked by tournament points (win = $win pts, loss = $loss)';
+  }
   bool get _hasConfirmedMatches {
     if (_isKnockout) {
       return _bracket.any((m) => m['status'] == 'confirmed');
@@ -1485,9 +1493,9 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 ],
                 if (_isLeagueStyle) ...[
                   const SizedBox(height: 4),
-                  const Text(
-                    'Ranked by tournament points (win = 2 pts, loss = 0)',
-                    style: TextStyle(
+                  Text(
+                    _pointsSubtitle,
+                    style: const TextStyle(
                       fontSize: 11,
                       color: AppColors.textGrey,
                       fontStyle: FontStyle.italic,
@@ -1929,7 +1937,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            if (_isLeagueStyle)
+                            if (_isLeagueStyle && _pointsEnabled)
                               Text(
                                 '${player['points']} pts',
                                 style: const TextStyle(

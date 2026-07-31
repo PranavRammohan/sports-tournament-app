@@ -48,6 +48,17 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   final TextEditingController _minRatingController = TextEditingController();
   final TextEditingController _maxRatingController = TextEditingController();
 
+  // Tournament points — flat points awarded for a win/loss. Defaults match
+  // what every tournament got before this was configurable (2 for a win, 0
+  // for a loss).
+  bool _pointsEnabled = true;
+  final TextEditingController _pointsWinController = TextEditingController(
+    text: '2',
+  );
+  final TextEditingController _pointsLossController = TextEditingController(
+    text: '0',
+  );
+
   // Optional registration window — when null, joining has no date
   // restriction at all (matches current behavior).
   bool _restrictRegistration = false;
@@ -203,6 +214,20 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
       }
     }
 
+    int? pointsWin;
+    int? pointsLoss;
+    if (_pointsEnabled) {
+      pointsWin = int.tryParse(_pointsWinController.text.trim());
+      pointsLoss = int.tryParse(_pointsLossController.text.trim());
+      if (pointsWin == null || pointsWin < 0 || pointsLoss == null || pointsLoss < 0) {
+        _showAlert(
+          'Missing info',
+          'Please enter valid points for a win and a loss (0 or more).',
+        );
+        return;
+      }
+    }
+
     HapticFeedback.lightImpact();
     setState(() => _loading = true);
 
@@ -236,6 +261,9 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               ? _registrationEnd?.toIso8601String()
               : null,
           'partnerMode': _selectedFormat == 'Doubles' ? _partnerMode : null,
+          'pointsEnabled': _pointsEnabled,
+          'pointsWin': _pointsEnabled ? pointsWin : null,
+          'pointsLoss': _pointsEnabled ? pointsLoss : null,
         },
       );
 
@@ -516,6 +544,51 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                   style: TextStyle(fontSize: 11),
                 ),
                 onChanged: (v) => setState(() => _scheduleType = v!),
+              ),
+
+            const SizedBox(height: 20),
+            const Divider(),
+            const SizedBox(height: 12),
+            Text(
+              'Tournament Points',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Award points for a win/loss so players can be ranked on a leaderboard. A group can override this later if needed.',
+              style: TextStyle(fontSize: 11),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _pointsEnabled,
+              onChanged: (v) => setState(() => _pointsEnabled = v),
+              title: const Text('Award tournament points'),
+            ),
+            if (_pointsEnabled)
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _pointsWinController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Points for a win',
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _pointsLossController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Points for a loss',
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                ],
               ),
 
             if (_selectedFormat == 'Doubles') ...[

@@ -28,6 +28,16 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
   List<dynamic> _groups = [];
   Map<int, List<dynamic>> _groupSchedules = {};
 
+  // Tennis is scored in "Sets"; everything else in this app is "Games".
+  String get _unitLabel => _league?['sport'] == 'tennis' ? 'Set' : 'Game';
+
+  // Mirrors the backend's resolvePointsConfig: a group's own points_enabled
+  // wins if set, otherwise it inherits the tournament's setting.
+  bool _groupPointsEnabled(dynamic group) {
+    if (group['points_enabled'] != null) return group['points_enabled'] == true;
+    return _league?['points_enabled'] != false;
+  }
+
   int? _currentUserId;
   bool _loading = true;
   String? _error;
@@ -241,6 +251,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
             ...members.asMap().entries.map((entry) {
               final rank = entry.key + 1;
               final m = entry.value;
+              final pointsEnabled = _groupPointsEnabled(group);
               return Container(
                 margin: const EdgeInsets.only(bottom: 6),
                 padding: const EdgeInsets.symmetric(
@@ -275,14 +286,16 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                         color: AppColors.textGrey,
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    Text(
-                      '${m['points']} pts',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.accent,
+                    if (pointsEnabled) ...[
+                      const SizedBox(width: 10),
+                      Text(
+                        '${m['points']} pts',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.accent,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               );
@@ -504,6 +517,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
         player1Name: f['player1_username'] ?? '',
         player2Name: f['player2_username'] ?? '',
         title: 'Edit Score',
+        unitLabel: _unitLabel,
         initialSets: initialSets,
       ),
     );
@@ -551,6 +565,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
         player1Name: f['player1_username'] ?? '',
         player2Name: f['player2_username'] ?? '',
         title: 'Enter Score',
+        unitLabel: _unitLabel,
       ),
     );
     if (result == null) return;
@@ -844,12 +859,14 @@ class _HostScoreDialog extends StatefulWidget {
   final String player1Name;
   final String player2Name;
   final String title;
+  final String unitLabel;
   final List<Map<String, int>>? initialSets;
 
   const _HostScoreDialog({
     required this.player1Name,
     required this.player2Name,
     this.title = 'Enter Score',
+    this.unitLabel = 'Game',
     this.initialSets,
   });
 
@@ -906,7 +923,7 @@ class _HostScoreDialogState extends State<_HostScoreDialog> {
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
                           labelText:
-                              'Game ${index + 1} — ${widget.player1Name}',
+                              '${widget.unitLabel} ${index + 1} — ${widget.player1Name}',
                           isDense: true,
                         ),
                       ),
@@ -940,7 +957,7 @@ class _HostScoreDialogState extends State<_HostScoreDialog> {
             TextButton.icon(
               onPressed: () => setState(() => _sets.add(_SetScore())),
               icon: const Icon(Icons.add),
-              label: const Text('Add Game'),
+              label: Text('Add ${widget.unitLabel}'),
             ),
           ],
         ),
@@ -962,11 +979,11 @@ class _HostScoreDialogState extends State<_HostScoreDialog> {
               final p1 = int.tryParse(s.myScore.text.trim());
               final p2 = int.tryParse(s.opponentScore.text.trim());
               if (p1 == null || p2 == null) {
-                setState(() => _error = 'Please fill in every game score.');
+                setState(() => _error = 'Please fill in every ${widget.unitLabel.toLowerCase()} score.');
                 return;
               }
               if (p1 == p2) {
-                setState(() => _error = 'A game cannot end in a tie.');
+                setState(() => _error = 'A ${widget.unitLabel.toLowerCase()} cannot end in a tie.');
                 return;
               }
               setScores.add({'me': p1, 'opponent': p2});
