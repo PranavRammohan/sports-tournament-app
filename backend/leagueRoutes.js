@@ -152,14 +152,20 @@ router.post('/create', async (req, res) => {
   // singles-only restriction has been removed. (Fixed-matches-per-player
   // was already available to both formats via the schedule generator.)
 
-  // Groups format is singles-only for now — doubles would need partner
-  // resolution done separately within each group before anything could be
-  // scheduled, which is a meaningfully bigger scope than this first version.
+  // Groups format supports both singles and doubles. For doubles, partnering
+  // is league-wide (same partner_mode/select-partner/respond-partner/
+  // assign-partner flow as any other doubles league) rather than re-paired
+  // per group — a pair stays together across every group they're added to.
+  // host_auto doesn't fit this: it recomputes pairing on the fly from
+  // whoever's in the pool being scheduled, which for Groups would mean two
+  // different groups (different member subsets) could pair the same player
+  // with two different partners. Self-select/host-manual persist a real
+  // confirmed partner_id that stays stable across every group.
   // Unlike every other schedule type, 'groups' needs nothing else at creation
   // time — each group's own format/matches-per-player is chosen when that
   // group is created (see POST /:id/groups), not here.
-  if (finalScheduleType === 'groups' && format !== 'singles') {
-    return res.status(400).json({ error: 'The Groups format is currently only supported for singles leagues.' });
+  if (finalScheduleType === 'groups' && format === 'doubles' && finalPartnerMode === 'host_auto') {
+    return res.status(400).json({ error: 'Doubles Groups tournaments need partners to stay paired across every group — choose self-select or host-assigns partner mode instead of automatic pairing.' });
   }
 
   if (minRating != null && maxRating != null && parseFloat(minRating) > parseFloat(maxRating)) {
@@ -780,6 +786,7 @@ async function getGroupsWithStandings(league, leagueId) {
   // in which group and who isn't in any group at all yet.
   const membersResult = await pool.query(
     `SELECT u.id, u.username, us.rating,
+            lm.partner_id, pu.username AS partner_username,
             COALESCE(gm.group_ids, ARRAY[]::int[]) AS group_ids,
             COALESCE(stats.matches_played, 0) AS matches_played,
             COALESCE(stats.wins, 0) AS wins,
@@ -788,6 +795,7 @@ async function getGroupsWithStandings(league, leagueId) {
      FROM league_members lm
      JOIN users u ON u.id = lm.user_id
      JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+     LEFT JOIN users pu ON pu.id = lm.partner_id AND lm.partner_status = 'confirmed'
      LEFT JOIN (
        SELECT g.user_id, ARRAY_AGG(g.group_id) AS group_ids
        FROM group_members g
@@ -816,6 +824,27 @@ async function getGroupsWithStandings(league, leagueId) {
          FROM matches m
          JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
          WHERE sm.league_id = $3 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
+         UNION ALL
+         -- Doubles: a match's partners share the same result as their teammate.
+         SELECT m.player1_partner_id,
+                CASE WHEN m.winner_id = m.player1_id THEN 1 ELSE 0 END,
+                CASE WHEN m.winner_id = m.player1_id
+                     THEN COALESCE(m.league_points_awarded, 0)
+                     ELSE COALESCE(m.league_points_awarded_loser, 0) END
+         FROM matches m
+         JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
+         WHERE sm.league_id = $3 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
+           AND m.player1_partner_id IS NOT NULL
+         UNION ALL
+         SELECT m.player2_partner_id,
+                CASE WHEN m.winner_id = m.player2_id THEN 1 ELSE 0 END,
+                CASE WHEN m.winner_id = m.player2_id
+                     THEN COALESCE(m.league_points_awarded, 0)
+                     ELSE COALESCE(m.league_points_awarded_loser, 0) END
+         FROM matches m
+         JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
+         WHERE sm.league_id = $3 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
+           AND m.player2_partner_id IS NOT NULL
        ) participants
        GROUP BY player_id
      ) stats ON stats.player_id = u.id
@@ -870,15 +899,19 @@ router.get('/:id/groups/:groupId/schedule', async (req, res) => {
 
     const result = await pool.query(
       `SELECT sm.id, sm.scheduled_time,
-              sm.player1_id, sm.player2_id,
+              sm.player1_id, sm.player1_partner_id, sm.player2_id, sm.player2_partner_id,
               p1.username as player1_username, p1.phone_number as player1_phone,
+              pp1.username as player1_partner_username, pp1.phone_number as player1_partner_phone,
               p2.username as player2_username, p2.phone_number as player2_phone,
+              pp2.username as player2_partner_username, pp2.phone_number as player2_partner_phone,
               m.id as match_id, m.status as match_status, m.set_scores, m.winner_id, m.reported_by,
               m.player1_id as reported_player1_id, m.player2_id as reported_player2_id
        FROM scheduled_matches sm
        LEFT JOIN matches m ON m.scheduled_match_id = sm.id AND m.status != 'rejected'
        JOIN users p1 ON p1.id = sm.player1_id
        JOIN users p2 ON p2.id = sm.player2_id
+       LEFT JOIN users pp1 ON pp1.id = sm.player1_partner_id
+       LEFT JOIN users pp2 ON pp2.id = sm.player2_partner_id
        WHERE sm.league_id = $1 AND sm.group_id = $2
        ORDER BY sm.id ASC`,
       [leagueId, groupId]
@@ -964,20 +997,34 @@ router.post('/:id/groups/:groupId/assign', async (req, res) => {
     }
 
     const memberCheck = await pool.query(
-      'SELECT 1 FROM league_members WHERE league_id = $1 AND user_id = $2',
+      'SELECT partner_id, partner_status FROM league_members WHERE league_id = $1 AND user_id = $2',
       [leagueId, targetUserId]
     );
     if (memberCheck.rows.length === 0) {
       return res.status(404).json({ error: 'This player is not a member of this league.' });
     }
 
-    await pool.query(
-      `INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)
-       ON CONFLICT (group_id, user_id) DO NOTHING`,
-      [groupId, targetUserId]
-    );
+    // Doubles: a group's membership unit is the pair, not the individual —
+    // both partners are added together (partnering itself happens league-wide
+    // via the normal partner_mode flow, before this point).
+    const targetIds = [targetUserId];
+    if (league.format === 'doubles') {
+      const { partner_id: partnerId, partner_status: partnerStatus } = memberCheck.rows[0];
+      if (partnerStatus !== 'confirmed' || !partnerId) {
+        return res.status(400).json({ error: 'This player needs a confirmed partner before they can be added to a group.' });
+      }
+      targetIds.push(partnerId);
+    }
 
-    res.status(200).json({ message: 'Player added to group.' });
+    for (const uid of targetIds) {
+      await pool.query(
+        `INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)
+         ON CONFLICT (group_id, user_id) DO NOTHING`,
+        [groupId, uid]
+      );
+    }
+
+    res.status(200).json({ message: league.format === 'doubles' ? 'Team added to group.' : 'Player added to group.' });
   } catch (err) {
     console.error('Assign to group error:', err);
     res.status(500).json({ error: 'Something went wrong assigning this player.' });
@@ -1019,12 +1066,24 @@ router.post('/:id/groups/:groupId/unassign', async (req, res) => {
       return res.status(400).json({ error: 'This group is locked and can no longer be changed.' });
     }
 
+    // Doubles: remove both partners together — same "the pair is the unit"
+    // reasoning as assign, above.
+    const targetIds = [targetUserId];
+    if (league.format === 'doubles') {
+      const memberCheck = await pool.query(
+        'SELECT partner_id FROM league_members WHERE league_id = $1 AND user_id = $2',
+        [leagueId, targetUserId]
+      );
+      const partnerId = memberCheck.rows[0]?.partner_id;
+      if (partnerId) targetIds.push(partnerId);
+    }
+
     await pool.query(
-      'DELETE FROM group_members WHERE group_id = $1 AND user_id = $2',
-      [groupId, targetUserId]
+      'DELETE FROM group_members WHERE group_id = $1 AND user_id = ANY($2::int[])',
+      [groupId, targetIds]
     );
 
-    res.status(200).json({ message: 'Player removed from group.' });
+    res.status(200).json({ message: league.format === 'doubles' ? 'Team removed from group.' : 'Player removed from group.' });
   } catch (err) {
     console.error('Unassign from group error:', err);
     res.status(500).json({ error: 'Something went wrong removing this player.' });
@@ -1064,7 +1123,7 @@ router.post('/:id/groups/auto-assign', async (req, res) => {
     }
 
     const membersResult = await pool.query(
-      `SELECT lm.user_id, us.rating
+      `SELECT lm.user_id, us.rating, lm.partner_id, lm.partner_status
        FROM league_members lm
        JOIN user_sports us ON us.user_id = lm.user_id AND us.sport = $1 AND us.format = $2
        WHERE lm.league_id = $3
@@ -1078,13 +1137,42 @@ router.post('/:id/groups/auto-assign', async (req, res) => {
     );
     const members = membersResult.rows;
 
-    for (let i = 0; i < members.length; i++) {
-      const targetGroup = targetGroups[i % targetGroups.length];
-      await pool.query(
-        `INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)
-         ON CONFLICT (group_id, user_id) DO NOTHING`,
-        [targetGroup.id, members[i].user_id]
-      );
+    if (league.format === 'singles') {
+      for (let i = 0; i < members.length; i++) {
+        const targetGroup = targetGroups[i % targetGroups.length];
+        await pool.query(
+          `INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)
+           ON CONFLICT (group_id, user_id) DO NOTHING`,
+          [targetGroup.id, members[i].user_id]
+        );
+      }
+    } else {
+      // Doubles: distribute confirmed PAIRS as a unit — both partners always
+      // land in the same group. Anyone whose partner isn't confirmed yet (or
+      // whose partner is already placed in a group elsewhere, so isn't in
+      // this "never grouped" pool) is silently skipped; they can be added by
+      // hand once paired, same as singles' unassigned-players flow.
+      const byId = new Map(members.map((m) => [m.user_id, m]));
+      const seen = new Set();
+      const teams = [];
+      for (const m of members) {
+        if (seen.has(m.user_id)) continue;
+        if (m.partner_status !== 'confirmed' || !m.partner_id || !byId.has(m.partner_id)) continue;
+        const partner = byId.get(m.partner_id);
+        seen.add(m.user_id);
+        seen.add(partner.user_id);
+        teams.push([m.user_id, partner.user_id]);
+      }
+      for (let i = 0; i < teams.length; i++) {
+        const targetGroup = targetGroups[i % targetGroups.length];
+        for (const uid of teams[i]) {
+          await pool.query(
+            `INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)
+             ON CONFLICT (group_id, user_id) DO NOTHING`,
+            [targetGroup.id, uid]
+          );
+        }
+      }
     }
 
     res.status(200).json({ message: 'Players auto-assigned to groups.' });
@@ -1097,8 +1185,7 @@ router.post('/:id/groups/auto-assign', async (req, res) => {
 const VALID_GROUP_SCHEDULE_TYPES = ['round_robin', 'matches_per_player', 'knockout', 'custom'];
 
 // Reverses rating/points effects for a single group's confirmed round-robin/
-// matches-per-player fixtures. Groups are singles-only, so (unlike the
-// whole-league reversal helpers below) there's no partner side to reverse.
+// matches-per-player fixtures (both singles and doubles groups).
 async function reverseGroupScheduledMatches(db, leagueId, groupId, league) {
   const matchesResult = await db.query(
     `SELECT m.* FROM matches m
@@ -1112,19 +1199,30 @@ async function reverseGroupScheduledMatches(db, leagueId, groupId, league) {
 
     await reverseRatingChange(db, match.player1_id, league.sport, league.format, match.player1_rating_change, team1Won);
     await reverseRatingChange(db, match.player2_id, league.sport, league.format, match.player2_rating_change, !team1Won);
+    await reverseRatingChange(db, match.player1_partner_id, league.sport, league.format, match.player1_partner_rating_change, team1Won);
+    await reverseRatingChange(db, match.player2_partner_id, league.sport, league.format, match.player2_partner_rating_change, !team1Won);
 
     if (match.league_points_awarded != null) {
-      await db.query(
-        'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
-        [match.league_points_awarded, leagueId, match.winner_id]
-      );
+      const winnerIds = [match.winner_id];
+      if (team1Won && match.player1_partner_id) winnerIds.push(match.player1_partner_id);
+      if (!team1Won && match.player2_partner_id) winnerIds.push(match.player2_partner_id);
+      for (const wId of winnerIds) {
+        await db.query(
+          'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+          [match.league_points_awarded, leagueId, wId]
+        );
+      }
     }
     if (match.league_points_awarded_loser != null) {
-      const loserId = team1Won ? match.player2_id : match.player1_id;
-      await db.query(
-        'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
-        [match.league_points_awarded_loser, leagueId, loserId]
-      );
+      const loserIds = [team1Won ? match.player2_id : match.player1_id];
+      const loserPartnerId = team1Won ? match.player2_partner_id : match.player1_partner_id;
+      if (loserPartnerId) loserIds.push(loserPartnerId);
+      for (const lId of loserIds) {
+        await db.query(
+          'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+          [match.league_points_awarded_loser, leagueId, lId]
+        );
+      }
     }
   }
 }
@@ -1204,36 +1302,71 @@ router.post('/:id/groups/:groupId/lock', async (req, res) => {
         throw new RouteError(409, 'This group is already locked.');
       }
 
+      // Doubles needs partner_id/partner_status too, to resolve teams —
+      // singles just ignores those extra columns.
       const membersResult = await client.query(
-        `SELECT u.id, us.rating
+        `SELECT u.id, us.rating, lm.partner_id, lm.partner_status
          FROM group_members gm
          JOIN users u ON u.id = gm.user_id
          JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
-         WHERE gm.group_id = $3
+         JOIN league_members lm ON lm.league_id = $3 AND lm.user_id = gm.user_id
+         WHERE gm.group_id = $4
          ORDER BY us.rating DESC`,
-        [league.sport, league.format, groupId]
+        [league.sport, league.format, leagueId, groupId]
       );
       const members = membersResult.rows;
+
+      // Doubles: resolve this group's members into teams from their
+      // league-wide confirmed partnerships — partnering happens once via the
+      // normal partner_mode flow, not per group, so a pair stays together
+      // across every group they're both added to. host_auto is rejected for
+      // doubles Groups leagues at creation/edit time (see POST /create and
+      // PUT /:id) specifically because it can't guarantee that stability.
+      let teams = null;
+      if (league.format === 'doubles') {
+        try {
+          teams = buildTeamsFromConfirmedPairs(members);
+        } catch (buildErr) {
+          if (buildErr.code === 'UNPAIRED_MEMBERS') {
+            throw new RouteError(400, buildErr.message);
+          }
+          throw buildErr;
+        }
+      }
+      const isDoubles = league.format === 'doubles';
+      const unitCount = isDoubles ? teams.length : members.length;
+      const unitNoun = isDoubles ? 'team' : 'player';
 
       let matchCount = 0;
       if (group.schedule_type === 'custom') {
         // Nothing to generate — the host adds matches to this group by hand.
       } else if (group.schedule_type === 'knockout') {
-        if (members.length < 2 || !isPowerOfTwo(members.length)) {
-          throw new RouteError(400, `Knockout groups need an exact power-of-2 number of players (2, 4, 8, 16...) — "${group.name}" currently has ${members.length}. Adjust its membership before locking.`);
+        if (unitCount < 2 || !isPowerOfTwo(unitCount)) {
+          throw new RouteError(400, `Knockout groups need an exact power-of-2 number of ${unitNoun}s (2, 4, 8, 16...) — "${group.name}" currently has ${unitCount}. Adjust its membership before locking.`);
         }
-        const size = members.length;
+        const size = unitCount;
         const seedOrder = generateSeedOrder(size);
         const totalRounds = Math.log2(size);
 
         for (let i = 0; i < seedOrder.length; i += 2) {
           const seedA = seedOrder[i];
           const seedB = seedOrder[i + 1];
-          await client.query(
-            `INSERT INTO playoff_matches (league_id, group_id, round_number, position, player1_id, player2_id, status)
-             VALUES ($1, $2, 1, $3, $4, $5, 'ready')`,
-            [leagueId, groupId, i / 2 + 1, members[seedA - 1].id, members[seedB - 1].id]
-          );
+          if (isDoubles) {
+            const teamA = teams[seedA - 1];
+            const teamB = teams[seedB - 1];
+            await client.query(
+              `INSERT INTO playoff_matches
+                (league_id, group_id, round_number, position, player1_id, player1_partner_id, player2_id, player2_partner_id, status)
+               VALUES ($1, $2, 1, $3, $4, $5, $6, $7, 'ready')`,
+              [leagueId, groupId, i / 2 + 1, teamA.player1.id, teamA.player2.id, teamB.player1.id, teamB.player2.id]
+            );
+          } else {
+            await client.query(
+              `INSERT INTO playoff_matches (league_id, group_id, round_number, position, player1_id, player2_id, status)
+               VALUES ($1, $2, 1, $3, $4, $5, 'ready')`,
+              [leagueId, groupId, i / 2 + 1, members[seedA - 1].id, members[seedB - 1].id]
+            );
+          }
         }
         for (let round = 2; round <= totalRounds; round++) {
           const matchesInRound = size / Math.pow(2, round);
@@ -1247,12 +1380,14 @@ router.post('/:id/groups/:groupId/lock', async (req, res) => {
         }
         matchCount = size - 1;
       } else {
-        if (members.length < 2) {
-          throw new RouteError(400, `"${group.name}" only has ${members.length} player(s) — every group needs at least 2 to generate matches.`);
+        if (unitCount < 2) {
+          throw new RouteError(400, `"${group.name}" only has ${unitCount} ${unitNoun}(s) — every group needs at least 2 to generate matches.`);
         }
         const groupMatches = group.schedule_type === 'matches_per_player'
-          ? generateNearestRatingSchedule(members, group.matches_per_player)
-          : generateSinglesRoundRobin(members);
+          ? (isDoubles
+              ? generateNearestRatingScheduleForTeams(teams, group.matches_per_player)
+              : generateNearestRatingSchedule(members, group.matches_per_player))
+          : generateRoundRobinSchedule(league, members);
 
         for (const m of groupMatches) {
           await client.query(
@@ -1400,6 +1535,31 @@ router.put('/:id/groups/:groupId/config', async (req, res) => {
   }
 });
 
+// Collapses a group's member list (which lists both partners of a doubles
+// team as separate rows, always carrying identical team stats — see
+// getGroupsWithStandings) down to one entry per team, preserving the
+// existing points/wins/rating ordering: whichever partner appears first in
+// `members` becomes that team's representative position. Each returned
+// entry is a [player, partner] pair (partner omitted if somehow missing).
+function dedupeTeams(members) {
+  const seen = new Set();
+  const teams = [];
+  for (const m of members) {
+    if (seen.has(m.id)) continue;
+    seen.add(m.id);
+    const team = [m];
+    if (m.partner_id) {
+      const partner = members.find((x) => x.id === m.partner_id);
+      if (partner && !seen.has(partner.id)) {
+        seen.add(partner.id);
+        team.push(partner);
+      }
+    }
+    teams.push(team);
+  }
+  return teams;
+}
+
 // ---------- ADVANCE TOP PLAYERS INTO A NEW GROUP (host only, convenience) ----------
 // The general way to run "many rounds" of a groups tournament is simply:
 // create another group, hand-pick whoever you want into it, choose its
@@ -1445,10 +1605,24 @@ router.post('/:id/groups/advance', async (req, res) => {
     if (sourceGroups.length === 0) {
       return res.status(400).json({ error: 'No source groups to advance from.' });
     }
+    // Doubles: "top N" means top N TEAMS, not individuals — dedupe each
+    // group's member list (which lists both partners as separate rows,
+    // always sharing identical team stats) down to one entry per team
+    // before checking/ranking. groupTeams caches this per source group so
+    // the qualifier-selection loop below doesn't recompute it.
+    const isDoubles = league.format === 'doubles';
+    const groupTeams = new Map();
+    if (isDoubles) {
+      for (const group of sourceGroups) {
+        groupTeams.set(group.id, dedupeTeams(group.members));
+      }
+    }
     for (const group of sourceGroups) {
-      if (group.members.length < advanceCount) {
+      const unitCount = isDoubles ? groupTeams.get(group.id).length : group.members.length;
+      const unitNoun = isDoubles ? 'team' : 'player';
+      if (unitCount < advanceCount) {
         return res.status(400).json({
-          error: `"${group.name}" only has ${group.members.length} player(s) — can't advance ${advanceCount} from it.`,
+          error: `"${group.name}" only has ${unitCount} ${unitNoun}(s) — can't advance ${advanceCount} from it.`,
         });
       }
     }
@@ -1480,11 +1654,18 @@ router.post('/:id/groups/advance', async (req, res) => {
     // Members are already ordered by points desc, rating desc within each
     // group (inherited from getGroupsWithStandings) — take the top N from
     // each and combine, alternating groups so top seeds from different
-    // groups don't end up adjacent to each other.
+    // groups don't end up adjacent to each other. Doubles advances whole
+    // teams (both partners) per qualifying slot, not individuals.
     const qualifiers = [];
     for (let rank = 0; rank < advanceCount; rank++) {
       for (const group of sourceGroups) {
-        qualifiers.push(group.members[rank]);
+        if (isDoubles) {
+          const team = groupTeams.get(group.id)[rank];
+          if (team) qualifiers.push(...team);
+        } else {
+          const m = group.members[rank];
+          if (m) qualifiers.push(m);
+        }
       }
     }
 
@@ -2401,13 +2582,9 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
       if (scheduleType && finalScheduleType === 'matches_per_player' && (!matchesPerPlayer || matchesPerPlayer < 1)) {
         throw new RouteError(400, 'Please specify how many matches each player should play.');
       }
-      // Groups format is singles-only, same restriction as at creation time —
-      // doubles would need partner resolution done separately within each
-      // group before anything could be scheduled.
-      if (finalScheduleType === 'groups' && league.format !== 'singles') {
-        throw new RouteError(400, 'The Groups format is currently only supported for singles leagues.');
+      if (finalScheduleType === 'groups' && league.format === 'doubles' && league.partner_mode === 'host_auto') {
+        throw new RouteError(400, 'Doubles Groups tournaments need partners to stay paired across every group — change the partner mode (Edit Tournament) to self-select or host-assigns before switching to Groups.');
       }
-
       // Check the match-count warning BEFORE wiping anything — a host
       // declining the warning shouldn't still lose their existing history.
       if (finalScheduleType === 'round_robin' && !force) {
@@ -2946,6 +3123,9 @@ router.put('/:id', async (req, res) => {
       if (!VALID_PARTNER_MODES.includes(partnerMode)) {
         return res.status(400).json({ error: 'Invalid partner mode.' });
       }
+      if (league.schedule_type === 'groups' && partnerMode === 'host_auto') {
+        return res.status(400).json({ error: 'Doubles Groups tournaments need partners to stay paired across every group — automatic pairing recomputes pairs on the fly and can\'t guarantee that. Use self-select or host-assigns instead.' });
+      }
       const anyPaired = await pool.query(
         `SELECT id FROM league_members WHERE league_id = $1 AND partner_status IS NOT NULL LIMIT 1`,
         [leagueId]
@@ -3129,5 +3309,11 @@ router.delete('/:id/schedule/:scheduledMatchId', async (req, res) => {
     res.status(500).json({ error: 'Something went wrong deleting the match.' });
   }
 });
+
+// Attached the same way matchRoutes.js/playoffRoutes.js attach their own
+// module-private helpers, and db.js attaches withTransaction/RouteError —
+// the test suite can reach this pure function without changing how
+// server.js consumes this file.
+router.dedupeTeams = dedupeTeams;
 
 module.exports = router;
