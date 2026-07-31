@@ -72,8 +72,12 @@ class RatingDeltaText extends StatelessWidget {
 }
 
 /// The accent-colored "N pts" readout used on leaderboards/standings.
+/// `points` is dynamic (not num) because some of these come from SQL SUM()
+/// results — Postgres returns those as bigint, which node-postgres parses
+/// as a JS string unless the pool overrides it (see backend/db.js) — this
+/// only ever gets string-interpolated, so any type displays fine.
 class PointsBadge extends StatelessWidget {
-  final num points;
+  final dynamic points;
   final double fontSize;
 
   const PointsBadge({super.key, required this.points, this.fontSize = 15});

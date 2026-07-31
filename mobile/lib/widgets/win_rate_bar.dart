@@ -7,8 +7,13 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 
 class WinRateBar extends StatelessWidget {
-  final int wins;
-  final int losses;
+  // dynamic, not int: some backend counts are SQL SUM()/COUNT() results,
+  // which Postgres returns as bigint — node-postgres parses that as a JS
+  // string unless the pool overrides it (see backend/db.js), so this widget
+  // tolerates either shape defensively rather than crashing on whichever
+  // endpoint doesn't.
+  final dynamic wins;
+  final dynamic losses;
   final double height;
 
   const WinRateBar({
@@ -18,10 +23,18 @@ class WinRateBar extends StatelessWidget {
     this.height = 8,
   });
 
+  int _asInt(dynamic v) {
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse(v?.toString() ?? '') ?? 0;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final total = wins + losses;
-    final ratio = total == 0 ? 0.0 : wins / total;
+    final winsInt = _asInt(wins);
+    final lossesInt = _asInt(losses);
+    final total = winsInt + lossesInt;
+    final ratio = total == 0 ? 0.0 : winsInt / total;
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(height / 2),

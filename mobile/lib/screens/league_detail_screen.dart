@@ -2004,6 +2004,53 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
   }
 
+  // No single "team profile" screen exists, so let the host pick which
+  // partner's profile to open instead of always defaulting to one of them.
+  Future<void> _choosePairMember(BuildContext context, dynamic pair) async {
+    final userId = await showModalBottomSheet<int>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(top: 12, bottom: 4),
+              child: Text(
+                'View whose profile?',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+              ),
+            ),
+            ListTile(
+              leading: _playerAvatar({
+                'username': pair['player_a_username'],
+                'profile_pic_url': pair['player_a_profile_pic_url'],
+              }, 16),
+              title: Text(pair['player_a_username'] ?? ''),
+              onTap: () => Navigator.pop(ctx, pair['player_a_id'] as int),
+            ),
+            ListTile(
+              leading: _playerAvatar({
+                'username': pair['player_b_username'],
+                'profile_pic_url': pair['player_b_profile_pic_url'],
+              }, 16),
+              title: Text(pair['player_b_username'] ?? ''),
+              onTap: () => Navigator.pop(ctx, pair['player_b_id'] as int),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (userId == null || !context.mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => PlayerProfileScreen(userId: userId)),
+    );
+  }
+
   Widget _buildPairLeaderboardList(bool isDark) {
     if (_pairLeaderboard == null || _pairLeaderboard!.isEmpty) {
       return const FriendlyEmptyState(
@@ -2041,19 +2088,12 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 horizontal: 12,
                 vertical: 0,
               ),
-              // Tapping a pair opens the first partner's profile — there's
-              // no single "team profile" screen, so this is the same
-              // navigation the singles leaderboard rows already use, just
-              // anchored to one half of the pair.
+              // There's no single "team profile" screen, so tapping a pair
+              // asks which partner's profile to open rather than silently
+              // picking one.
               onTap: () {
                 HapticFeedback.selectionClick();
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        PlayerProfileScreen(userId: pair['player_a_id']),
-                  ),
-                );
+                _choosePairMember(context, pair);
               },
               leading: CircleAvatar(
                 radius: 15,
