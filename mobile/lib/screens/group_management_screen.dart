@@ -14,11 +14,14 @@ class GroupManagementScreen extends StatefulWidget {
 }
 
 class _GroupManagementScreenState extends State<GroupManagementScreen> {
+  Map<String, dynamic>? _league;
   List<dynamic> _groups = [];
   List<dynamic> _unassignedMembers = [];
   bool _loading = true;
   String? _error;
   bool _submitting = false;
+
+  bool get _isDoubles => _league?['format'] == 'doubles';
 
   @override
   void initState() {
@@ -32,20 +35,66 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
       _error = null;
     });
     try {
-      final res = await ApiClient.get('/leagues/${widget.leagueId}/groups');
-      if (res.statusCode == 200) {
+      final results = await Future.wait([
+        ApiClient.get('/leagues/${widget.leagueId}'),
+        ApiClient.get('/leagues/${widget.leagueId}/groups'),
+      ]);
+      final leagueRes = results[0];
+      final groupsRes = results[1];
+
+      if (leagueRes.statusCode == 200) {
+        _league = leagueRes.data['league'];
+      }
+      if (groupsRes.statusCode == 200) {
         setState(() {
-          _groups = res.data['groups'];
-          _unassignedMembers = res.data['unassignedMembers'];
+          _groups = groupsRes.data['groups'];
+          _unassignedMembers = groupsRes.data['unassignedMembers'];
         });
       } else {
-        setState(() => _error = res.errorOr('Could not load groups.'));
+        setState(() => _error = groupsRes.errorOr('Could not load groups.'));
       }
     } catch (err) {
       setState(() => _error = 'Could not reach the server.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  // Doubles: a group's member list carries both partners of a team as
+  // separate entries (always sharing identical group_ids/stats — see the
+  // backend's getGroupsWithStandings), since a player can be in several
+  // groups independently of their partner's own membership history. This
+  // collapses that down to one display row per team for Manage Groups,
+  // where the pair is always assigned/unassigned/moved as a single unit.
+  // Singles leagues get one entry per player, unchanged, just with a
+  // displayName added so rendering code can stay uniform.
+  List<dynamic> _displayUnits(List<dynamic> members) {
+    if (!_isDoubles) {
+      return members.map((m) => {...m, 'displayName': m['username']}).toList();
+    }
+    final seen = <int>{};
+    final units = <dynamic>[];
+    for (final m in members) {
+      if (seen.contains(m['id'])) continue;
+      seen.add(m['id'] as int);
+      dynamic partner;
+      if (m['partner_id'] != null) {
+        for (final candidate in members) {
+          if (candidate['id'] == m['partner_id']) {
+            partner = candidate;
+            break;
+          }
+        }
+        if (partner != null) seen.add(partner['id'] as int);
+      }
+      units.add({
+        ...m,
+        'displayName': partner != null
+            ? '${m['username']} & ${partner['username']}'
+            : m['username'],
+      });
+    }
+    return units;
   }
 
   String _formatLabel(dynamic group) {
@@ -751,8 +800,10 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                 TextField(
                   controller: advanceCountController,
                   keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Players advancing per source group',
+                  decoration: InputDecoration(
+                    labelText: _isDoubles
+                        ? 'Teams advancing per source group'
+                        : 'Players advancing per source group',
                     isDense: true,
                     hintText: 'e.g. 2',
                   ),
@@ -919,11 +970,11 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                   if (_unassignedMembers.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Text(
-                      'Unassigned Players',
+                      _isDoubles ? 'Unassigned Teams' : 'Unassigned Players',
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 8),
-                    ..._unassignedMembers.map((m) => _buildUnassignedRow(m)),
+                    ..._displayUnits(_unassignedMembers).map((m) => _buildUnassignedRow(m)),
                   ],
                 ],
               ),
@@ -946,6 +997,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
   Widget _buildGroupCard(dynamic group) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final members = group['members'] as List;
+    final units = _displayUnits(members);
     final locked = group['locked'] == true;
 
     return Container(
@@ -992,7 +1044,9 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                   ),
                 ),
                 Text(
-                  '${members.length} player${members.length == 1 ? '' : 's'}',
+                  _isDoubles
+                      ? '${units.length} team${units.length == 1 ? '' : 's'}'
+                      : '${units.length} player${units.length == 1 ? '' : 's'}',
                   style: const TextStyle(
                     fontSize: 12,
                     color: AppColors.textGrey,
@@ -1030,16 +1084,16 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                   ),
               ],
             ),
-            if (members.isEmpty)
-              const Padding(
-                padding: EdgeInsets.only(top: 4),
+            if (units.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  'No players yet.',
-                  style: TextStyle(fontSize: 12, color: AppColors.textGrey),
+                  _isDoubles ? 'No teams yet.' : 'No players yet.',
+                  style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
                 ),
               )
             else
-              ...members.map<Widget>((m) {
+              ...units.map<Widget>((m) {
                 final candidateGroups = _candidateGroupsFor(m, group);
                 return Padding(
                   padding: const EdgeInsets.only(top: 4),
@@ -1047,7 +1101,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                     children: [
                       Expanded(
                         child: Text(
-                          '${m['username']} (${m['rating']})',
+                          '${m['displayName']} (${m['rating']})',
                           style: const TextStyle(fontSize: 13),
                         ),
                       ),
@@ -1102,7 +1156,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
         children: [
           Expanded(
             child: Text(
-              '${member['username']} (${member['rating']})',
+              '${member['displayName']} (${member['rating']})',
               style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
             ),
           ),

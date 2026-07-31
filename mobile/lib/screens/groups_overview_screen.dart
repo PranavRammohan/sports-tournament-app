@@ -31,6 +31,46 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
   // Tennis is scored in "Sets"; everything else in this app is "Games".
   String get _unitLabel => _league?['sport'] == 'tennis' ? 'Set' : 'Game';
 
+  bool get _isDoubles => _league?['format'] == 'doubles';
+
+  // "Alice & Bob" for a doubles team, or just the one name for singles.
+  String _teamLabel(String? username, String? partnerUsername) {
+    final name = username ?? '';
+    return partnerUsername != null ? '$name & $partnerUsername' : name;
+  }
+
+  // Mirrors group_management_screen.dart's _displayUnits: a group's member
+  // list carries both partners of a doubles team as separate entries
+  // (always sharing identical group_ids/stats), so standings collapse that
+  // down to one row per team. Singles is unchanged, just with a displayName
+  // added so rendering stays uniform.
+  List<dynamic> _displayUnits(List<dynamic> members) {
+    if (!_isDoubles) {
+      return members.map((m) => {...m, 'displayName': m['username']}).toList();
+    }
+    final seen = <int>{};
+    final units = <dynamic>[];
+    for (final m in members) {
+      if (seen.contains(m['id'])) continue;
+      seen.add(m['id'] as int);
+      dynamic partner;
+      if (m['partner_id'] != null) {
+        for (final candidate in members) {
+          if (candidate['id'] == m['partner_id']) {
+            partner = candidate;
+            break;
+          }
+        }
+        if (partner != null) seen.add(partner['id'] as int);
+      }
+      units.add({
+        ...m,
+        'displayName': _teamLabel(m['username'], partner?['username']),
+      });
+    }
+    return units;
+  }
+
   // Mirrors the backend's resolvePointsConfig: a group's own points_enabled
   // wins if set, otherwise it inherits the tournament's setting.
   bool _groupPointsEnabled(dynamic group) {
@@ -208,7 +248,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
       return BracketView(
         leagueId: widget.leagueId,
         isHost: widget.isHost,
-        format: 'singles',
+        format: _league?['format'] ?? 'singles',
         groupId: group['id'] as int,
         groupLocked: group['locked'] == true,
       );
@@ -246,9 +286,9 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
           ),
           const SizedBox(height: 8),
           if (members.isEmpty)
-            const Text('No players in this group yet.')
+            Text(_isDoubles ? 'No teams in this group yet.' : 'No players in this group yet.')
           else
-            ...members.asMap().entries.map((entry) {
+            ..._displayUnits(members).asMap().entries.map((entry) {
               final rank = entry.key + 1;
               final m = entry.value;
               final pointsEnabled = _groupPointsEnabled(group);
@@ -275,7 +315,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                     ),
                     Expanded(
                       child: Text(
-                        m['username'],
+                        m['displayName'],
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
                     ),
@@ -318,7 +358,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                       MaterialPageRoute(
                         builder: (_) => AddManualMatchScreen(
                           leagueId: widget.leagueId,
-                          format: 'singles',
+                          format: _league?['format'] ?? 'singles',
                           members: members,
                           groupId: group['id'] as int,
                         ),
@@ -514,8 +554,8 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) => _HostScoreDialog(
-        player1Name: f['player1_username'] ?? '',
-        player2Name: f['player2_username'] ?? '',
+        player1Name: _teamLabel(f['player1_username'], f['player1_partner_username']),
+        player2Name: _teamLabel(f['player2_username'], f['player2_partner_username']),
         title: 'Edit Score',
         unitLabel: _unitLabel,
         initialSets: initialSets,
@@ -562,8 +602,8 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) => _HostScoreDialog(
-        player1Name: f['player1_username'] ?? '',
-        player2Name: f['player2_username'] ?? '',
+        player1Name: _teamLabel(f['player1_username'], f['player1_partner_username']),
+        player2Name: _teamLabel(f['player2_username'], f['player2_partner_username']),
         title: 'Enter Score',
         unitLabel: _unitLabel,
       ),
@@ -577,9 +617,9 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
         body: {
           'leagueId': widget.leagueId,
           'player1Id': f['player1_id'],
-          'player1PartnerId': null,
+          'player1PartnerId': f['player1_partner_id'],
           'player2Id': f['player2_id'],
-          'player2PartnerId': null,
+          'player2PartnerId': f['player2_partner_id'],
           'player1Units': result['player1Units'],
           'player2Units': result['player2Units'],
           'player1Won': result['player1Won'],
@@ -701,7 +741,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                   TextSpan(
                     children: [
                       TextSpan(
-                        text: f['player1_username'] ?? '',
+                        text: _teamLabel(f['player1_username'], f['player1_partner_username']),
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: team1Won
@@ -712,7 +752,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                       ),
                       const TextSpan(text: '  vs  '),
                       TextSpan(
-                        text: f['player2_username'] ?? '',
+                        text: _teamLabel(f['player2_username'], f['player2_partner_username']),
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: team2Won
@@ -812,18 +852,25 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                         visualDensity: VisualDensity.compact,
                       ),
                     ),
-                  TextButton.icon(
-                    onPressed: () => _openEditFixtureDialog(f, members),
-                    icon: const Icon(Icons.edit_outlined, size: 15),
-                    label: const Text(
-                      'Edit Match',
-                      style: TextStyle(fontSize: 12),
+                  // Reassigning who's playing an unplayed fixture is
+                  // singles-only for now — it only swaps individual
+                  // player1Id/player2Id, with no way to pick a team, so
+                  // offering it for a doubles group would silently drop
+                  // partner assignments. Removing/re-adding the fixture is
+                  // still available for doubles.
+                  if (!_isDoubles)
+                    TextButton.icon(
+                      onPressed: () => _openEditFixtureDialog(f, members),
+                      icon: const Icon(Icons.edit_outlined, size: 15),
+                      label: const Text(
+                        'Edit Match',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        visualDensity: VisualDensity.compact,
+                      ),
                     ),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ),
                   TextButton.icon(
                     onPressed: () => _confirmDeleteFixture(f['id']),
                     icon: const Icon(

@@ -126,16 +126,17 @@ class _RegenerateScheduleDialogState extends State<RegenerateScheduleDialog> {
                       style: TextStyle(fontSize: 11),
                     ),
                   ),
-                  if (widget.isSingles)
-                    RadioListTile<String>(
-                      contentPadding: EdgeInsets.zero,
-                      value: 'groups',
-                      title: const Text('Groups', style: TextStyle(fontSize: 14)),
-                      subtitle: const Text(
-                        'Create named groups any time, pick who\'s in each one, and choose that group\'s own format afterward.',
-                        style: TextStyle(fontSize: 11),
-                      ),
+                  RadioListTile<String>(
+                    contentPadding: EdgeInsets.zero,
+                    value: 'groups',
+                    title: const Text('Groups', style: TextStyle(fontSize: 14)),
+                    subtitle: Text(
+                      widget.isSingles
+                          ? 'Create named groups any time, pick who\'s in each one, and choose that group\'s own format afterward.'
+                          : 'Create named groups any time, pick which teams are in each one, and choose that group\'s own format afterward. Needs self-select or host-assigns partner mode (not automatic).',
+                      style: const TextStyle(fontSize: 11),
                     ),
+                  ),
                 ],
               ),
             ),

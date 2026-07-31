@@ -161,6 +161,15 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
       _showAlert('Invalid dates', 'End date must be after start date.');
       return;
     }
+    if (_scheduleType == 'groups' &&
+        _selectedFormat == 'Doubles' &&
+        _partnerMode == 'host_auto') {
+      _showAlert(
+        'Choose a different partner mode',
+        'Doubles Groups tournaments need partners to stay paired across every group — pick "Players choose their own partner" or "I will assign partners myself" instead of automatic pairing.',
+      );
+      return;
+    }
 
     int? matchesPerPlayer;
     if (_scheduleType == 'matches_per_player') {
@@ -421,12 +430,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                 DropdownMenuItem(value: 'Singles', child: Text('Singles')),
                 DropdownMenuItem(value: 'Doubles', child: Text('Doubles')),
               ],
-              onChanged: (v) => setState(() {
-                _selectedFormat = v;
-                if (v == 'Doubles' && _scheduleType == 'groups') {
-                  _scheduleType = 'round_robin';
-                }
-              }),
+              onChanged: (v) => setState(() => _selectedFormat = v),
             ),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
@@ -535,16 +539,17 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                       style: TextStyle(fontSize: 11),
                     ),
                   ),
-                  if (isSingles)
-                    RadioListTile<String>(
-                      contentPadding: EdgeInsets.zero,
-                      value: 'groups',
-                      title: const Text('Groups (many rounds, your call)'),
-                      subtitle: const Text(
-                        'Create named groups any time, pick who\'s in each one, and choose that group\'s own format (round robin, knockout, fixed matches, or add matches by hand) — after the tournament is created.',
-                        style: TextStyle(fontSize: 11),
-                      ),
+                  RadioListTile<String>(
+                    contentPadding: EdgeInsets.zero,
+                    value: 'groups',
+                    title: const Text('Groups (many rounds, your call)'),
+                    subtitle: Text(
+                      isSingles
+                          ? 'Create named groups any time, pick who\'s in each one, and choose that group\'s own format (round robin, knockout, fixed matches, or add matches by hand) — after the tournament is created.'
+                          : 'Create named groups any time, pick which teams are in each one, and choose that group\'s own format — after the tournament is created. Partners must use self-select or host-assigns (not automatic) so pairs stay together across groups.',
+                      style: const TextStyle(fontSize: 11),
                     ),
+                  ),
                 ],
               ),
             ),
