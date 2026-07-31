@@ -8,6 +8,9 @@ import '../widgets/sport_icon.dart';
 import '../widgets/player_avatar.dart';
 import '../widgets/match_badges.dart';
 import '../widgets/loading_skeleton.dart';
+import '../widgets/rating_sparkline.dart';
+import '../widgets/win_rate_bar.dart';
+import '../widgets/recent_form_strip.dart';
 
 class PlayerProfileScreen extends StatefulWidget {
   final int userId;
@@ -220,9 +223,22 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
             if (_headToHeadMatches != null &&
                 _headToHeadMatches!.isNotEmpty) ...[
               const SizedBox(height: 14),
-              Text(
-                'Recent Matches',
-                style: Theme.of(context).textTheme.titleMedium,
+              Row(
+                children: [
+                  Text(
+                    'Recent Matches',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(width: 10),
+                  RecentFormStrip(
+                    results: _headToHeadMatches!
+                        .take(5)
+                        .toList()
+                        .reversed
+                        .map(_iWonMatch)
+                        .toList(),
+                  ),
+                ],
               ),
               const SizedBox(height: 8),
               ..._headToHeadMatches!.map(
@@ -504,13 +520,23 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
                         ),
                       ],
                     ),
-                    Text(
-                      '$wins-$losses',
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.accent,
-                      ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          '$wins-$losses',
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.accent,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        SizedBox(
+                          width: 70,
+                          child: WinRateBar(wins: wins, losses: losses),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -553,15 +579,38 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
                 '${data['matches_played']} matches · ${data['wins']}W ${data['losses']}L',
                 style: TextStyle(fontSize: 11, color: subtleTextColor),
               ),
+              if ((data['matches_played'] ?? 0) > 0) ...[
+                const SizedBox(height: 4),
+                SizedBox(
+                  width: 90,
+                  child: WinRateBar(
+                    wins: data['wins'] ?? 0,
+                    losses: data['losses'] ?? 0,
+                  ),
+                ),
+              ],
             ],
           ),
-          Text(
-            '${data['rating']}',
-            style: const TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.bold,
-              color: AppColors.accent,
-            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (data['matches_played'] != null && data['matches_played'] > 0) ...[
+                RatingSparkline(
+                  userId: widget.userId,
+                  sport: data['sport'],
+                  format: data['format'],
+                ),
+                const SizedBox(width: 10),
+              ],
+              Text(
+                '${data['rating']}',
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.accent,
+                ),
+              ),
+            ],
           ),
         ],
       ),

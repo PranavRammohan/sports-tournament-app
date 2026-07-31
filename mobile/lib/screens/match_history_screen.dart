@@ -8,6 +8,7 @@ import '../api_client.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
+import '../widgets/match_badges.dart';
 import 'league_detail_screen.dart';
 
 class MatchHistoryScreen extends StatefulWidget {
@@ -199,15 +200,6 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                                 );
                               }
 
-                              final changeText = ratingChange == null
-                                  ? ''
-                                  : (ratingChange >= 0
-                                        ? '+${ratingChange.toStringAsFixed(2)}'
-                                        : ratingChange.toStringAsFixed(2));
-                              final changeColor = (ratingChange ?? 0) >= 0
-                                  ? AppColors.success
-                                  : AppColors.danger;
-
                               final tournamentLabel =
                                   (m['league_name'] as String?) ??
                                   '${_formatSport(m['sport'])} · ${m['area']}';
@@ -306,15 +298,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                                               ],
                                             ),
                                           ),
-                                          if (ratingChange != null)
-                                            Text(
-                                              changeText,
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.bold,
-                                                color: changeColor,
-                                              ),
-                                            ),
+                                          RatingDeltaText(delta: ratingChange),
                                           if (m['league_id'] != null)
                                             Padding(
                                               padding: const EdgeInsets.only(

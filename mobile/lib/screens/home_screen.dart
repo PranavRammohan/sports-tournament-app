@@ -10,6 +10,7 @@ import '../widgets/player_avatar.dart';
 import '../widgets/match_badges.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
+import '../widgets/win_rate_bar.dart';
 import 'add_sport_screen.dart';
 import 'my_leagues_screen.dart';
 import 'match_history_screen.dart';
@@ -306,6 +307,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           borderColor,
                           subtleTextColor,
                           isDark,
+                          barWins: _wins,
+                          barLosses: losses,
                           onTap: () {
                             HapticFeedback.selectionClick();
                             Navigator.push(
@@ -461,6 +464,8 @@ class _HomeScreenState extends State<HomeScreen> {
     bool isDark, {
     required VoidCallback onTap,
     bool smallValue = false,
+    int? barWins,
+    int? barLosses,
   }) {
     return InkWell(
       borderRadius: BorderRadius.circular(10),
@@ -490,6 +495,13 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 2),
             Text(label, style: TextStyle(fontSize: 11, color: subtleTextColor)),
+            if (barWins != null && barLosses != null) ...[
+              const SizedBox(height: 6),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: WinRateBar(wins: barWins, losses: barLosses),
+              ),
+            ],
           ],
         ),
       ),
