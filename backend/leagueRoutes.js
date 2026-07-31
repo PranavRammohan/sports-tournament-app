@@ -93,6 +93,33 @@ function checkRegistrationWindow(league) {
 
 const VALID_PARTNER_MODES = ['host_auto', 'self_select', 'host_manual'];
 
+// A reasonable ceiling for a single win/loss point value — high enough to
+// never legitimately trigger, just a sanity guard against garbage input.
+const MAX_PLAUSIBLE_POINTS = 100;
+
+function isValidPointsValue(value) {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_PLAUSIBLE_POINTS;
+}
+
+// Validates an optional per-group points override. Each of the three fields
+// may be provided or omitted independently — omitted means "inherit this
+// field from the tournament" (stored as NULL on league_groups). Returns
+// { error } on invalid input, or { pointsEnabled, pointsWin, pointsLoss }
+// (each possibly null = inherit) on success.
+function resolveGroupPointsOverride(body) {
+  const { pointsEnabled, pointsWin, pointsLoss } = body;
+  const finalPointsEnabled = pointsEnabled !== undefined ? (pointsEnabled === true) : null;
+  const finalPointsWin = pointsWin !== undefined ? pointsWin : null;
+  const finalPointsLoss = pointsLoss !== undefined ? pointsLoss : null;
+  if (finalPointsWin != null && !isValidPointsValue(finalPointsWin)) {
+    return { error: 'Points for a win must be a whole number between 0 and 100.' };
+  }
+  if (finalPointsLoss != null && !isValidPointsValue(finalPointsLoss)) {
+    return { error: 'Points for a loss must be a whole number between 0 and 100.' };
+  }
+  return { pointsEnabled: finalPointsEnabled, pointsWin: finalPointsWin, pointsLoss: finalPointsLoss };
+}
+
 // ---------- CREATE LEAGUE ----------
 router.post('/create', async (req, res) => {
   const userId = req.userId;
@@ -100,6 +127,7 @@ router.post('/create', async (req, res) => {
     name, sport, area, seasonStart, seasonEnd, format, genderCategory,
     scheduleType, matchesPerPlayer, hostEntersScores, hostPlays, isPrivate, academyName,
     minRating, maxRating, registrationStart, registrationEnd, partnerMode,
+    pointsEnabled, pointsWin, pointsLoss,
   } = req.body;
 
   if (!name || !sport || !area || !seasonStart || !seasonEnd || !format || !genderCategory) {
@@ -143,6 +171,13 @@ router.post('/create', async (req, res) => {
     return res.status(400).json({ error: 'Registration start must be before registration end.' });
   }
 
+  const finalPointsEnabled = pointsEnabled !== false;
+  const finalPointsWin = pointsWin != null ? pointsWin : 2;
+  const finalPointsLoss = pointsLoss != null ? pointsLoss : 0;
+  if (finalPointsEnabled && (!isValidPointsValue(finalPointsWin) || !isValidPointsValue(finalPointsLoss))) {
+    return res.status(400).json({ error: 'Points for a win/loss must be whole numbers between 0 and 100.' });
+  }
+
   try {
     let joinCode = null;
     if (isPrivate === true) {
@@ -157,11 +192,13 @@ router.post('/create', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO leagues (name, sport, area, season_start, season_end, created_by, format, gender_category,
                             schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
-                            min_rating, max_rating, registration_start, registration_end, partner_mode)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                            min_rating, max_rating, registration_start, registration_end, partner_mode,
+                            points_enabled, points_win, points_loss)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
        RETURNING id, name, sport, area, season_start, season_end, format, gender_category, created_by,
                  schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
-                 min_rating, max_rating, registration_start, registration_end, partner_mode`,
+                 min_rating, max_rating, registration_start, registration_end, partner_mode,
+                 points_enabled, points_win, points_loss`,
       [
         name, sport, area, seasonStart, seasonEnd, userId, format, genderCategory,
         finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null,
@@ -172,6 +209,7 @@ router.post('/create', async (req, res) => {
         registrationStart || null,
         registrationEnd || null,
         format === 'doubles' ? finalPartnerMode : 'host_auto',
+        finalPointsEnabled, finalPointsEnabled ? finalPointsWin : 0, finalPointsEnabled ? finalPointsLoss : 0,
       ]
     );
 
@@ -680,6 +718,11 @@ router.post('/:id/groups', async (req, res) => {
     return res.status(400).json({ error: 'Please specify how many matches each player should play within this group.' });
   }
 
+  const pointsOverride = resolveGroupPointsOverride(req.body);
+  if (pointsOverride.error) {
+    return res.status(400).json({ error: pointsOverride.error });
+  }
+
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
@@ -695,13 +738,17 @@ router.post('/:id/groups', async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO league_groups (league_id, name, schedule_type, matches_per_player)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
+      `INSERT INTO league_groups (league_id, name, schedule_type, matches_per_player,
+                                  points_enabled, points_win, points_loss)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
       [
         leagueId,
         name.trim(),
         finalScheduleType,
         finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null,
+        pointsOverride.pointsEnabled,
+        pointsOverride.pointsWin,
+        pointsOverride.pointsLoss,
       ]
     );
 
@@ -750,18 +797,22 @@ async function getGroupsWithStandings(league, leagueId) {
      ) gm ON gm.user_id = u.id
      LEFT JOIN (
        SELECT player_id, COUNT(*) AS matches_played,
-              SUM(won) AS wins, SUM(1 - won) AS losses, SUM(points_if_won) AS points
+              SUM(won) AS wins, SUM(1 - won) AS losses, SUM(points_earned) AS points
        FROM (
          SELECT m.player1_id AS player_id,
                 CASE WHEN m.winner_id = m.player1_id THEN 1 ELSE 0 END AS won,
-                CASE WHEN m.winner_id = m.player1_id THEN COALESCE(m.league_points_awarded, 0) ELSE 0 END AS points_if_won
+                CASE WHEN m.winner_id = m.player1_id
+                     THEN COALESCE(m.league_points_awarded, 0)
+                     ELSE COALESCE(m.league_points_awarded_loser, 0) END AS points_earned
          FROM matches m
          JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
          WHERE sm.league_id = $3 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
          UNION ALL
          SELECT m.player2_id,
                 CASE WHEN m.winner_id = m.player2_id THEN 1 ELSE 0 END,
-                CASE WHEN m.winner_id = m.player2_id THEN COALESCE(m.league_points_awarded, 0) ELSE 0 END
+                CASE WHEN m.winner_id = m.player2_id
+                     THEN COALESCE(m.league_points_awarded, 0)
+                     ELSE COALESCE(m.league_points_awarded_loser, 0) END
          FROM matches m
          JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
          WHERE sm.league_id = $3 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
@@ -769,7 +820,7 @@ async function getGroupsWithStandings(league, leagueId) {
        GROUP BY player_id
      ) stats ON stats.player_id = u.id
      WHERE lm.league_id = $3
-     ORDER BY COALESCE(stats.points, 0) DESC, us.rating DESC`,
+     ORDER BY COALESCE(stats.points, 0) DESC, COALESCE(stats.wins, 0) DESC, us.rating DESC`,
     [league.sport, league.format, leagueId]
   );
   const members = membersResult.rows;
@@ -1068,6 +1119,13 @@ async function reverseGroupScheduledMatches(db, leagueId, groupId, league) {
         [match.league_points_awarded, leagueId, match.winner_id]
       );
     }
+    if (match.league_points_awarded_loser != null) {
+      const loserId = team1Won ? match.player2_id : match.player1_id;
+      await db.query(
+        'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+        [match.league_points_awarded_loser, leagueId, loserId]
+      );
+    }
   }
 }
 
@@ -1271,6 +1329,11 @@ router.put('/:id/groups/:groupId/config', async (req, res) => {
     return res.status(400).json({ error: 'Please specify how many matches each player should play within this group.' });
   }
 
+  const pointsOverride = resolveGroupPointsOverride(req.body);
+  if (pointsOverride.error) {
+    return res.status(400).json({ error: pointsOverride.error });
+  }
+
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
@@ -1294,8 +1357,15 @@ router.put('/:id/groups/:groupId/config', async (req, res) => {
     }
 
     await pool.query(
-      `UPDATE league_groups SET schedule_type = $1, matches_per_player = $2 WHERE id = $3`,
-      [scheduleType, scheduleType === 'matches_per_player' ? matchesPerPlayer : null, groupId]
+      `UPDATE league_groups
+       SET schedule_type = $1, matches_per_player = $2,
+           points_enabled = $3, points_win = $4, points_loss = $5
+       WHERE id = $6`,
+      [
+        scheduleType, scheduleType === 'matches_per_player' ? matchesPerPlayer : null,
+        pointsOverride.pointsEnabled, pointsOverride.pointsWin, pointsOverride.pointsLoss,
+        groupId,
+      ]
     );
 
     res.status(200).json({ message: 'Group format updated.' });
@@ -1703,7 +1773,7 @@ router.get('/:id', async (req, res) => {
          GROUP BY player_id
        ) match_stats ON match_stats.player_id = u.id
        WHERE lm.league_id = $3
-       ORDER BY lm.points DESC, us.rating DESC`,
+       ORDER BY lm.points DESC, COALESCE(match_stats.wins, 0) DESC, us.rating DESC`,
       [leagueData.sport, leagueData.format, leagueId]
     );
 
@@ -2178,6 +2248,17 @@ async function reverseAllConfirmedMatchesForLeague(db, leagueId, league) {
         );
       }
     }
+    if (match.league_points_awarded_loser != null) {
+      const loserIds = [team1Won ? match.player2_id : match.player1_id];
+      const loserPartnerId = team1Won ? match.player2_partner_id : match.player1_partner_id;
+      if (loserPartnerId) loserIds.push(loserPartnerId);
+      for (const lId of loserIds) {
+        await db.query(
+          'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+          [match.league_points_awarded_loser, leagueId, lId]
+        );
+      }
+    }
   }
 }
 
@@ -2229,6 +2310,13 @@ async function reverseStage2MatchesForLeague(db, leagueId, league) {
         [match.league_points_awarded, leagueId, match.winner_id]
       );
     }
+    if (match.league_points_awarded_loser != null) {
+      const loserId = team1Won ? match.player2_id : match.player1_id;
+      await db.query(
+        'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+        [match.league_points_awarded_loser, leagueId, loserId]
+      );
+    }
   }
 }
 
@@ -2256,20 +2344,20 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
       if (completedError) {
         throw new RouteError(400, completedError);
       }
-      if (league.schedule_type === 'groups') {
-        throw new RouteError(400, 'Groups tournaments use group management to set up matches — see the Groups tab instead.');
-      }
-      if (scheduleType === 'groups') {
-        throw new RouteError(400, 'Switching to Groups format isn\'t supported here — create a new tournament with Groups format instead.');
-      }
 
-      const validScheduleTypes = ['round_robin', 'matches_per_player', 'knockout', 'custom'];
+      const validScheduleTypes = ['round_robin', 'matches_per_player', 'knockout', 'custom', 'groups'];
       const finalScheduleType = scheduleType
         ? (validScheduleTypes.includes(scheduleType) ? scheduleType : 'round_robin')
         : league.schedule_type;
 
       if (scheduleType && finalScheduleType === 'matches_per_player' && (!matchesPerPlayer || matchesPerPlayer < 1)) {
         throw new RouteError(400, 'Please specify how many matches each player should play.');
+      }
+      // Groups format is singles-only, same restriction as at creation time —
+      // doubles would need partner resolution done separately within each
+      // group before anything could be scheduled.
+      if (finalScheduleType === 'groups' && league.format !== 'singles') {
+        throw new RouteError(400, 'The Groups format is currently only supported for singles leagues.');
       }
 
       // Check the match-count warning BEFORE wiping anything — a host
@@ -2307,9 +2395,27 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
       await client.query('DELETE FROM scheduled_matches WHERE league_id = $1', [leagueId]);
       await client.query('DELETE FROM playoff_matches WHERE league_id = $1', [leagueId]);
 
+      // Switching away from Groups tears down the groups themselves — there's
+      // no "old groups, new format" hybrid state. Membership history inside
+      // those groups goes with them, same as every other format switch wiping
+      // match history.
+      if (league.schedule_type === 'groups' && finalScheduleType !== 'groups') {
+        await client.query(
+          'DELETE FROM group_members WHERE group_id IN (SELECT id FROM league_groups WHERE league_id = $1)',
+          [leagueId]
+        );
+        await client.query('DELETE FROM league_groups WHERE league_id = $1', [leagueId]);
+      }
+
       const refreshedLeagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
       refreshedLeague = refreshedLeagueResult.rows[0];
 
+      if (refreshedLeague.schedule_type === 'groups') {
+        // Nothing to schedule yet — a Groups tournament has no fixtures
+        // until the host creates groups and locks them individually.
+        outcome = 'groups';
+        return;
+      }
       if (refreshedLeague.schedule_type === 'custom') {
         outcome = 'custom';
         return;
@@ -2369,6 +2475,9 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
       }
     });
 
+    if (outcome === 'groups') {
+      return res.status(200).json({ message: 'Switched to Groups format. Previous match history has been reversed — create groups from the Groups tab to get started.', matchCount: 0 });
+    }
     if (outcome === 'custom') {
       return res.status(200).json({ message: 'Schedule cleared and previous match history reversed. Add matches manually.', matchCount: 0 });
     }
@@ -2742,6 +2851,7 @@ router.put('/:id', async (req, res) => {
   const {
     name, area, seasonStart, seasonEnd, academyName, isPrivate, hostEntersScores,
     registrationStart, registrationEnd, partnerMode,
+    pointsEnabled, pointsWin, pointsLoss,
   } = req.body;
 
   try {
@@ -2825,6 +2935,21 @@ router.put('/:id', async (req, res) => {
       } else {
         updates.push(`is_private = $${idx++}`); params.push(isPrivate === true);
       }
+    }
+
+    // Points config can be changed at any time — it only affects matches
+    // confirmed from this point on, since each match freezes its own
+    // awarded points at confirm time (see getGroupsWithStandings above).
+    if (pointsEnabled !== undefined || pointsWin !== undefined || pointsLoss !== undefined) {
+      const finalPointsEnabled = pointsEnabled !== undefined ? pointsEnabled === true : league.points_enabled;
+      const finalPointsWin = pointsWin !== undefined ? pointsWin : league.points_win;
+      const finalPointsLoss = pointsLoss !== undefined ? pointsLoss : league.points_loss;
+      if (finalPointsEnabled && (!isValidPointsValue(finalPointsWin) || !isValidPointsValue(finalPointsLoss))) {
+        return res.status(400).json({ error: 'Points for a win/loss must be whole numbers between 0 and 100.' });
+      }
+      updates.push(`points_enabled = $${idx++}`); params.push(finalPointsEnabled);
+      updates.push(`points_win = $${idx++}`); params.push(finalPointsEnabled ? finalPointsWin : 0);
+      updates.push(`points_loss = $${idx++}`); params.push(finalPointsEnabled ? finalPointsLoss : 0);
     }
 
     if (updates.length === 0) {

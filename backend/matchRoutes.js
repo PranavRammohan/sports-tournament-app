@@ -65,11 +65,28 @@ async function updateRating(db, userId, sport, format, newRating, won) {
   }
 }
 
-// Flat scoring: 2 points for a win, 0 for a loss. No bonuses for upsets or
-// dominant (straight-set) wins — kept deliberately simple so every win is
-// worth exactly the same, regardless of how it happened.
-function calculateLeaguePoints(sport, winnerRating, loserRating, setScores, winnerWonTeam1) {
-  return 2;
+// Points config is set per-tournament (points_enabled/points_win/points_loss
+// on leagues) with an optional per-group override (same three columns on
+// league_groups, NULL meaning "inherit this field from the league"). A match
+// belongs to a group only via its scheduled_match_id -> scheduled_matches.group_id;
+// matches with no scheduled_match_id (manually added, or non-Groups leagues)
+// always use the league's own config. Every win is worth the same regardless
+// of how it happened — no bonuses for upsets or dominant (straight-set) wins.
+async function resolvePointsConfig(db, match, league) {
+  let group = null;
+  if (match.scheduled_match_id) {
+    const result = await db.query(
+      `SELECT lg.* FROM scheduled_matches sm
+       JOIN league_groups lg ON lg.id = sm.group_id
+       WHERE sm.id = $1 AND sm.group_id IS NOT NULL`,
+      [match.scheduled_match_id]
+    );
+    group = result.rows[0] || null;
+  }
+  const enabled = (group && group.points_enabled != null) ? group.points_enabled : league.points_enabled;
+  const win = (group && group.points_win != null) ? group.points_win : league.points_win;
+  const loss = (group && group.points_loss != null) ? group.points_loss : league.points_loss;
+  return { enabled, win, loss };
 }
 
 async function awardLeaguePoints(db, leagueId, winnerId, points) {
@@ -142,25 +159,32 @@ async function finalizeMatch(db, match, league) {
   const player1PartnerRatingChange = await applyChange(match.player1_partner_id, rating1b, change1, team1Won);
   const player2PartnerRatingChange = await applyChange(match.player2_partner_id, rating2b, change2, !team1Won);
 
-  const winnerRating = team1Won ? team1Rating : team2Rating;
-  const loserRating = team1Won ? team2Rating : team1Rating;
-  const points = calculateLeaguePoints(sport, winnerRating, loserRating, match.set_scores, team1Won);
+  const pointsConfig = await resolvePointsConfig(db, match, league);
+  const winnerPoints = pointsConfig.enabled ? pointsConfig.win : 0;
+  const loserPoints = pointsConfig.enabled ? pointsConfig.loss : 0;
 
   await db.query(
     `UPDATE matches SET status = 'confirmed',
       player1_rating_change = $1, player2_rating_change = $2,
       player1_partner_rating_change = $3, player2_partner_rating_change = $4,
-      league_points_awarded = $5
-     WHERE id = $6`,
-    [player1RatingChange, player2RatingChange, player1PartnerRatingChange, player2PartnerRatingChange, points, match.id]
+      league_points_awarded = $5, league_points_awarded_loser = $6
+     WHERE id = $7`,
+    [player1RatingChange, player2RatingChange, player1PartnerRatingChange, player2PartnerRatingChange, winnerPoints, loserPoints, match.id]
   );
 
-  await awardLeaguePoints(db, match.league_id, match.winner_id, points);
+  await awardLeaguePoints(db, match.league_id, match.winner_id, winnerPoints);
   if (match.winner_id === match.player1_id && match.player1_partner_id) {
-    await awardLeaguePoints(db, match.league_id, match.player1_partner_id, points);
+    await awardLeaguePoints(db, match.league_id, match.player1_partner_id, winnerPoints);
   }
   if (match.winner_id === match.player2_id && match.player2_partner_id) {
-    await awardLeaguePoints(db, match.league_id, match.player2_partner_id, points);
+    await awardLeaguePoints(db, match.league_id, match.player2_partner_id, winnerPoints);
+  }
+
+  const loserId = team1Won ? match.player2_id : match.player1_id;
+  const loserPartnerId = team1Won ? match.player2_partner_id : match.player1_partner_id;
+  await awardLeaguePoints(db, match.league_id, loserId, loserPoints);
+  if (loserPartnerId) {
+    await awardLeaguePoints(db, match.league_id, loserPartnerId, loserPoints);
   }
 }
 
@@ -183,6 +207,17 @@ async function reverseMatchEffects(db, match, league) {
       await db.query(
         'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
         [match.league_points_awarded, match.league_id, wId]
+      );
+    }
+  }
+  if (match.league_points_awarded_loser != null) {
+    const loserIds = [team1Won ? match.player2_id : match.player1_id];
+    const loserPartnerId = team1Won ? match.player2_partner_id : match.player1_partner_id;
+    if (loserPartnerId) loserIds.push(loserPartnerId);
+    for (const lId of loserIds) {
+      await db.query(
+        'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+        [match.league_points_awarded_loser, match.league_id, lId]
       );
     }
   }
