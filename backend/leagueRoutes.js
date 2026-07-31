@@ -1141,6 +1141,31 @@ async function reverseGroupPlayoffMatches(db, leagueId, groupId, league) {
 
     await reverseRatingChange(db, match.player1_id, league.sport, league.format, match.player1_rating_change, team1Won);
     await reverseRatingChange(db, match.player2_id, league.sport, league.format, match.player2_rating_change, !team1Won);
+    await reverseRatingChange(db, match.player1_partner_id, league.sport, league.format, match.player1_partner_rating_change, team1Won);
+    await reverseRatingChange(db, match.player2_partner_id, league.sport, league.format, match.player2_partner_rating_change, !team1Won);
+
+    if (match.league_points_awarded != null) {
+      const winnerIds = [match.winner_id];
+      if (team1Won && match.player1_partner_id) winnerIds.push(match.player1_partner_id);
+      if (!team1Won && match.player2_partner_id) winnerIds.push(match.player2_partner_id);
+      for (const wId of winnerIds) {
+        await db.query(
+          'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+          [match.league_points_awarded, leagueId, wId]
+        );
+      }
+    }
+    if (match.league_points_awarded_loser != null) {
+      const loserIds = [team1Won ? match.player2_id : match.player1_id];
+      const loserPartnerId = team1Won ? match.player2_partner_id : match.player1_partner_id;
+      if (loserPartnerId) loserIds.push(loserPartnerId);
+      for (const lId of loserIds) {
+        await db.query(
+          'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+          [match.league_points_awarded_loser, leagueId, lId]
+        );
+      }
+    }
   }
 }
 
@@ -2262,9 +2287,9 @@ async function reverseAllConfirmedMatchesForLeague(db, leagueId, league) {
   }
 }
 
-// Same idea, for confirmed knockout (playoff_matches) rows. Playoff matches
-// don't award league points in this app, so only rating/stat reversal
-// applies here.
+// Same idea, for confirmed knockout (playoff_matches) rows — including
+// their points effects (playoff matches now award points too, see
+// playoffRoutes.js's finalizePlayoffMatch).
 async function reverseAllConfirmedPlayoffMatchesForLeague(db, leagueId, league) {
   const { sport, format } = league;
 
@@ -2280,6 +2305,29 @@ async function reverseAllConfirmedPlayoffMatchesForLeague(db, leagueId, league) 
     await reverseRatingChange(db, match.player2_id, sport, format, match.player2_rating_change, !team1Won);
     await reverseRatingChange(db, match.player1_partner_id, sport, format, match.player1_partner_rating_change, team1Won);
     await reverseRatingChange(db, match.player2_partner_id, sport, format, match.player2_partner_rating_change, !team1Won);
+
+    if (match.league_points_awarded != null) {
+      const winnerIds = [match.winner_id];
+      if (team1Won && match.player1_partner_id) winnerIds.push(match.player1_partner_id);
+      if (!team1Won && match.player2_partner_id) winnerIds.push(match.player2_partner_id);
+      for (const wId of winnerIds) {
+        await db.query(
+          'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+          [match.league_points_awarded, leagueId, wId]
+        );
+      }
+    }
+    if (match.league_points_awarded_loser != null) {
+      const loserIds = [team1Won ? match.player2_id : match.player1_id];
+      const loserPartnerId = team1Won ? match.player2_partner_id : match.player1_partner_id;
+      if (loserPartnerId) loserIds.push(loserPartnerId);
+      for (const lId of loserIds) {
+        await db.query(
+          'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+          [match.league_points_awarded_loser, leagueId, lId]
+        );
+      }
+    }
   }
 }
 

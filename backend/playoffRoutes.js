@@ -64,6 +64,61 @@ async function getRating(db, userId, sport, format) {
   return parseFloat(result.rows[0].rating);
 }
 
+// Points config resolution for a playoff/bracket match — same tournament
+// config with an optional per-group override as matchRoutes.js's
+// resolvePointsConfig, but playoff_matches has no scheduled_match_id to join
+// through: it carries its own group_id directly (set at bracket-generation
+// time for a knockout-format group, NULL for a whole-tournament bracket).
+// Kept as a local copy here since this file has no shared module with
+// matchRoutes.js.
+async function resolvePointsConfig(db, match, league) {
+  let group = null;
+  if (match.group_id) {
+    const result = await db.query('SELECT * FROM league_groups WHERE id = $1', [match.group_id]);
+    group = result.rows[0] || null;
+  }
+  const enabled = (group && group.points_enabled != null) ? group.points_enabled : league.points_enabled;
+  const win = (group && group.points_win != null) ? group.points_win : league.points_win;
+  const loss = (group && group.points_loss != null) ? group.points_loss : league.points_loss;
+  return { enabled, win, loss };
+}
+
+// Same as matchRoutes.js's awardLeaguePoints — kept as a local copy here
+// since this file has no shared module with matchRoutes.js.
+async function awardLeaguePoints(db, leagueId, userId, points) {
+  await db.query(
+    'UPDATE league_members SET points = points + $1 WHERE league_id = $2 AND user_id = $3',
+    [points, leagueId, userId]
+  );
+}
+
+// Resolves and awards points for a confirmed playoff match to the winner
+// (+partner) and loser (+partner), returning the two amounts so the caller
+// can persist them on playoff_matches.league_points_awarded/_loser.
+async function awardPlayoffPoints(db, match, league) {
+  const pointsConfig = await resolvePointsConfig(db, match, league);
+  const winnerPoints = pointsConfig.enabled ? pointsConfig.win : 0;
+  const loserPoints = pointsConfig.enabled ? pointsConfig.loss : 0;
+
+  const team1Won = match.winner_id === match.player1_id;
+  await awardLeaguePoints(db, match.league_id, match.winner_id, winnerPoints);
+  if (team1Won && match.player1_partner_id) {
+    await awardLeaguePoints(db, match.league_id, match.player1_partner_id, winnerPoints);
+  }
+  if (!team1Won && match.player2_partner_id) {
+    await awardLeaguePoints(db, match.league_id, match.player2_partner_id, winnerPoints);
+  }
+
+  const loserId = team1Won ? match.player2_id : match.player1_id;
+  const loserPartnerId = team1Won ? match.player2_partner_id : match.player1_partner_id;
+  await awardLeaguePoints(db, match.league_id, loserId, loserPoints);
+  if (loserPartnerId) {
+    await awardLeaguePoints(db, match.league_id, loserPartnerId, loserPoints);
+  }
+
+  return { winnerPoints, loserPoints };
+}
+
 async function updateUserSportsRow(db, userId, sport, format, newRating, won) {
   if (sport === 'table_tennis') {
     await db.query(
@@ -188,11 +243,14 @@ async function finalizePlayoffMatch(db, match, league) {
     await updateUserSportsRow(db, match.player1_id, sport, format, updatedRating1, team1Won);
     await updateUserSportsRow(db, match.player2_id, sport, format, updatedRating2, !team1Won);
 
+    const { winnerPoints, loserPoints } = await awardPlayoffPoints(db, match, league);
+
     await db.query(
       `UPDATE playoff_matches SET status = 'confirmed',
-        player1_rating_change = $1, player2_rating_change = $2
-       WHERE id = $3`,
-      [change1, change2, match.id]
+        player1_rating_change = $1, player2_rating_change = $2,
+        league_points_awarded = $3, league_points_awarded_loser = $4
+       WHERE id = $5`,
+      [change1, change2, winnerPoints, loserPoints, match.id]
     );
   } else {
     const r1a = await getRating(db, match.player1_id, sport, format);
@@ -226,20 +284,24 @@ async function finalizePlayoffMatch(db, match, league) {
     await updateUserSportsRow(db, match.player2_id, sport, format, updated2a, !team1Won);
     await updateUserSportsRow(db, match.player2_partner_id, sport, format, updated2b, !team1Won);
 
+    const { winnerPoints, loserPoints } = await awardPlayoffPoints(db, match, league);
+
     await db.query(
       `UPDATE playoff_matches SET status = 'confirmed',
         player1_rating_change = $1, player1_partner_rating_change = $2,
-        player2_rating_change = $3, player2_partner_rating_change = $4
-       WHERE id = $5`,
-      [change1a, change1b, change2a, change2b, match.id]
+        player2_rating_change = $3, player2_partner_rating_change = $4,
+        league_points_awarded = $5, league_points_awarded_loser = $6
+       WHERE id = $7`,
+      [change1a, change1b, change2a, change2b, winnerPoints, loserPoints, match.id]
     );
   }
 
   await advanceWinner(db, { ...match, status: 'confirmed' });
 }
 
-// Undoes the rating/stat effects of a previously confirmed playoff match —
-// used when the host edits a confirmed score, or cancels the whole bracket.
+// Undoes the rating/stat/points effects of a previously confirmed playoff
+// match — used when the host edits a confirmed score, or cancels the whole
+// bracket.
 async function reversePlayoffEffects(db, match, league) {
   const { sport, format } = league;
   const team1Won = match.winner_id === match.player1_id;
@@ -248,6 +310,29 @@ async function reversePlayoffEffects(db, match, league) {
   await reverseRatingChange(db, match.player2_id, sport, format, match.player2_rating_change, !team1Won);
   await reverseRatingChange(db, match.player1_partner_id, sport, format, match.player1_partner_rating_change, team1Won);
   await reverseRatingChange(db, match.player2_partner_id, sport, format, match.player2_partner_rating_change, !team1Won);
+
+  if (match.league_points_awarded != null) {
+    const winnerIds = [match.winner_id];
+    if (team1Won && match.player1_partner_id) winnerIds.push(match.player1_partner_id);
+    if (!team1Won && match.player2_partner_id) winnerIds.push(match.player2_partner_id);
+    for (const wId of winnerIds) {
+      await db.query(
+        'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+        [match.league_points_awarded, match.league_id, wId]
+      );
+    }
+  }
+  if (match.league_points_awarded_loser != null) {
+    const loserIds = [team1Won ? match.player2_id : match.player1_id];
+    const loserPartnerId = team1Won ? match.player2_partner_id : match.player1_partner_id;
+    if (loserPartnerId) loserIds.push(loserPartnerId);
+    for (const lId of loserIds) {
+      await db.query(
+        'UPDATE league_members SET points = points - $1 WHERE league_id = $2 AND user_id = $3',
+        [match.league_points_awarded_loser, match.league_id, lId]
+      );
+    }
+  }
 }
 
 // Checks if any participant in this playoff match has played another
@@ -896,10 +981,17 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
 
         await updateUserSportsRow(client, updatedMatch.player1_id, league.sport, league.format, updatedRating1, team1Won);
         await updateUserSportsRow(client, updatedMatch.player2_id, league.sport, league.format, updatedRating2, !team1Won);
+
+        // reversePlayoffEffects already reversed the old points award above
+        // (before winner/score were updated) — resolve and award fresh
+        // points now, since the winner may have changed.
+        const { winnerPoints, loserPoints } = await awardPlayoffPoints(client, updatedMatch, league);
+
         await client.query(
           `UPDATE playoff_matches SET player1_rating_change = $1, player2_rating_change = $2,
-            player1_partner_rating_change = NULL, player2_partner_rating_change = NULL WHERE id = $3`,
-          [change1, change2, matchId]
+            player1_partner_rating_change = NULL, player2_partner_rating_change = NULL,
+            league_points_awarded = $3, league_points_awarded_loser = $4 WHERE id = $5`,
+          [change1, change2, winnerPoints, loserPoints, matchId]
         );
       } else {
         const r1a = await getRating(client, updatedMatch.player1_id, league.sport, league.format);
@@ -933,10 +1025,13 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
         await updateUserSportsRow(client, updatedMatch.player2_id, league.sport, league.format, updated2a, !team1Won);
         await updateUserSportsRow(client, updatedMatch.player2_partner_id, league.sport, league.format, updated2b, !team1Won);
 
+        const { winnerPoints, loserPoints } = await awardPlayoffPoints(client, updatedMatch, league);
+
         await client.query(
           `UPDATE playoff_matches SET player1_rating_change = $1, player1_partner_rating_change = $2,
-            player2_rating_change = $3, player2_partner_rating_change = $4 WHERE id = $5`,
-          [change1a, change1b, change2a, change2b, matchId]
+            player2_rating_change = $3, player2_partner_rating_change = $4,
+            league_points_awarded = $5, league_points_awarded_loser = $6 WHERE id = $7`,
+          [change1a, change1b, change2a, change2b, winnerPoints, loserPoints, matchId]
         );
       }
     });
@@ -1053,5 +1148,14 @@ router.post('/match/:matchId/reject', async (req, res) => {
     res.status(500).json({ error: 'Something went wrong rejecting the match.' });
   }
 });
+
+// Attached the same way matchRoutes.js attaches resolvePointsConfig, and
+// db.js attaches withTransaction/RouteError to the pool — module-private
+// helpers the test suite can reach without changing how server.js consumes
+// this file (`app.use('/api/playoffs', ..., require('./playoffRoutes'))`
+// still gets a router).
+router.resolvePointsConfig = resolvePointsConfig;
+router.awardPlayoffPoints = awardPlayoffPoints;
+router.reversePlayoffEffects = reversePlayoffEffects;
 
 module.exports = router;
