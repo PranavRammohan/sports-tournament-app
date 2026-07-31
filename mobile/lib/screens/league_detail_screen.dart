@@ -1546,8 +1546,11 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                         InkWell(
                           onTap: () {
                             HapticFeedback.selectionClick();
-                            Share.share(
-                              'Join my tournament "${_league!['name']}" on RallyX! Use join code: ${_league!['join_code']}',
+                            SharePlus.instance.share(
+                              ShareParams(
+                                text:
+                                    'Join my tournament "${_league!['name']}" on RallyX! Use join code: ${_league!['join_code']}',
+                              ),
                             );
                           },
                           child: const Icon(
@@ -2325,8 +2328,6 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       tiers.putIfAbsent(f['tier_number'], () => []).add(f);
     }
 
-    final showTierHeadings = false;
-
     return RefreshIndicator(
       onRefresh: _loadAll,
       child: ListView(
@@ -2353,13 +2354,6 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (showTierHeadings) ...[
-                    Text(
-                      'Tier ${entry.key}',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
-                  ],
                   ...entry.value.map(
                     (f) => _buildFixtureCard(
                       f,

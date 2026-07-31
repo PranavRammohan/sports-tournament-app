@@ -1,30 +1,24 @@
-// This is a basic Flutter widget test.
+// Smoke test: the app boots to the login screen without crashing.
 //
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
+// This replaces the unmodified Flutter template test (which referenced a
+// nonexistent `MyApp` counter-demo class and never built at all). It's
+// intentionally minimal — there's no shared repository/service layer or
+// widget-testing convention elsewhere in this app to build on top of, and
+// most screens require a live backend, so this just checks the app shell
+// itself doesn't crash before real network calls are involved (see
+// CLAUDE.md's "Mobile architecture" section).
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:mobile/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('App boots to the login screen', (WidgetTester tester) async {
+    await tester.pumpWidget(const RallyXApp(initialRoute: '/login'));
+    await tester.pumpAndSettle();
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.text('RallyX'), findsOneWidget);
+    expect(find.text('Log In'), findsOneWidget);
+    expect(find.text('Username'), findsOneWidget);
+    expect(find.text('Password'), findsOneWidget);
   });
 }

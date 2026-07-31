@@ -68,59 +68,61 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     required ValueChanged<String> onChanged,
     required TextEditingController matchesPerPlayerController,
   }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        RadioListTile<String>(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          value: 'round_robin',
-          groupValue: value,
-          title: const Text('Round Robin', style: TextStyle(fontSize: 13)),
-          onChanged: (v) => onChanged(v!),
-        ),
-        RadioListTile<String>(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          value: 'matches_per_player',
-          groupValue: value,
-          title: const Text('Fixed matches per player', style: TextStyle(fontSize: 13)),
-          onChanged: (v) => onChanged(v!),
-        ),
-        if (value == 'matches_per_player')
-          Padding(
-            padding: const EdgeInsets.only(left: 16, top: 4, bottom: 4),
-            child: TextField(
-              controller: matchesPerPlayerController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Matches per player',
-                isDense: true,
-                hintText: 'e.g. 3',
-              ),
+    return RadioGroup<String>(
+      groupValue: value,
+      onChanged: (v) => onChanged(v!),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          RadioListTile<String>(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: 'round_robin',
+            title: const Text('Round Robin', style: TextStyle(fontSize: 13)),
+          ),
+          RadioListTile<String>(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: 'matches_per_player',
+            title: const Text(
+              'Fixed matches per player',
+              style: TextStyle(fontSize: 13),
             ),
           ),
-        RadioListTile<String>(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          value: 'knockout',
-          groupValue: value,
-          title: const Text('Knockout', style: TextStyle(fontSize: 13)),
-          subtitle: const Text(
-            'Needs an exact power-of-2 number of players',
-            style: TextStyle(fontSize: 11),
+          if (value == 'matches_per_player')
+            Padding(
+              padding: const EdgeInsets.only(left: 16, top: 4, bottom: 4),
+              child: TextField(
+                controller: matchesPerPlayerController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Matches per player',
+                  isDense: true,
+                  hintText: 'e.g. 3',
+                ),
+              ),
+            ),
+          RadioListTile<String>(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: 'knockout',
+            title: const Text('Knockout', style: TextStyle(fontSize: 13)),
+            subtitle: const Text(
+              'Needs an exact power-of-2 number of players',
+              style: TextStyle(fontSize: 11),
+            ),
           ),
-          onChanged: (v) => onChanged(v!),
-        ),
-        RadioListTile<String>(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          value: 'custom',
-          groupValue: value,
-          title: const Text('Custom — I\'ll add matches myself', style: TextStyle(fontSize: 13)),
-          onChanged: (v) => onChanged(v!),
-        ),
-      ],
+          RadioListTile<String>(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: 'custom',
+            title: const Text(
+              'Custom — I\'ll add matches myself',
+              style: TextStyle(fontSize: 13),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

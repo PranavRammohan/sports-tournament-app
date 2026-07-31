@@ -736,8 +736,11 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                     InkWell(
                       onTap: () {
                         HapticFeedback.selectionClick();
-                        Share.share(
-                          'Join my tournament "${_nameController.text.trim()}" on RallyX! Use join code: $_joinCode',
+                        SharePlus.instance.share(
+                          ShareParams(
+                            text:
+                                'Join my tournament "${_nameController.text.trim()}" on RallyX! Use join code: $_joinCode',
+                          ),
                         );
                       },
                       child: const Icon(Icons.share_outlined, size: 18),

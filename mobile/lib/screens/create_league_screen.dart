@@ -313,8 +313,11 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
             actions: [
               TextButton(
                 onPressed: () {
-                  Share.share(
-                    'Join my tournament "${league['name']}" on RallyX! Use join code: ${league['join_code']}',
+                  SharePlus.instance.share(
+                    ShareParams(
+                      text:
+                          'Join my tournament "${league['name']}" on RallyX! Use join code: ${league['join_code']}',
+                    ),
                   );
                 },
                 child: const Text('Share'),
@@ -468,83 +471,83 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
             ),
             const SizedBox(height: 10),
 
-            RadioListTile<String>(
-              contentPadding: EdgeInsets.zero,
-              value: 'round_robin',
+            RadioGroup<String>(
               groupValue: _scheduleType,
-              title: const Text('Round Robin (everyone plays everyone)'),
-              subtitle: const Text(
-                'Best for smaller groups — match count grows fast as more people join',
-                style: TextStyle(fontSize: 11),
-              ),
               onChanged: (v) => setState(() => _scheduleType = v!),
-            ),
-            RadioListTile<String>(
-              contentPadding: EdgeInsets.zero,
-              value: 'matches_per_player',
-              groupValue: _scheduleType,
-              title: Text(
-                isSingles
-                    ? 'Fixed number of matches per player'
-                    : 'Fixed number of matches per team',
-              ),
-              subtitle: const Text(
-                'Good for larger groups',
-                style: TextStyle(fontSize: 11),
-              ),
-              onChanged: (v) => setState(() => _scheduleType = v!),
-            ),
-            if (_scheduleType == 'matches_per_player')
-              Padding(
-                padding: const EdgeInsets.only(top: 8, bottom: 4),
-                child: TextField(
-                  controller: _matchesPerPlayerController,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: isSingles
-                        ? 'Matches per player'
-                        : 'Matches per team',
-                    isDense: true,
-                    hintText: 'e.g. 5',
+              child: Column(
+                children: [
+                  RadioListTile<String>(
+                    contentPadding: EdgeInsets.zero,
+                    value: 'round_robin',
+                    title: const Text(
+                      'Round Robin (everyone plays everyone)',
+                    ),
+                    subtitle: const Text(
+                      'Best for smaller groups — match count grows fast as more people join',
+                      style: TextStyle(fontSize: 11),
+                    ),
                   ),
-                ),
+                  RadioListTile<String>(
+                    contentPadding: EdgeInsets.zero,
+                    value: 'matches_per_player',
+                    title: Text(
+                      isSingles
+                          ? 'Fixed number of matches per player'
+                          : 'Fixed number of matches per team',
+                    ),
+                    subtitle: const Text(
+                      'Good for larger groups',
+                      style: TextStyle(fontSize: 11),
+                    ),
+                  ),
+                  if (_scheduleType == 'matches_per_player')
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8, bottom: 4),
+                      child: TextField(
+                        controller: _matchesPerPlayerController,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          labelText: isSingles
+                              ? 'Matches per player'
+                              : 'Matches per team',
+                          isDense: true,
+                          hintText: 'e.g. 5',
+                        ),
+                      ),
+                    ),
+                  RadioListTile<String>(
+                    contentPadding: EdgeInsets.zero,
+                    value: 'knockout',
+                    title: const Text('Knockout (seeded, single elimination)'),
+                    subtitle: Text(
+                      isSingles
+                          ? 'Needs an exact power-of-2 player count (2, 4, 8, 16...)'
+                          : 'Needs an exact power-of-2 number of teams (2, 4, 8, 16...)',
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                  ),
+                  RadioListTile<String>(
+                    contentPadding: EdgeInsets.zero,
+                    value: 'custom',
+                    title: const Text('Custom — I\'ll decide who plays who'),
+                    subtitle: const Text(
+                      'Add matches manually, any time',
+                      style: TextStyle(fontSize: 11),
+                    ),
+                  ),
+                  if (isSingles)
+                    RadioListTile<String>(
+                      contentPadding: EdgeInsets.zero,
+                      value: 'groups',
+                      title: const Text('Groups (many rounds, your call)'),
+                      subtitle: const Text(
+                        'Create named groups any time, pick who\'s in each one, and choose that group\'s own format (round robin, knockout, fixed matches, or add matches by hand) — after the tournament is created.',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                    ),
+                ],
               ),
-            RadioListTile<String>(
-              contentPadding: EdgeInsets.zero,
-              value: 'knockout',
-              groupValue: _scheduleType,
-              title: const Text('Knockout (seeded, single elimination)'),
-              subtitle: Text(
-                isSingles
-                    ? 'Needs an exact power-of-2 player count (2, 4, 8, 16...)'
-                    : 'Needs an exact power-of-2 number of teams (2, 4, 8, 16...)',
-                style: const TextStyle(fontSize: 11),
-              ),
-              onChanged: (v) => setState(() => _scheduleType = v!),
             ),
-            RadioListTile<String>(
-              contentPadding: EdgeInsets.zero,
-              value: 'custom',
-              groupValue: _scheduleType,
-              title: const Text('Custom — I\'ll decide who plays who'),
-              subtitle: const Text(
-                'Add matches manually, any time',
-                style: TextStyle(fontSize: 11),
-              ),
-              onChanged: (v) => setState(() => _scheduleType = v!),
-            ),
-            if (isSingles)
-              RadioListTile<String>(
-                contentPadding: EdgeInsets.zero,
-                value: 'groups',
-                groupValue: _scheduleType,
-                title: const Text('Groups (many rounds, your call)'),
-                subtitle: const Text(
-                  'Create named groups any time, pick who\'s in each one, and choose that group\'s own format (round robin, knockout, fixed matches, or add matches by hand) — after the tournament is created.',
-                  style: TextStyle(fontSize: 11),
-                ),
-                onChanged: (v) => setState(() => _scheduleType = v!),
-              ),
 
             const SizedBox(height: 20),
             const Divider(),
@@ -600,38 +603,42 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 10),
-              RadioListTile<String>(
-                contentPadding: EdgeInsets.zero,
-                value: 'host_auto',
+              RadioGroup<String>(
                 groupValue: _partnerMode,
-                title: const Text('Automatic (balanced by rating)'),
-                subtitle: const Text(
-                  'Partners are paired algorithmically to balance skill. No action needed from players.',
-                  style: TextStyle(fontSize: 11),
-                ),
                 onChanged: (v) => setState(() => _partnerMode = v!),
-              ),
-              RadioListTile<String>(
-                contentPadding: EdgeInsets.zero,
-                value: 'self_select',
-                groupValue: _partnerMode,
-                title: const Text('Players choose their own partner'),
-                subtitle: const Text(
-                  'Each player picks a partner from the tournament; both must confirm before a schedule or bracket can be generated.',
-                  style: TextStyle(fontSize: 11),
+                child: Column(
+                  children: [
+                    RadioListTile<String>(
+                      contentPadding: EdgeInsets.zero,
+                      value: 'host_auto',
+                      title: const Text('Automatic (balanced by rating)'),
+                      subtitle: const Text(
+                        'Partners are paired algorithmically to balance skill. No action needed from players.',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                    ),
+                    RadioListTile<String>(
+                      contentPadding: EdgeInsets.zero,
+                      value: 'self_select',
+                      title: const Text(
+                        'Players choose their own partner',
+                      ),
+                      subtitle: const Text(
+                        'Each player picks a partner from the tournament; both must confirm before a schedule or bracket can be generated.',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                    ),
+                    RadioListTile<String>(
+                      contentPadding: EdgeInsets.zero,
+                      value: 'host_manual',
+                      title: const Text('I will assign partners myself'),
+                      subtitle: const Text(
+                        'As host, you manually pair players before a schedule or bracket can be generated.',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                    ),
+                  ],
                 ),
-                onChanged: (v) => setState(() => _partnerMode = v!),
-              ),
-              RadioListTile<String>(
-                contentPadding: EdgeInsets.zero,
-                value: 'host_manual',
-                groupValue: _partnerMode,
-                title: const Text('I will assign partners myself'),
-                subtitle: const Text(
-                  'As host, you manually pair players before a schedule or bracket can be generated.',
-                  style: TextStyle(fontSize: 11),
-                ),
-                onChanged: (v) => setState(() => _partnerMode = v!),
               ),
             ],
 
@@ -686,25 +693,29 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 10),
-            RadioListTile<bool>(
-              contentPadding: EdgeInsets.zero,
-              value: false,
+            RadioGroup<bool>(
               groupValue: _restrictByRating,
-              title: const Text('Open for all skill levels'),
               onChanged: (v) => setState(() => _restrictByRating = v!),
-            ),
-            RadioListTile<bool>(
-              contentPadding: EdgeInsets.zero,
-              value: true,
-              groupValue: _restrictByRating,
-              title: const Text('Only players within a rating range'),
-              subtitle: _selectedSport == null
-                  ? const Text(
-                      'Select a sport above to see its rating scale',
-                      style: TextStyle(fontSize: 11),
-                    )
-                  : null,
-              onChanged: (v) => setState(() => _restrictByRating = v!),
+              child: Column(
+                children: [
+                  RadioListTile<bool>(
+                    contentPadding: EdgeInsets.zero,
+                    value: false,
+                    title: const Text('Open for all skill levels'),
+                  ),
+                  RadioListTile<bool>(
+                    contentPadding: EdgeInsets.zero,
+                    value: true,
+                    title: const Text('Only players within a rating range'),
+                    subtitle: _selectedSport == null
+                        ? const Text(
+                            'Select a sport above to see its rating scale',
+                            style: TextStyle(fontSize: 11),
+                          )
+                        : null,
+                  ),
+                ],
+              ),
             ),
             if (_restrictByRating) ...[
               const SizedBox(height: 8),

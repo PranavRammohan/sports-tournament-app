@@ -134,37 +134,6 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
     }
   }
 
-  Future<void> _joinLeague(int leagueId) async {
-    HapticFeedback.lightImpact();
-    try {
-      final res = await ApiClient.post('/leagues/$leagueId/join');
-
-      if (!mounted) return;
-      if (res.statusCode == 201) {
-        _didJoinAny = true;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Joined tournament!'),
-            backgroundColor: AppColors.success,
-          ),
-        );
-        _loadLeagues();
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(res.errorOr('Could not join.')),
-            backgroundColor: AppColors.danger,
-          ),
-        );
-      }
-    } catch (err) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Network error.')));
-    }
-  }
-
   Future<void> _joinByCode() async {
     final code = _codeController.text.trim();
     if (code.isEmpty) {
