@@ -140,4 +140,100 @@ router.get('/user/:userId', async (req, res) => {
   }
 });
 
+// Reconstructs a rating-over-time series from the current rating snapshot
+// and a chronologically-ordered (oldest first) list of {my_rating_change}
+// rows. There's no materialized rating-history table — only the current
+// snapshot on user_sports.rating, plus a per-match delta on matches/
+// playoff_matches — so the baseline is computed by subtracting every
+// recorded delta from the current rating (baseline + sum(deltas) = current,
+// by construction, regardless of what the original starting rating was or
+// whether it's ever been manually corrected), then walking forward
+// re-applying each delta in order. Exported for unit testing (pure
+// function, no DB access) — the route below just wires real data into it.
+function reconstructRatingHistory(currentRating, matchRows) {
+  const deltas = matchRows.map((r) => parseFloat(r.my_rating_change) || 0);
+  const totalDelta = deltas.reduce((sum, d) => sum + d, 0);
+  let running = currentRating - totalDelta;
+
+  const history = [{ date: null, rating: Math.round(running * 10) / 10 }];
+  matchRows.forEach((r, i) => {
+    running += deltas[i];
+    history.push({
+      date: r.created_at,
+      rating: Math.round(running * 10) / 10,
+    });
+  });
+  return history;
+}
+
+// ---------- RATING HISTORY (for a rating trend chart) ----------
+router.get('/user/:userId/rating-history', async (req, res) => {
+  const targetUserId = req.params.userId;
+  const { sport, format } = req.query;
+
+  if (!sport || !format) {
+    return res.status(400).json({ error: 'Please specify a sport and format.' });
+  }
+
+  try {
+    const currentResult = await pool.query(
+      'SELECT rating FROM user_sports WHERE user_id = $1 AND sport = $2 AND format = $3',
+      [targetUserId, sport, format]
+    );
+    if (currentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'This player has not played this sport/format.' });
+    }
+    const currentRating = parseFloat(currentResult.rows[0].rating);
+
+    // Table tennis shares one rating across singles/doubles — a doubles
+    // match affects the same rating a singles match does, so don't filter
+    // by format for that sport (same convention as matchRoutes.js's
+    // checkForRatingDrift).
+    const formatFilter = sport === 'table_tennis' ? null : format;
+
+    const matchesResult = await pool.query(
+      `SELECT * FROM (
+         SELECT m.id, m.created_at,
+                CASE
+                  WHEN m.player1_id = $1 THEN m.player1_rating_change
+                  WHEN m.player2_id = $1 THEN m.player2_rating_change
+                  WHEN m.player1_partner_id = $1 THEN m.player1_partner_rating_change
+                  WHEN m.player2_partner_id = $1 THEN m.player2_partner_rating_change
+                END AS my_rating_change
+         FROM matches m
+         JOIN leagues l ON l.id = m.league_id
+         WHERE m.status = 'confirmed' AND l.sport = $2 AND ($3::text IS NULL OR l.format = $3)
+           AND (m.player1_id = $1 OR m.player2_id = $1 OR m.player1_partner_id = $1 OR m.player2_partner_id = $1)
+         UNION ALL
+         SELECT pm.id, pm.created_at,
+                CASE
+                  WHEN pm.player1_id = $1 THEN pm.player1_rating_change
+                  WHEN pm.player2_id = $1 THEN pm.player2_rating_change
+                  WHEN pm.player1_partner_id = $1 THEN pm.player1_partner_rating_change
+                  WHEN pm.player2_partner_id = $1 THEN pm.player2_partner_rating_change
+                END AS my_rating_change
+         FROM playoff_matches pm
+         JOIN leagues l ON l.id = pm.league_id
+         WHERE pm.status = 'confirmed' AND l.sport = $2 AND ($3::text IS NULL OR l.format = $3)
+           AND (pm.player1_id = $1 OR pm.player2_id = $1 OR pm.player1_partner_id = $1 OR pm.player2_partner_id = $1)
+       ) combined
+       ORDER BY created_at ASC`,
+      [targetUserId, sport, formatFilter]
+    );
+
+    const history = reconstructRatingHistory(currentRating, matchesResult.rows);
+
+    res.status(200).json({ history });
+  } catch (err) {
+    console.error('Rating history error:', err);
+    res.status(500).json({ error: "Something went wrong fetching this player's rating history." });
+  }
+});
+
+// Attached the same way matchRoutes.js/playoffRoutes.js/leagueRoutes.js
+// attach their own module-private helpers, and db.js attaches
+// withTransaction/RouteError — lets the test suite reach this pure function
+// without changing how server.js consumes this file.
+router.reconstructRatingHistory = reconstructRatingHistory;
+
 module.exports = router;
