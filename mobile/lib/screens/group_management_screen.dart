@@ -15,14 +15,38 @@ class GroupManagementScreen extends StatefulWidget {
 }
 
 class _GroupManagementScreenState extends State<GroupManagementScreen> {
+  // Groups can nest inside other groups (see backend/leagueRoutes.js's
+  // buildGroupTree). _groups holds the tree as returned by the API — root
+  // nodes with a nested `children` list — and is what card rendering walks
+  // recursively. _flatGroups is every group in the league at every depth,
+  // flattened, and is what assignment/candidate/auto-assign/advance logic
+  // uses — those operations apply to any group regardless of nesting.
   Map<String, dynamic>? _league;
   List<dynamic> _groups = [];
+  List<dynamic> _flatGroups = [];
   List<dynamic> _unassignedMembers = [];
   bool _loading = true;
   String? _error;
   bool _submitting = false;
 
+  // Sentinel distinguishing "user picked Top level" from "dialog dismissed
+  // with no choice" in _moveGroup, since both would otherwise read as null.
+  // Group ids are always positive (Postgres SERIAL), so -1 never collides.
+  static const int _topLevelSentinel = -1;
+
   bool get _isDoubles => _league?['format'] == 'doubles';
+
+  List<dynamic> _flattenGroups(List<dynamic> nodes) {
+    final result = <dynamic>[];
+    for (final node in nodes) {
+      result.add(node);
+      final children = node['children'] as List?;
+      if (children != null && children.isNotEmpty) {
+        result.addAll(_flattenGroups(children));
+      }
+    }
+    return result;
+  }
 
   @override
   void initState() {
@@ -49,6 +73,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
       if (groupsRes.statusCode == 200) {
         setState(() {
           _groups = groupsRes.data['groups'];
+          _flatGroups = _flattenGroups(_groups);
           _unassignedMembers = groupsRes.data['unassignedMembers'];
         });
       } else {
@@ -247,7 +272,10 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     );
   }
 
-  Future<void> _createGroup() async {
+  // `initialParentId` pre-selects "Create inside" (used by a group card's
+  // "Add group inside" action); left null for the screen-level "New Group"
+  // button, which defaults to top level.
+  Future<void> _createGroup({int? initialParentId}) async {
     final nameController = TextEditingController();
     final matchesPerPlayerController = TextEditingController();
     final pointsWinController = TextEditingController(text: '2');
@@ -255,6 +283,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     String scheduleType = 'round_robin';
     bool overridePoints = false;
     bool overridePointsEnabled = true;
+    int? parentGroupId = initialParentId;
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -276,6 +305,32 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                   ),
                 ),
                 const SizedBox(height: 12),
+                if (_flatGroups.isNotEmpty) ...[
+                  DropdownButtonFormField<int?>(
+                    initialValue: parentGroupId,
+                    decoration: const InputDecoration(
+                      labelText: 'Create inside',
+                      isDense: true,
+                    ),
+                    items: [
+                      const DropdownMenuItem<int?>(
+                        value: null,
+                        child: Text('Top level'),
+                      ),
+                      ..._flatGroups.map(
+                        (g) => DropdownMenuItem<int?>(
+                          value: g['id'] as int,
+                          child: Text(
+                            g['name'],
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ],
+                    onChanged: (v) => setDialogState(() => parentGroupId = v),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 Text('Format', style: Theme.of(ctx).textTheme.titleSmall),
                 _scheduleTypeRadios(
                   value: scheduleType,
@@ -312,6 +367,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                   'name': name,
                   'scheduleType': scheduleType,
                   'matchesPerPlayer': matchesPerPlayer,
+                  'parentGroupId': parentGroupId,
                 };
                 if (overridePoints && scheduleType != 'knockout') {
                   body['pointsEnabled'] = overridePointsEnabled;
@@ -508,6 +564,76 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(res.errorOr('Could not delete group.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  // Groups this group could validly move under — excludes itself and any of
+  // its own descendants (moving a group inside its own subtree is nonsense
+  // and the server rejects it too, but filtering it out client-side avoids
+  // offering an option that will just fail).
+  List<dynamic> _validMoveTargets(dynamic group) {
+    final descendantIds = <int>{};
+    void collect(dynamic node) {
+      for (final child in (node['children'] as List? ?? [])) {
+        descendantIds.add(child['id'] as int);
+        collect(child);
+      }
+    }
+    collect(group);
+    return _flatGroups
+        .where((g) => g['id'] != group['id'] && !descendantIds.contains(g['id']))
+        .toList();
+  }
+
+  // Purely organizational — moving a group never touches its own roster/
+  // fixtures or its children's (see PATCH .../parent in leagueRoutes.js).
+  Future<void> _moveGroup(dynamic group) async {
+    final targets = _validMoveTargets(group);
+    final choice = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('Move "${group['name']}" to...'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, _topLevelSentinel),
+            child: const Text('Top level'),
+          ),
+          ...targets.map(
+            (g) => SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, g['id'] as int),
+              child: Text(g['name']),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (choice == null) return;
+
+    HapticFeedback.lightImpact();
+    setState(() => _submitting = true);
+    try {
+      final res = await ApiClient.patch(
+        '/leagues/${widget.leagueId}/groups/${group['id']}/parent',
+        body: {'parentGroupId': choice == _topLevelSentinel ? null : choice},
+      );
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        await _load();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not move this group.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -758,7 +884,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     final advanceCountController = TextEditingController(text: '2');
     final matchesPerPlayerController = TextEditingController();
     String scheduleType = 'knockout';
-    final selectedSourceIds = <int>{..._groups.map<int>((g) => g['id'] as int)};
+    final selectedSourceIds = <int>{..._flatGroups.map<int>((g) => g['id'] as int)};
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -780,7 +906,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                 ),
                 const SizedBox(height: 12),
                 Text('From which groups?', style: Theme.of(ctx).textTheme.titleSmall),
-                ..._groups.map<Widget>((g) {
+                ..._flatGroups.map<Widget>((g) {
                   final id = g['id'] as int;
                   return CheckboxListTile(
                     dense: true,
@@ -949,7 +1075,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: (_submitting || _groups.length < 2)
+                          onPressed: (_submitting || _flatGroups.length < 2)
                               ? null
                               : _autoAssign,
                           icon: const Icon(Icons.shuffle),
@@ -958,7 +1084,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                       ),
                     ],
                   ),
-                  if (_groups.isNotEmpty) ...[
+                  if (_flatGroups.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     OutlinedButton.icon(
                       onPressed: _submitting ? null : _advanceToNewGroup,
@@ -988,161 +1114,209 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
   // several groups at once and re-adding them somewhere they already are
   // would just be a no-op menu item.
   List<dynamic> _candidateGroupsFor(dynamic member, dynamic currentGroup) {
-    return _groups.where((g) {
+    return _flatGroups.where((g) {
       if (g['id'] == currentGroup['id'] || g['locked'] == true) return false;
       final groupMembers = g['members'] as List;
       return !groupMembers.any((mm) => mm['id'] == member['id']);
     }).toList();
   }
 
-  Widget _buildGroupCard(dynamic group) {
+  // `depth` indents nested groups under their parent and is how the tree
+  // reads visually — the card itself always keeps its full control set
+  // (assign/lock/edit/delete) regardless of nesting, since a group stays
+  // fully playable whether or not it has a parent or children.
+  Widget _buildGroupCard(dynamic group, {int depth = 0}) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final members = group['members'] as List;
     final units = _displayUnits(members);
     final locked = group['locked'] == true;
+    final children = (group['children'] as List?) ?? [];
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.cardBorder(isDark)),
-        boxShadow: AppShadows.card(isDark),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          group['name'],
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: AppColors.accent.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          _formatLabel(group),
-                          style: const TextStyle(fontSize: 10, color: AppColors.accent, fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Text(
-                  _isDoubles
-                      ? '${units.length} team${units.length == 1 ? '' : 's'}'
-                      : '${units.length} player${units.length == 1 ? '' : 's'}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textGrey,
-                  ),
-                ),
-                if (!locked)
-                  IconButton(
-                    icon: const Icon(Icons.tune, size: 18),
-                    tooltip: 'Edit format',
-                    onPressed: _submitting ? null : () => _editGroupFormat(group),
-                  ),
-                IconButton(
-                  icon: Icon(
-                    locked ? Icons.lock_open_outlined : Icons.lock_outline,
-                    size: 18,
-                    color: locked ? AppColors.danger : AppColors.success,
-                  ),
-                  tooltip: locked ? 'Unlock group' : 'Lock group & generate matches',
-                  onPressed: _submitting
-                      ? null
-                      : () => locked
-                          ? _unlockGroup(group['id'], group['name'])
-                          : _lockGroup(group['id'], group['name']),
-                ),
-                if (!locked)
-                  IconButton(
-                    icon: const Icon(
-                      Icons.delete_outline,
-                      size: 18,
-                      color: AppColors.danger,
-                    ),
-                    onPressed: _submitting
-                        ? null
-                        : () => _deleteGroup(group['id'], group['name']),
-                  ),
-              ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: EdgeInsets.only(left: 20.0 * depth, bottom: 12),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Theme.of(context).cardColor,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: AppColors.cardBorder(isDark)),
+              boxShadow: AppShadows.card(isDark),
             ),
-            if (units.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  _isDoubles ? 'No teams yet.' : 'No players yet.',
-                  style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
-                ),
-              )
-            else
-              ...units.map<Widget>((m) {
-                final candidateGroups = _candidateGroupsFor(m, group);
-                return Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Row(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
                       Expanded(
-                        child: Text(
-                          '${m['displayName']} (${m['rating']})',
-                          style: const TextStyle(fontSize: 13),
+                        child: Wrap(
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: [
+                            Text(
+                              group['name'],
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: AppColors.accent.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                _formatLabel(group),
+                                style: const TextStyle(fontSize: 10, color: AppColors.accent, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                            if (children.isNotEmpty)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: AppColors.primary.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  '${children.length} inside',
+                                  style: const TextStyle(fontSize: 10, color: AppColors.primary, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
-                      if (candidateGroups.isNotEmpty)
-                        PopupMenuButton<int>(
-                          icon: const Icon(Icons.group_add_outlined, size: 16),
-                          tooltip: 'Add to another group',
-                          enabled: !_submitting,
-                          itemBuilder: (ctx) => candidateGroups
-                              .map<PopupMenuItem<int>>(
-                                (g) => PopupMenuItem(
-                                  value: g['id'] as int,
-                                  child: Text('Add to ${g['name']}'),
-                                ),
-                              )
-                              .toList(),
-                          onSelected: (targetGroupId) => _assignToGroup(m['id'], targetGroupId),
+                      Text(
+                        _isDoubles
+                            ? '${units.length} team${units.length == 1 ? '' : 's'}'
+                            : '${units.length} player${units.length == 1 ? '' : 's'}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textGrey,
                         ),
+                      ),
                       if (!locked)
                         IconButton(
-                          icon: const Icon(Icons.close, size: 16),
-                          tooltip: 'Remove from this group',
-                          onPressed: _submitting
-                              ? null
-                              : () => _unassign(m['id'], group['id']),
-                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(Icons.tune, size: 18),
+                          tooltip: 'Edit format',
+                          onPressed: _submitting ? null : () => _editGroupFormat(group),
                         ),
+                      IconButton(
+                        icon: Icon(
+                          locked ? Icons.lock_open_outlined : Icons.lock_outline,
+                          size: 18,
+                          color: locked ? AppColors.danger : AppColors.success,
+                        ),
+                        tooltip: locked ? 'Unlock group' : 'Lock group & generate matches',
+                        onPressed: _submitting
+                            ? null
+                            : () => locked
+                                ? _unlockGroup(group['id'], group['name'])
+                                : _lockGroup(group['id'], group['name']),
+                      ),
+                      PopupMenuButton<String>(
+                        icon: const Icon(Icons.more_vert, size: 18),
+                        enabled: !_submitting,
+                        itemBuilder: (ctx) => [
+                          const PopupMenuItem(
+                            value: 'add_inside',
+                            child: Text('Add group inside'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'move',
+                            child: Text('Move to...'),
+                          ),
+                          if (!locked)
+                            const PopupMenuItem(
+                              value: 'delete',
+                              child: Text(
+                                'Delete',
+                                style: TextStyle(color: AppColors.danger),
+                              ),
+                            ),
+                        ],
+                        onSelected: (action) {
+                          switch (action) {
+                            case 'add_inside':
+                              _createGroup(initialParentId: group['id'] as int);
+                              break;
+                            case 'move':
+                              _moveGroup(group);
+                              break;
+                            case 'delete':
+                              _deleteGroup(group['id'], group['name']);
+                              break;
+                          }
+                        },
+                      ),
                     ],
                   ),
-                );
-              }),
-          ],
+                  if (units.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        _isDoubles ? 'No teams yet.' : 'No players yet.',
+                        style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
+                      ),
+                    )
+                  else
+                    ...units.map<Widget>((m) {
+                      final candidateGroups = _candidateGroupsFor(m, group);
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '${m['displayName']} (${m['rating']})',
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                            ),
+                            if (candidateGroups.isNotEmpty)
+                              PopupMenuButton<int>(
+                                icon: const Icon(Icons.group_add_outlined, size: 16),
+                                tooltip: 'Add to another group',
+                                enabled: !_submitting,
+                                itemBuilder: (ctx) => candidateGroups
+                                    .map<PopupMenuItem<int>>(
+                                      (g) => PopupMenuItem(
+                                        value: g['id'] as int,
+                                        child: Text('Add to ${g['name']}'),
+                                      ),
+                                    )
+                                    .toList(),
+                                onSelected: (targetGroupId) => _assignToGroup(m['id'], targetGroupId),
+                              ),
+                            if (!locked)
+                              IconButton(
+                                icon: const Icon(Icons.close, size: 16),
+                                tooltip: 'Remove from this group',
+                                onPressed: _submitting
+                                    ? null
+                                    : () => _unassign(m['id'], group['id']),
+                                visualDensity: VisualDensity.compact,
+                              ),
+                          ],
+                        ),
+                      );
+                    }),
+                ],
+              ),
+            ),
+          ),
         ),
-      ),
+        ...children.map<Widget>((child) => _buildGroupCard(child, depth: depth + 1)),
+      ],
     );
   }
 
   Widget _buildUnassignedRow(dynamic member) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final unlockedGroups = _groups.where((g) => g['locked'] != true).toList();
+    final unlockedGroups = _flatGroups.where((g) => g['locked'] != true).toList();
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),

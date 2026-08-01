@@ -14,11 +14,21 @@ import 'add_manual_match_screen.dart';
 class GroupsOverviewScreen extends StatefulWidget {
   final int leagueId;
   final bool isHost;
+  // Groups can nest inside other groups (see backend/leagueRoutes.js's
+  // buildGroupTree). Null = show the league's top-level groups, exactly as
+  // before nesting existed. Non-null = this screen has been pushed by
+  // tapping a "Groups inside" card and shows that one specific group's own
+  // content directly (no tab bar needed — there's exactly one group to
+  // show), with `title` as the AppBar/breadcrumb text.
+  final int? parentGroupId;
+  final String? title;
 
   const GroupsOverviewScreen({
     super.key,
     required this.leagueId,
     required this.isHost,
+    this.parentGroupId,
+    this.title,
   });
 
   @override
@@ -98,6 +108,22 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
     super.dispose();
   }
 
+  // Recursively searches the fetched tree for the node with this id — used
+  // when this screen was pushed scoped to one specific group (parentGroupId
+  // set), since GET /groups always returns the whole tree from the league's
+  // top-level groups down, not a subtree scoped to one id.
+  dynamic _findNodeById(List<dynamic> nodes, int id) {
+    for (final node in nodes) {
+      if (node['id'] == id) return node;
+      final children = node['children'] as List?;
+      if (children != null && children.isNotEmpty) {
+        final found = _findNodeById(children, id);
+        if (found != null) return found;
+      }
+    }
+    return null;
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -117,12 +143,27 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
       }
 
       if (groupsRes.statusCode == 200) {
-        _groups = groupsRes.data['groups'];
+        final tree = groupsRes.data['groups'] as List;
+        if (widget.parentGroupId == null) {
+          // Top level: one tab per top-level group, exactly as before
+          // nesting existed.
+          _groups = tree;
+        } else {
+          // Scoped to one specific group — show just that node (its own
+          // content, plus its children as "Groups inside" cards within
+          // _buildGroupTab). Not found (e.g. deleted concurrently) falls
+          // through to the existing empty state.
+          final scoped = _findNodeById(tree, widget.parentGroupId!);
+          _groups = scoped != null ? [scoped] : [];
+        }
       }
 
       // Each non-knockout group's schedule fetch is independent of the
       // others too — knockout groups render a bracket instead (fetched by
       // BracketView itself when the host/player opens that group's tab).
+      // Only fetched for the groups this screen instance actually renders
+      // (_groups above) — a deeper group's schedule is fetched by its own
+      // screen instance once the user drills into it.
       final scheduledGroups = _groups.where((g) => g['schedule_type'] != 'knockout').toList();
       if (scheduledGroups.isNotEmpty) {
         final schedResults = await Future.wait(
@@ -140,8 +181,12 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
         _groupSchedules = schedules;
       }
 
+      // A scoped single-group view never needs a tab bar (there's exactly
+      // one thing to show), so no TabController is built for it.
       final newLength = _groups.length;
-      if (newLength > 0 && (_tabController == null || _tabController!.length != newLength)) {
+      if (widget.parentGroupId == null &&
+          newLength > 0 &&
+          (_tabController == null || _tabController!.length != newLength)) {
         _tabController?.dispose();
         _tabController = TabController(length: newLength, vsync: this);
       }
@@ -178,15 +223,17 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
 
   @override
   Widget build(BuildContext context) {
+    final appBarTitle = widget.title ?? 'Groups';
+
     if (_loading) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Groups')),
+        appBar: AppBar(title: Text(appBarTitle)),
         body: const SkeletonList(),
       );
     }
     if (_error != null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Groups')),
+        appBar: AppBar(title: Text(appBarTitle)),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -204,26 +251,38 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
     }
     if (_groups.isEmpty) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Groups')),
+        appBar: AppBar(title: Text(appBarTitle)),
         body: FriendlyEmptyState(
           icon: Icons.groups_outlined,
-          title: 'No groups yet',
-          subtitle: widget.isHost
-              ? 'Create one from Manage Groups to get started.'
-              : "The host hasn't created any groups yet.",
+          title: widget.parentGroupId != null ? 'Group not found' : 'No groups yet',
+          subtitle: widget.parentGroupId != null
+              ? 'This group may have been deleted or moved.'
+              : (widget.isHost
+                  ? 'Create one from Manage Groups to get started.'
+                  : "The host hasn't created any groups yet."),
         ),
       );
     }
+
+    // Scoped to one specific group (pushed from a "Groups inside" card) —
+    // exactly one thing to show, so no tab bar, just its content directly.
+    if (widget.parentGroupId != null) {
+      return Scaffold(
+        appBar: AppBar(title: Text(appBarTitle)),
+        body: _buildGroupTab(_groups.first),
+      );
+    }
+
     if (_tabController == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Groups')),
+        appBar: AppBar(title: Text(appBarTitle)),
         body: const SkeletonList(),
       );
     }
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Groups'),
+        title: Text(appBarTitle),
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
@@ -236,6 +295,100 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
       body: TabBarView(
         controller: _tabController,
         children: _groups.map<Widget>((g) => _buildGroupTab(g)).toList(),
+      ),
+    );
+  }
+
+  // Standings rows for a member list — used both for a group's own roster
+  // and (via combinedMembers) for the roll-up shown under "Groups inside"
+  // when a group has children. `group` supplies the points-enabled setting
+  // and display-unit logic, independent of which member list is passed.
+  List<Widget> _buildStandingsRows(List<dynamic> members, dynamic group, bool isDark) {
+    if (members.isEmpty) {
+      return [
+        Text(_isDoubles ? 'No teams in this group yet.' : 'No players in this group yet.'),
+      ];
+    }
+    final pointsEnabled = _groupPointsEnabled(group);
+    return _displayUnits(members).asMap().entries.map<Widget>((entry) {
+      final rank = entry.key + 1;
+      final m = entry.value;
+      return Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Theme.of(context).cardColor,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppColors.cardBorder(isDark)),
+          boxShadow: AppShadows.card(isDark),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 20,
+              child: Text(
+                '$rank',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                m['displayName'],
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+            Text(
+              '${m['matches_played']} matches · ${m['wins']}W ${m['losses']}L',
+              style: const TextStyle(fontSize: 11, color: AppColors.textGrey),
+            ),
+            if (pointsEnabled) ...[
+              const SizedBox(width: 10),
+              PointsBadge(points: m['points'], fontSize: 14),
+            ],
+          ],
+        ),
+      );
+    }).toList();
+  }
+
+  // Card for a child group shown under "Groups inside" — tapping drills
+  // into that group's own GroupsOverviewScreen (its own content, plus its
+  // own "Groups inside" section if it has further children).
+  Widget _buildChildGroupCard(dynamic child) {
+    final childCount = (child['children'] as List?)?.length ?? 0;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: Icon(
+          childCount > 0 ? Icons.folder_outlined : Icons.groups_outlined,
+          color: AppColors.accent,
+        ),
+        title: Text(
+          child['name'] ?? '',
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          childCount > 0
+              ? '$childCount group${childCount == 1 ? '' : 's'} inside · ${_formatLabel(child)}'
+              : _formatLabel(child),
+          style: const TextStyle(fontSize: 12),
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () async {
+          HapticFeedback.selectionClick();
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => GroupsOverviewScreen(
+                leagueId: widget.leagueId,
+                isHost: widget.isHost,
+                parentGroupId: child['id'] as int,
+                title: child['name'] as String?,
+              ),
+            ),
+          );
+          if (mounted) _load();
+        },
       ),
     );
   }
@@ -284,55 +437,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
             ],
           ),
           const SizedBox(height: 8),
-          if (members.isEmpty)
-            Text(_isDoubles ? 'No teams in this group yet.' : 'No players in this group yet.')
-          else
-            ..._displayUnits(members).asMap().entries.map((entry) {
-              final rank = entry.key + 1;
-              final m = entry.value;
-              final pointsEnabled = _groupPointsEnabled(group);
-              return Container(
-                margin: const EdgeInsets.only(bottom: 6),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).cardColor,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppColors.cardBorder(isDark)),
-                  boxShadow: AppShadows.card(isDark),
-                ),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 20,
-                      child: Text(
-                        '$rank',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    Expanded(
-                      child: Text(
-                        m['displayName'],
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                    Text(
-                      '${m['matches_played']} matches · ${m['wins']}W ${m['losses']}L',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: AppColors.textGrey,
-                      ),
-                    ),
-                    if (pointsEnabled) ...[
-                      const SizedBox(width: 10),
-                      PointsBadge(points: m['points'], fontSize: 14),
-                    ],
-                  ],
-                ),
-              );
-            }),
+          ..._buildStandingsRows(members, group, isDark),
           const SizedBox(height: 20),
           Row(
             children: [
@@ -396,6 +501,27 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                 members: members,
               ),
             ),
+          if ((group['children'] as List?)?.isNotEmpty == true) ...[
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 16),
+            Text('Combined Standings', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 2),
+            Text(
+              'Across every group inside ${group['name']}',
+              style: const TextStyle(fontSize: 11, color: AppColors.textGrey),
+            ),
+            const SizedBox(height: 8),
+            ..._buildStandingsRows(
+              (group['combinedMembers'] as List?) ?? [],
+              group,
+              isDark,
+            ),
+            const SizedBox(height: 20),
+            Text('Groups inside', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            ...(group['children'] as List).map<Widget>(_buildChildGroupCard),
+          ],
         ],
       ),
     );

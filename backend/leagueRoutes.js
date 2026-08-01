@@ -705,6 +705,105 @@ router.get('/:id/partners', async (req, res) => {
 // GROUPS FORMAT — group management (v1: singles only)
 // =====================================================================
 
+// Groups can nest inside other groups to arbitrary depth (a large-scale
+// event containing several sub-tournaments, each split into its own
+// groups). There is no separate "container" type — a group keeps its own
+// roster/format/fixtures whether or not it has a parent or children, so
+// "has children" is always derived from league_groups.parent_group_id
+// rather than stored as a flag. These three pure helpers turn the flat
+// league_groups rows into that tree and guard against cycles when
+// re-parenting; attached to the router below (like dedupeTeams) so the
+// test suite can reach them directly.
+
+// Flat rows (each already carrying its own `id`/`parent_group_id`) -> an
+// array of root nodes, each with a nested `children` array. Single pass via
+// an id->node map. A row whose parent_group_id doesn't match any row in
+// this same list (a dangling/foreign reference) is treated as a root, so a
+// bad link can never make a group disappear from the tree entirely.
+function buildGroupTree(rows) {
+  const nodeById = new Map(rows.map((row) => [row.id, { ...row, children: [] }]));
+  const roots = [];
+  for (const row of rows) {
+    const node = nodeById.get(row.id);
+    const parent = row.parent_group_id != null ? nodeById.get(row.parent_group_id) : null;
+    if (parent) {
+      parent.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  return roots;
+}
+
+// Every id beneath `node` in the tree (not including node.id itself) — used
+// to roll up combined standings and to block deleting a group that still
+// has groups inside it.
+function collectDescendantIds(node) {
+  const ids = [];
+  for (const child of node.children || []) {
+    ids.push(child.id);
+    ids.push(...collectDescendantIds(child));
+  }
+  return ids;
+}
+
+// Would re-parenting `groupId` to live under `newParentId` create a cycle?
+// Walks up the parent chain from newParentId (using the flat `rows`, not a
+// pre-built tree, since this runs before any move is committed) — true if
+// that walk ever reaches groupId, which covers both self-parenting
+// (newParentId === groupId) and deeper cycles (A -> B -> A).
+function wouldCreateCycle(rows, groupId, newParentId) {
+  if (newParentId == null) return false;
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const visited = new Set();
+  let currentId = newParentId;
+  while (currentId != null) {
+    if (currentId === groupId) return true;
+    if (visited.has(currentId)) return false; // guards against a pre-existing bad cycle in the data
+    visited.add(currentId);
+    currentId = byId.get(currentId)?.parent_group_id ?? null;
+  }
+  return false;
+}
+
+// Bottom-up: for every node that has children, adds `combinedMembers` — the
+// union (by user id) of its own members and every descendant's members,
+// re-ranked by compareStanding. A player who appears more than once in the
+// subtree (e.g. placed directly in a group that also has sub-groups) has
+// their matches_played/wins/losses/points summed across every occurrence,
+// since each occurrence carries that specific group's own scoped stats
+// (see getGroupsWithStandings) rather than a shared global total. A node
+// with no children is left as-is (its plain `members` list is already the
+// whole picture). Mutates and returns the same tree nodes buildGroupTree
+// produced.
+function attachCombinedMembers(nodes) {
+  for (const node of nodes) {
+    attachCombinedMembers(node.children);
+    if (node.children.length > 0) {
+      const byUserId = new Map();
+      const addAll = (memberList) => {
+        for (const m of memberList || []) {
+          const existing = byUserId.get(m.id);
+          if (existing) {
+            existing.matches_played += m.matches_played;
+            existing.wins += m.wins;
+            existing.losses += m.losses;
+            existing.points += m.points;
+          } else {
+            byUserId.set(m.id, { ...m });
+          }
+        }
+      };
+      addAll(node.members);
+      for (const child of node.children) {
+        addAll(child.combinedMembers || child.members);
+      }
+      node.combinedMembers = Array.from(byUserId.values()).sort(compareStanding);
+    }
+  }
+  return nodes;
+}
+
 // ---------- CREATE A GROUP (host only) ----------
 // Groups can be created at any time — before, during, or after other groups
 // have locked and started playing. Each group picks its own format here;
@@ -712,7 +811,7 @@ router.get('/:id/partners', async (req, res) => {
 router.post('/:id/groups', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.id;
-  const { name, scheduleType, matchesPerPlayer } = req.body;
+  const { name, scheduleType, matchesPerPlayer, parentGroupId } = req.body;
 
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Please give the group a name.' });
@@ -743,10 +842,25 @@ router.post('/:id/groups', async (req, res) => {
       return res.status(400).json({ error: 'This league is not set up for group play.' });
     }
 
+    // A group can be nested inside any other group in this league — even
+    // one that's already populated, locked, or mid-play. Nesting only adds
+    // a child; it never touches the parent's own roster or fixtures.
+    let finalParentGroupId = null;
+    if (parentGroupId != null) {
+      const parentCheck = await pool.query(
+        'SELECT id FROM league_groups WHERE id = $1 AND league_id = $2',
+        [parentGroupId, leagueId]
+      );
+      if (parentCheck.rows.length === 0) {
+        return res.status(400).json({ error: 'Parent group not found in this league.' });
+      }
+      finalParentGroupId = parentGroupId;
+    }
+
     const result = await pool.query(
       `INSERT INTO league_groups (league_id, name, schedule_type, matches_per_player,
-                                  points_enabled, points_win, points_loss)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+                                  points_enabled, points_win, points_loss, parent_group_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
       [
         leagueId,
         name.trim(),
@@ -755,6 +869,7 @@ router.post('/:id/groups', async (req, res) => {
         pointsOverride.pointsEnabled,
         pointsOverride.pointsWin,
         pointsOverride.pointsLoss,
+        finalParentGroupId,
       ]
     );
 
@@ -773,92 +888,119 @@ router.post('/:id/groups', async (req, res) => {
 // group's standings must stay a stable historical snapshot of group play
 // only. Shared by GET /:id/groups and stage 2 advancement, which both need
 // the exact same per-group ranking.
+// Ranks group standings the same way everywhere they're built: most points
+// first, then most wins, then higher rating. `rating` arrives as a string
+// (Postgres NUMERIC — see db.js's comment on the separate bigint fix), so it
+// needs an explicit parse; points/wins already arrive as real numbers.
+function compareStanding(a, b) {
+  return (
+    (b.points ?? 0) - (a.points ?? 0) ||
+    (b.wins ?? 0) - (a.wins ?? 0) ||
+    parseFloat(b.rating) - parseFloat(a.rating)
+  );
+}
+
 async function getGroupsWithStandings(league, leagueId) {
   const groupsResult = await pool.query(
     'SELECT * FROM league_groups WHERE league_id = $1 ORDER BY id ASC',
     [leagueId]
   );
 
-  // Membership is many-to-many (group_members) — a player can belong to
-  // several groups at once (their history in earlier groups is never
-  // erased when they're picked into a new one). group_ids is every group
-  // this league member currently belongs to, used below to work out who's
-  // in which group and who isn't in any group at all yet.
+  // Base info only — no stats here. A player's wins/losses/points must be
+  // scoped to the specific group they were earned in (see the per-group
+  // query below), not merged across every group they've ever played in.
   const membersResult = await pool.query(
     `SELECT u.id, u.username, us.rating,
-            lm.partner_id, pu.username AS partner_username,
-            COALESCE(gm.group_ids, ARRAY[]::int[]) AS group_ids,
-            COALESCE(stats.matches_played, 0) AS matches_played,
-            COALESCE(stats.wins, 0) AS wins,
-            COALESCE(stats.losses, 0) AS losses,
-            COALESCE(stats.points, 0) AS points
+            lm.partner_id, pu.username AS partner_username
      FROM league_members lm
      JOIN users u ON u.id = lm.user_id
      JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
      LEFT JOIN users pu ON pu.id = lm.partner_id AND lm.partner_status = 'confirmed'
+     WHERE lm.league_id = $3`,
+    [league.sport, league.format, leagueId]
+  );
+  const membersById = new Map(membersResult.rows.map((m) => [m.id, m]));
+
+  // One row per (group, member) — group_members is the many-to-many
+  // membership table (a player can belong to several groups at once, and
+  // keeps their seat/history in each). Stats are aggregated GROUP BY
+  // (player_id, group_id) rather than just player_id, so a player who's
+  // played great in one group and hasn't played yet in another shows the
+  // correct numbers in each, not one merged total in both.
+  const membershipResult = await pool.query(
+    `SELECT gm.group_id, gm.user_id,
+            COALESCE(stats.matches_played, 0) AS matches_played,
+            COALESCE(stats.wins, 0) AS wins,
+            COALESCE(stats.losses, 0) AS losses,
+            COALESCE(stats.points, 0) AS points
+     FROM group_members gm
+     JOIN league_groups lg ON lg.id = gm.group_id AND lg.league_id = $1
      LEFT JOIN (
-       SELECT g.user_id, ARRAY_AGG(g.group_id) AS group_ids
-       FROM group_members g
-       JOIN league_groups lg ON lg.id = g.group_id
-       WHERE lg.league_id = $3
-       GROUP BY g.user_id
-     ) gm ON gm.user_id = u.id
-     LEFT JOIN (
-       SELECT player_id, COUNT(*) AS matches_played,
+       SELECT player_id, group_id, COUNT(*) AS matches_played,
               SUM(won) AS wins, SUM(1 - won) AS losses, SUM(points_earned) AS points
        FROM (
-         SELECT m.player1_id AS player_id,
+         SELECT m.player1_id AS player_id, sm.group_id,
                 CASE WHEN m.winner_id = m.player1_id THEN 1 ELSE 0 END AS won,
                 CASE WHEN m.winner_id = m.player1_id
                      THEN COALESCE(m.league_points_awarded, 0)
                      ELSE COALESCE(m.league_points_awarded_loser, 0) END AS points_earned
          FROM matches m
          JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
-         WHERE sm.league_id = $3 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
+         WHERE sm.league_id = $1 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
          UNION ALL
-         SELECT m.player2_id,
+         SELECT m.player2_id, sm.group_id,
                 CASE WHEN m.winner_id = m.player2_id THEN 1 ELSE 0 END,
                 CASE WHEN m.winner_id = m.player2_id
                      THEN COALESCE(m.league_points_awarded, 0)
                      ELSE COALESCE(m.league_points_awarded_loser, 0) END
          FROM matches m
          JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
-         WHERE sm.league_id = $3 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
+         WHERE sm.league_id = $1 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
          UNION ALL
          -- Doubles: a match's partners share the same result as their teammate.
-         SELECT m.player1_partner_id,
+         SELECT m.player1_partner_id, sm.group_id,
                 CASE WHEN m.winner_id = m.player1_id THEN 1 ELSE 0 END,
                 CASE WHEN m.winner_id = m.player1_id
                      THEN COALESCE(m.league_points_awarded, 0)
                      ELSE COALESCE(m.league_points_awarded_loser, 0) END
          FROM matches m
          JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
-         WHERE sm.league_id = $3 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
+         WHERE sm.league_id = $1 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
            AND m.player1_partner_id IS NOT NULL
          UNION ALL
-         SELECT m.player2_partner_id,
+         SELECT m.player2_partner_id, sm.group_id,
                 CASE WHEN m.winner_id = m.player2_id THEN 1 ELSE 0 END,
                 CASE WHEN m.winner_id = m.player2_id
                      THEN COALESCE(m.league_points_awarded, 0)
                      ELSE COALESCE(m.league_points_awarded_loser, 0) END
          FROM matches m
          JOIN scheduled_matches sm ON sm.id = m.scheduled_match_id
-         WHERE sm.league_id = $3 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
+         WHERE sm.league_id = $1 AND sm.group_id IS NOT NULL AND m.status = 'confirmed'
            AND m.player2_partner_id IS NOT NULL
        ) participants
-       GROUP BY player_id
-     ) stats ON stats.player_id = u.id
-     WHERE lm.league_id = $3
-     ORDER BY COALESCE(stats.points, 0) DESC, COALESCE(stats.wins, 0) DESC, us.rating DESC`,
-    [league.sport, league.format, leagueId]
+       GROUP BY player_id, group_id
+     ) stats ON stats.player_id = gm.user_id AND stats.group_id = gm.group_id`,
+    [leagueId]
   );
-  const members = membersResult.rows;
 
-  const groups = groupsResult.rows.map((g) => ({
-    ...g,
-    members: members.filter((m) => m.group_ids.includes(g.id)),
-  }));
-  const unassignedMembers = members.filter((m) => m.group_ids.length === 0);
+  const groups = groupsResult.rows.map((g) => {
+    const groupMembers = membershipResult.rows
+      .filter((row) => row.group_id === g.id)
+      .map((row) => ({
+        ...membersById.get(row.user_id),
+        matches_played: row.matches_played,
+        wins: row.wins,
+        losses: row.losses,
+        points: row.points,
+      }))
+      .sort(compareStanding);
+    return { ...g, members: groupMembers };
+  });
+
+  const memberIdsInAnyGroup = new Set(membershipResult.rows.map((row) => row.user_id));
+  const unassignedMembers = membersResult.rows
+    .filter((m) => !memberIdsInAnyGroup.has(m.id))
+    .map((m) => ({ ...m, matches_played: 0, wins: 0, losses: 0, points: 0 }));
 
   return { groups, unassignedMembers };
 }
@@ -876,8 +1018,12 @@ router.get('/:id/groups', async (req, res) => {
     const { groups, unassignedMembers } = await getGroupsWithStandings(league, leagueId);
 
     // Each group carries its own scheduleType/matchesPerPlayer/locked now —
-    // there's no single tournament-wide "groupsLocked" anymore.
-    res.status(200).json({ groups, unassignedMembers });
+    // there's no single tournament-wide "groupsLocked" anymore. Groups can
+    // also nest inside each other, so what used to be a flat array is
+    // assembled into a tree here (children + combinedMembers on any node
+    // that has them) — see buildGroupTree's comment above.
+    const groupTree = attachCombinedMembers(buildGroupTree(groups));
+    res.status(200).json({ groups: groupTree, unassignedMembers });
   } catch (err) {
     console.error('List groups error:', err);
     res.status(500).json({ error: 'Something went wrong fetching groups.' });
@@ -950,6 +1096,14 @@ router.delete('/:id/groups/:groupId', async (req, res) => {
       return res.status(400).json({ error: 'This group is locked and can no longer be changed.' });
     }
 
+    const childCheck = await pool.query(
+      'SELECT id FROM league_groups WHERE parent_group_id = $1 LIMIT 1',
+      [groupId]
+    );
+    if (childCheck.rows.length > 0) {
+      return res.status(400).json({ error: 'Delete or move the groups inside it first.' });
+    }
+
     await pool.query('DELETE FROM group_members WHERE group_id = $1', [groupId]);
     await pool.query('DELETE FROM league_groups WHERE id = $1', [groupId]);
 
@@ -957,6 +1111,53 @@ router.delete('/:id/groups/:groupId', async (req, res) => {
   } catch (err) {
     console.error('Delete group error:', err);
     res.status(500).json({ error: 'Something went wrong deleting the group.' });
+  }
+});
+
+// ---------- MOVE A GROUP TO A DIFFERENT PARENT (host only) ----------
+// Purely organizational — re-parenting never touches the group's own
+// roster/fixtures or its children's. Pass parentGroupId: null to move a
+// group back to the top level.
+router.patch('/:id/groups/:groupId/parent', async (req, res) => {
+  const userId = req.userId;
+  const { id: leagueId, groupId } = req.params;
+  const { parentGroupId } = req.body;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can move groups.' });
+    }
+
+    const allGroupsResult = await pool.query(
+      'SELECT id, parent_group_id FROM league_groups WHERE league_id = $1',
+      [leagueId]
+    );
+    const allGroups = allGroupsResult.rows;
+    const groupIdNum = parseInt(groupId, 10);
+    if (!allGroups.some((g) => g.id === groupIdNum)) {
+      return res.status(404).json({ error: 'Group not found.' });
+    }
+
+    const newParentId = parentGroupId != null ? parseInt(parentGroupId, 10) : null;
+    if (newParentId != null && !allGroups.some((g) => g.id === newParentId)) {
+      return res.status(400).json({ error: 'Parent group not found in this league.' });
+    }
+    if (wouldCreateCycle(allGroups, groupIdNum, newParentId)) {
+      return res.status(400).json({ error: "Can't move a group inside itself or one of its own sub-groups." });
+    }
+
+    await pool.query('UPDATE league_groups SET parent_group_id = $1 WHERE id = $2', [newParentId, groupIdNum]);
+
+    res.status(200).json({ message: 'Group moved.' });
+  } catch (err) {
+    console.error('Move group error:', err);
+    res.status(500).json({ error: 'Something went wrong moving the group.' });
   }
 });
 
@@ -3315,5 +3516,10 @@ router.delete('/:id/schedule/:scheduledMatchId', async (req, res) => {
 // the test suite can reach this pure function without changing how
 // server.js consumes this file.
 router.dedupeTeams = dedupeTeams;
+router.buildGroupTree = buildGroupTree;
+router.collectDescendantIds = collectDescendantIds;
+router.wouldCreateCycle = wouldCreateCycle;
+router.attachCombinedMembers = attachCombinedMembers;
+router.compareStanding = compareStanding;
 
 module.exports = router;
