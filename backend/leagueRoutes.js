@@ -842,9 +842,12 @@ router.post('/:id/groups', async (req, res) => {
       return res.status(400).json({ error: 'This league is not set up for group play.' });
     }
 
-    // A group can be nested inside any other group in this league — even
-    // one that's already populated, locked, or mid-play. Nesting only adds
-    // a child; it never touches the parent's own roster or fixtures.
+    // A group can only be nested inside a parent that has no players of its
+    // own yet — once a group has sub-groups, players belong in those, not
+    // in the parent directly (see the assign-route guard below). This keeps
+    // a group from being ambiguously both a playable roster and a container
+    // at once: you decide which a group is by whether you assign players to
+    // it or nest groups inside it, before the other happens.
     let finalParentGroupId = null;
     if (parentGroupId != null) {
       const parentCheck = await pool.query(
@@ -853,6 +856,15 @@ router.post('/:id/groups', async (req, res) => {
       );
       if (parentCheck.rows.length === 0) {
         return res.status(400).json({ error: 'Parent group not found in this league.' });
+      }
+      const parentMembers = await pool.query(
+        'SELECT 1 FROM group_members WHERE group_id = $1 LIMIT 1',
+        [parentGroupId]
+      );
+      if (parentMembers.rows.length > 0) {
+        return res.status(400).json({
+          error: 'That group already has players in it — unassign them first before nesting groups inside it.',
+        });
       }
       finalParentGroupId = parentGroupId;
     }
@@ -1151,6 +1163,19 @@ router.patch('/:id/groups/:groupId/parent', async (req, res) => {
     if (wouldCreateCycle(allGroups, groupIdNum, newParentId)) {
       return res.status(400).json({ error: "Can't move a group inside itself or one of its own sub-groups." });
     }
+    // Same rule as creating a group inside a parent (see POST /:id/groups):
+    // a group can only gain a child once it has no players of its own.
+    if (newParentId != null) {
+      const parentMembers = await pool.query(
+        'SELECT 1 FROM group_members WHERE group_id = $1 LIMIT 1',
+        [newParentId]
+      );
+      if (parentMembers.rows.length > 0) {
+        return res.status(400).json({
+          error: 'That group already has players in it — unassign them first before nesting groups inside it.',
+        });
+      }
+    }
 
     await pool.query('UPDATE league_groups SET parent_group_id = $1 WHERE id = $2', [newParentId, groupIdNum]);
 
@@ -1195,6 +1220,19 @@ router.post('/:id/groups/:groupId/assign', async (req, res) => {
     }
     if (groupCheck.rows[0].locked) {
       return res.status(400).json({ error: 'This group is locked and can no longer be changed.' });
+    }
+
+    // A group with sub-groups is a container, not a playable roster —
+    // players belong in the sub-groups themselves (mirrors the "parent must
+    // be empty of players" check in the create-group route above).
+    const childCheck = await pool.query(
+      'SELECT 1 FROM league_groups WHERE parent_group_id = $1 LIMIT 1',
+      [groupId]
+    );
+    if (childCheck.rows.length > 0) {
+      return res.status(400).json({
+        error: 'This group has groups inside it — assign players to one of those instead.',
+      });
     }
 
     const memberCheck = await pool.query(
@@ -1315,12 +1353,18 @@ router.post('/:id/groups/auto-assign', async (req, res) => {
     }
 
     const groupsResult = await pool.query(
-      'SELECT id, locked FROM league_groups WHERE league_id = $1 ORDER BY id ASC',
+      'SELECT id, locked, parent_group_id FROM league_groups WHERE league_id = $1 ORDER BY id ASC',
       [leagueId]
     );
-    const targetGroups = groupsResult.rows.filter((g) => !g.locked);
+    // A group with sub-groups is a container, not a playable roster — same
+    // rule as the single-player assign route, applied here too so
+    // auto-assign never places someone into a group that can't hold them.
+    const parentIds = new Set(
+      groupsResult.rows.map((g) => g.parent_group_id).filter((id) => id != null)
+    );
+    const targetGroups = groupsResult.rows.filter((g) => !g.locked && !parentIds.has(g.id));
     if (targetGroups.length < 2) {
-      return res.status(400).json({ error: 'Create at least 2 unlocked groups before auto-assigning.' });
+      return res.status(400).json({ error: 'Create at least 2 unlocked, playable groups before auto-assigning.' });
     }
 
     const membersResult = await pool.query(
@@ -1501,6 +1545,19 @@ router.post('/:id/groups/:groupId/lock', async (req, res) => {
 
       if (group.locked) {
         throw new RouteError(409, 'This group is already locked.');
+      }
+
+      // A group with sub-groups is a container, not a playable roster — it
+      // can never have members (the assign route refuses them), so there's
+      // nothing to lock. Same rule as create/assign, checked explicitly
+      // here too since a 'custom' group would otherwise lock "successfully"
+      // with zero players and no matches, which is just confusing.
+      const childCheck = await client.query(
+        'SELECT 1 FROM league_groups WHERE parent_group_id = $1 LIMIT 1',
+        [groupId]
+      );
+      if (childCheck.rows.length > 0) {
+        throw new RouteError(400, 'This group only organizes the groups inside it — lock those instead.');
       }
 
       // Doubles needs partner_id/partner_status too, to resolve teams —

@@ -284,6 +284,9 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     bool overridePoints = false;
     bool overridePointsEnabled = true;
     int? parentGroupId = initialParentId;
+    // Only a group with no players of its own can accept a nested group —
+    // mirrors the backend's "parent must be empty" rule in POST /groups.
+    final eligibleParents = _flatGroups.where((g) => (g['members'] as List).isEmpty).toList();
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -305,7 +308,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                if (_flatGroups.isNotEmpty) ...[
+                if (eligibleParents.isNotEmpty) ...[
                   DropdownButtonFormField<int?>(
                     initialValue: parentGroupId,
                     decoration: const InputDecoration(
@@ -317,7 +320,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                         value: null,
                         child: Text('Top level'),
                       ),
-                      ..._flatGroups.map(
+                      ...eligibleParents.map(
                         (g) => DropdownMenuItem<int?>(
                           value: g['id'] as int,
                           child: Text(
@@ -580,8 +583,10 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
 
   // Groups this group could validly move under — excludes itself and any of
   // its own descendants (moving a group inside its own subtree is nonsense
-  // and the server rejects it too, but filtering it out client-side avoids
-  // offering an option that will just fail).
+  // and the server rejects it too), and any group that already has players
+  // of its own (same "parent must be empty" rule as creating a group
+  // inside one — see POST /:id/groups). Filtering client-side avoids
+  // offering an option that will just fail.
   List<dynamic> _validMoveTargets(dynamic group) {
     final descendantIds = <int>{};
     void collect(dynamic node) {
@@ -592,7 +597,10 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     }
     collect(group);
     return _flatGroups
-        .where((g) => g['id'] != group['id'] && !descendantIds.contains(g['id']))
+        .where((g) =>
+            g['id'] != group['id'] &&
+            !descendantIds.contains(g['id']) &&
+            (g['members'] as List).isEmpty)
         .toList();
   }
 
@@ -884,7 +892,12 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     final advanceCountController = TextEditingController(text: '2');
     final matchesPerPlayerController = TextEditingController();
     String scheduleType = 'knockout';
-    final selectedSourceIds = <int>{..._flatGroups.map<int>((g) => g['id'] as int)};
+    // A group with sub-groups never has players of its own to advance from
+    // (see the assign-route restriction) — only offer childless groups.
+    final eligibleSourceGroups = _flatGroups
+        .where((g) => ((g['children'] as List?) ?? []).isEmpty)
+        .toList();
+    final selectedSourceIds = <int>{...eligibleSourceGroups.map<int>((g) => g['id'] as int)};
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -906,7 +919,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                 ),
                 const SizedBox(height: 12),
                 Text('From which groups?', style: Theme.of(ctx).textTheme.titleSmall),
-                ..._flatGroups.map<Widget>((g) {
+                ...eligibleSourceGroups.map<Widget>((g) {
                   final id = g['id'] as int;
                   return CheckboxListTile(
                     dense: true,
@@ -1075,7 +1088,17 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: (_submitting || _flatGroups.length < 2)
+                          // Auto-assign only ever targets unlocked, childless
+                          // groups (a group with sub-groups can't hold
+                          // players directly) — mirrors the backend's own
+                          // "at least 2 unlocked, playable groups" check.
+                          onPressed: (_submitting ||
+                                  _flatGroups
+                                          .where((g) =>
+                                              g['locked'] != true &&
+                                              ((g['children'] as List?) ?? []).isEmpty)
+                                          .length <
+                                      2)
                               ? null
                               : _autoAssign,
                           icon: const Icon(Icons.shuffle),
@@ -1109,13 +1132,15 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     );
   }
 
-  // Which OTHER unlocked groups a given member could still be added to —
-  // excludes groups they already belong to, since a player can be in
-  // several groups at once and re-adding them somewhere they already are
-  // would just be a no-op menu item.
+  // Which OTHER unlocked, playable (childless) groups a given member could
+  // still be added to — excludes groups they already belong to (a player
+  // can be in several groups at once, re-adding them somewhere they already
+  // are would be a no-op) and any group with sub-groups, since the backend
+  // only accepts players directly into a group that has none.
   List<dynamic> _candidateGroupsFor(dynamic member, dynamic currentGroup) {
     return _flatGroups.where((g) {
       if (g['id'] == currentGroup['id'] || g['locked'] == true) return false;
+      if (((g['children'] as List?) ?? []).isNotEmpty) return false;
       final groupMembers = g['members'] as List;
       return !groupMembers.any((mm) => mm['id'] == member['id']);
     }).toList();
@@ -1164,17 +1189,22 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                                 fontSize: 15,
                               ),
                             ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: AppColors.accent.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(6),
+                            // A group with sub-groups is purely organizational —
+                            // its format/lock state never applies (the backend
+                            // refuses to assign players or lock it directly once
+                            // it has children), so that badge would just be noise.
+                            if (children.isEmpty)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: AppColors.accent.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  _formatLabel(group),
+                                  style: const TextStyle(fontSize: 10, color: AppColors.accent, fontWeight: FontWeight.w600),
+                                ),
                               ),
-                              child: Text(
-                                _formatLabel(group),
-                                style: const TextStyle(fontSize: 10, color: AppColors.accent, fontWeight: FontWeight.w600),
-                              ),
-                            ),
                             if (children.isNotEmpty)
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -1190,34 +1220,36 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                           ],
                         ),
                       ),
-                      Text(
-                        _isDoubles
-                            ? '${units.length} team${units.length == 1 ? '' : 's'}'
-                            : '${units.length} player${units.length == 1 ? '' : 's'}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: AppColors.textGrey,
+                      if (children.isEmpty) ...[
+                        Text(
+                          _isDoubles
+                              ? '${units.length} team${units.length == 1 ? '' : 's'}'
+                              : '${units.length} player${units.length == 1 ? '' : 's'}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textGrey,
+                          ),
                         ),
-                      ),
-                      if (!locked)
+                        if (!locked)
+                          IconButton(
+                            icon: const Icon(Icons.tune, size: 18),
+                            tooltip: 'Edit format',
+                            onPressed: _submitting ? null : () => _editGroupFormat(group),
+                          ),
                         IconButton(
-                          icon: const Icon(Icons.tune, size: 18),
-                          tooltip: 'Edit format',
-                          onPressed: _submitting ? null : () => _editGroupFormat(group),
+                          icon: Icon(
+                            locked ? Icons.lock_open_outlined : Icons.lock_outline,
+                            size: 18,
+                            color: locked ? AppColors.danger : AppColors.success,
+                          ),
+                          tooltip: locked ? 'Unlock group' : 'Lock group & generate matches',
+                          onPressed: _submitting
+                              ? null
+                              : () => locked
+                                  ? _unlockGroup(group['id'], group['name'])
+                                  : _lockGroup(group['id'], group['name']),
                         ),
-                      IconButton(
-                        icon: Icon(
-                          locked ? Icons.lock_open_outlined : Icons.lock_outline,
-                          size: 18,
-                          color: locked ? AppColors.danger : AppColors.success,
-                        ),
-                        tooltip: locked ? 'Unlock group' : 'Lock group & generate matches',
-                        onPressed: _submitting
-                            ? null
-                            : () => locked
-                                ? _unlockGroup(group['id'], group['name'])
-                                : _lockGroup(group['id'], group['name']),
-                      ),
+                      ],
                       PopupMenuButton<String>(
                         icon: const Icon(Icons.more_vert, size: 18),
                         enabled: !_submitting,
@@ -1255,7 +1287,10 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                       ),
                     ],
                   ),
-                  if (units.isEmpty)
+                  // A group with sub-groups never has a roster of its own —
+                  // players belong in the sub-groups (enforced by the backend
+                  // assign route) — so skip the roster section entirely.
+                  if (children.isEmpty && units.isEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Text(
@@ -1263,7 +1298,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                         style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
                       ),
                     )
-                  else
+                  else if (children.isEmpty)
                     ...units.map<Widget>((m) {
                       final candidateGroups = _candidateGroupsFor(m, group);
                       return Padding(
@@ -1316,7 +1351,11 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
 
   Widget _buildUnassignedRow(dynamic member) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final unlockedGroups = _flatGroups.where((g) => g['locked'] != true).toList();
+    // Only unlocked, childless groups accept players directly — a group
+    // with sub-groups is a container (see _candidateGroupsFor above).
+    final unlockedGroups = _flatGroups
+        .where((g) => g['locked'] != true && ((g['children'] as List?) ?? []).isEmpty)
+        .toList();
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),

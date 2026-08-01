@@ -394,6 +394,39 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
   }
 
   Widget _buildGroupTab(dynamic group) {
+    final children = (group['children'] as List?) ?? [];
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    // A group with sub-groups is purely organizational — the backend
+    // refuses to assign players or lock it directly once it has children,
+    // so it never has its own roster/fixtures to show. Just the roll-up.
+    if (children.isNotEmpty) {
+      return RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Text('Combined Standings', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 2),
+            Text(
+              'Across every group inside ${group['name']}',
+              style: const TextStyle(fontSize: 11, color: AppColors.textGrey),
+            ),
+            const SizedBox(height: 8),
+            ..._buildStandingsRows(
+              (group['combinedMembers'] as List?) ?? [],
+              group,
+              isDark,
+            ),
+            const SizedBox(height: 20),
+            Text('Groups inside', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            ...children.map<Widget>(_buildChildGroupCard),
+          ],
+        ),
+      );
+    }
+
     if (group['schedule_type'] == 'knockout') {
       // Rendered directly inline, like every other group format's tab — no
       // navigating away to a separate screen.
@@ -411,7 +444,6 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
     final isMemberOfGroup = members.any((m) => m['id'] == _currentUserId);
     final hostEntersScores = _league?['host_enters_scores'] == true;
     final isCustom = group['schedule_type'] == 'custom';
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return RefreshIndicator(
       onRefresh: _load,
@@ -501,27 +533,6 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                 members: members,
               ),
             ),
-          if ((group['children'] as List?)?.isNotEmpty == true) ...[
-            const SizedBox(height: 24),
-            const Divider(),
-            const SizedBox(height: 16),
-            Text('Combined Standings', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 2),
-            Text(
-              'Across every group inside ${group['name']}',
-              style: const TextStyle(fontSize: 11, color: AppColors.textGrey),
-            ),
-            const SizedBox(height: 8),
-            ..._buildStandingsRows(
-              (group['combinedMembers'] as List?) ?? [],
-              group,
-              isDark,
-            ),
-            const SizedBox(height: 20),
-            Text('Groups inside', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            ...(group['children'] as List).map<Widget>(_buildChildGroupCard),
-          ],
         ],
       ),
     );
