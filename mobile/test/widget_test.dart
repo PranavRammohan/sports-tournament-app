@@ -18,7 +18,7 @@ void main() {
 
     expect(find.text('RallyX'), findsOneWidget);
     expect(find.text('Log In'), findsOneWidget);
-    expect(find.text('Username'), findsOneWidget);
+    expect(find.text('Email or mobile number'), findsOneWidget);
     expect(find.text('Password'), findsOneWidget);
   });
 }

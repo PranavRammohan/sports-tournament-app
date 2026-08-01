@@ -9,7 +9,10 @@ const authMiddleware = require('./authMiddleware');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+// Profile photos ride in the JSON body as base64 data-URIs (see authRoutes.js),
+// which inflates ~33% over the raw image bytes — express.json()'s 100kb default
+// was rejecting most photo uploads before any route ran (PayloadTooLargeError).
+app.use(express.json({ limit: '5mb' }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/sports', authMiddleware, sportsRoutes);

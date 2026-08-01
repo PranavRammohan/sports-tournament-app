@@ -307,7 +307,11 @@ CREATE TABLE public.users (
     profile_pic_url text,
     created_at timestamp without time zone DEFAULT now(),
     location character varying(50),
-    gender character varying(1)
+    gender character varying(1),
+    first_name character varying(50),
+    last_name character varying(50),
+    email character varying(255),
+    city character varying(50) DEFAULT 'Bangalore'::character varying
 );
 
 
@@ -464,12 +468,16 @@ ALTER TABLE ONLY public.users
     ADD CONSTRAINT users_pkey PRIMARY KEY (id);
 
 
+-- users_username_key (UNIQUE on username) was dropped by
+-- migration_signup_fields.sql: username is now an auto-derived "First Last"
+-- display name, not a unique handle, and users_email_lower_key (below)
+-- became the real uniqueness constraint on identity.
+
 --
--- Name: users users_username_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: users_email_lower_key; Type: INDEX; Schema: public; Owner: postgres
 --
 
-ALTER TABLE ONLY public.users
-    ADD CONSTRAINT users_username_key UNIQUE (username);
+CREATE UNIQUE INDEX users_email_lower_key ON public.users USING btree (lower((email)::text)) WHERE (email IS NOT NULL);
 
 
 --

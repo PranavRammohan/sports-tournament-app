@@ -3,10 +3,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:image_picker/image_picker.dart';
-import 'dart:typed_data';
 import '../main.dart';
 import '../api_client.dart';
+import '../utils.dart';
 import 'change_password_screen.dart';
 import '../constants/areas.dart';
 
@@ -20,7 +19,9 @@ class EditProfileScreen extends StatefulWidget {
 }
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
-  late final TextEditingController _usernameController;
+  late final TextEditingController _firstNameController;
+  late final TextEditingController _lastNameController;
+  late final TextEditingController _emailController;
   late final TextEditingController _phoneController;
   String? _selectedArea;
   String? _selectedGender;
@@ -33,8 +34,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   @override
   void initState() {
     super.initState();
-    _usernameController = TextEditingController(
-      text: widget.currentUser['username'] ?? '',
+    _firstNameController = TextEditingController(
+      text: widget.currentUser['firstName'] ?? '',
+    );
+    _lastNameController = TextEditingController(
+      text: widget.currentUser['lastName'] ?? '',
+    );
+    _emailController = TextEditingController(
+      text: widget.currentUser['email'] ?? '',
     );
     _phoneController = TextEditingController(
       text: widget.currentUser['phoneNumber'] ?? '',
@@ -47,21 +54,20 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   Future<void> _pickProfileImage() async {
     HapticFeedback.selectionClick();
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 300,
-      maxHeight: 300,
-      imageQuality: 70,
-    );
-    if (picked == null) return;
-
-    final bytes = await picked.readAsBytes();
-    setState(() {
-      _newProfileImageBytes = bytes;
-      _newProfileImageBase64 = 'data:image/jpeg;base64,${base64Encode(bytes)}';
-      _removeExistingPhoto = false;
-    });
+    try {
+      final picked = await pickProfileImageAsDataUri();
+      if (picked == null) return;
+      setState(() {
+        _newProfileImageBytes = picked.bytes;
+        _newProfileImageBase64 = picked.dataUri;
+        _removeExistingPhoto = false;
+      });
+    } on ProfileImageTooLargeException {
+      _showAlert(
+        'Photo too large',
+        'That photo is too large — please pick a smaller one.',
+      );
+    }
   }
 
   void _removePhoto() {
@@ -74,14 +80,22 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 
   Future<void> _handleSave() async {
-    final username = _usernameController.text.trim();
+    final firstName = _firstNameController.text.trim();
+    final lastName = _lastNameController.text.trim();
+    final email = _emailController.text.trim();
     final phoneNumber = _phoneController.text.trim();
 
-    if (username.isEmpty ||
+    if (firstName.isEmpty ||
+        lastName.isEmpty ||
+        email.isEmpty ||
         phoneNumber.isEmpty ||
         _selectedArea == null ||
         _selectedGender == null) {
       _showAlert('Missing fields', 'Please fill in all fields.');
+      return;
+    }
+    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+      _showAlert('Invalid email', 'Enter a valid email address.');
       return;
     }
     if (!RegExp(r'^\d{10}$').hasMatch(phoneNumber)) {
@@ -94,9 +108,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
     try {
       final body = <String, dynamic>{
-        'username': username,
+        'firstName': firstName,
+        'lastName': lastName,
+        'email': email,
         'phoneNumber': phoneNumber,
-        'location': _selectedArea,
+        'city': 'Bangalore',
+        'area': _selectedArea,
         'gender': _selectedGender,
       };
       if (_newProfileImageBase64 != null) {
@@ -148,6 +165,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     final avatarIconColor = isDark
         ? Colors.grey.shade500
         : Colors.grey.shade400;
+    final disabledFieldColor = isDark
+        ? Colors.grey.shade800
+        : Colors.grey.shade100;
+    final primaryTextColor =
+        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
 
     final hasExistingPhoto =
         _existingPhotoUrl != null && _existingPhotoUrl!.isNotEmpty;
@@ -226,11 +248,33 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 ),
               ),
             const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _firstNameController,
+                    decoration: const InputDecoration(
+                      labelText: 'First Name',
+                      prefixIcon: Icon(Icons.person_outline),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextField(
+                    controller: _lastNameController,
+                    decoration: const InputDecoration(labelText: 'Last Name'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
             TextField(
-              controller: _usernameController,
+              controller: _emailController,
+              keyboardType: TextInputType.emailAddress,
               decoration: const InputDecoration(
-                labelText: 'Username',
-                prefixIcon: Icon(Icons.person_outline),
+                labelText: 'Email',
+                prefixIcon: Icon(Icons.email_outlined),
               ),
             ),
             const SizedBox(height: 14),
@@ -273,6 +317,18 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               ],
             ),
             const SizedBox(height: 16),
+            TextField(
+              enabled: false,
+              style: TextStyle(color: primaryTextColor),
+              decoration: InputDecoration(
+                labelText: 'City',
+                prefixIcon: const Icon(Icons.location_city_outlined),
+                filled: true,
+                fillColor: disabledFieldColor,
+              ),
+              controller: TextEditingController(text: 'Bangalore'),
+            ),
+            const SizedBox(height: 14),
             DropdownButtonFormField<String>(
               initialValue: _selectedArea,
               isExpanded: true,

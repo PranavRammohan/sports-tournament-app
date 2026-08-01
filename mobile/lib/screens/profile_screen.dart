@@ -195,18 +195,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           ),
                         ),
                         const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                        Wrap(
+                          alignment: WrapAlignment.center,
+                          spacing: 8,
+                          runSpacing: 8,
                           children: [
                             _InfoChip(
                               icon: Icons.location_on,
                               label: _user?['location'] ?? '',
                             ),
-                            const SizedBox(width: 8),
                             _InfoChip(
                               icon: Icons.phone,
                               label: _user?['phoneNumber'] ?? '',
                             ),
+                            if ((_user?['email'] ?? '').isNotEmpty)
+                              _InfoChip(
+                                icon: Icons.email,
+                                label: _user?['email'] ?? '',
+                              ),
                           ],
                         ),
                       ],

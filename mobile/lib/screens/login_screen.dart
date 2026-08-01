@@ -1,10 +1,9 @@
 // login_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import 'forgot_password_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -15,39 +14,39 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _loading = false;
   bool _obscurePassword = true;
 
   Future<void> _handleLogin() async {
-    final username = _usernameController.text.trim();
+    final email = _emailController.text.trim();
     final password = _passwordController.text;
 
-    if (username.isEmpty || password.isEmpty) {
-      _showAlert('Missing fields', 'Please enter both username and password.');
+    if (email.isEmpty || password.isEmpty) {
+      _showAlert(
+        'Missing fields',
+        'Please enter both email/mobile number and password.',
+      );
       return;
     }
 
     setState(() => _loading = true);
 
     try {
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/auth/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'username': username, 'password': password}),
+      final res = await ApiClient.post(
+        '/auth/login',
+        body: {'email': email, 'password': password},
       );
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode != 200) {
-        _showAlert('Login failed', data['error'] ?? 'Something went wrong.');
+      if (res.statusCode != 200) {
+        _showAlert('Login failed', res.errorOr('Something went wrong.'));
         return;
       }
 
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('authToken', data['token']);
-      await prefs.setString('user', jsonEncode(data['user']));
+      await prefs.setString('authToken', res.data['token']);
+      await prefs.setString('user', jsonEncode(res.data['user']));
 
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/home');
@@ -106,10 +105,11 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 32),
                 TextField(
-                  controller: _usernameController,
+                  controller: _emailController,
+                  keyboardType: TextInputType.emailAddress,
                   decoration: const InputDecoration(
-                    labelText: 'Username',
-                    prefixIcon: Icon(Icons.person_outline),
+                    labelText: 'Email or mobile number',
+                    prefixIcon: Icon(Icons.alternate_email),
                   ),
                 ),
                 const SizedBox(height: 14),

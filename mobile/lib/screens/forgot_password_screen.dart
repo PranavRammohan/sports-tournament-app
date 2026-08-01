@@ -1,8 +1,6 @@
 // forgot_password_screen.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import '../config.dart';
+import '../api_client.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
@@ -12,7 +10,7 @@ class ForgotPasswordScreen extends StatefulWidget {
 }
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
-  final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _newPasswordController = TextEditingController();
   final TextEditingController _confirmPasswordController =
@@ -20,12 +18,12 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   bool _loading = false;
 
   Future<void> _handleReset() async {
-    final username = _usernameController.text.trim();
+    final email = _emailController.text.trim();
     final phoneNumber = _phoneController.text.trim();
     final newPassword = _newPasswordController.text;
     final confirmPassword = _confirmPasswordController.text;
 
-    if (username.isEmpty ||
+    if (email.isEmpty ||
         phoneNumber.isEmpty ||
         newPassword.isEmpty ||
         confirmPassword.isEmpty) {
@@ -51,22 +49,19 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     setState(() => _loading = true);
 
     try {
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/auth/forgot-password'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'username': username,
+      final res = await ApiClient.post(
+        '/auth/forgot-password',
+        body: {
+          'email': email,
           'phoneNumber': phoneNumber,
           'newPassword': newPassword,
-        }),
+        },
       );
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode != 200) {
+      if (res.statusCode != 200) {
         _showAlert(
           'Could not reset password',
-          data['error'] ?? 'Please try again.',
+          res.errorOr('Please try again.'),
         );
         return;
       }
@@ -127,15 +122,16 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              'Enter your username and the mobile number linked to your account to reset your password.',
+              'Enter your email and the mobile number linked to your account to reset your password.',
               style: TextStyle(fontSize: 13, color: Colors.grey),
             ),
             const SizedBox(height: 20),
             TextField(
-              controller: _usernameController,
+              controller: _emailController,
+              keyboardType: TextInputType.emailAddress,
               decoration: const InputDecoration(
-                labelText: 'Username',
-                prefixIcon: Icon(Icons.person_outline),
+                labelText: 'Email',
+                prefixIcon: Icon(Icons.email_outlined),
               ),
             ),
             const SizedBox(height: 14),

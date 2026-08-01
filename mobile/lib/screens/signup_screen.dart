@@ -1,12 +1,11 @@
 // signup_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:image_picker/image_picker.dart';
 import 'dart:typed_data';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
+import '../utils.dart';
 import '../constants/areas.dart';
 
 class SignupScreen extends StatefulWidget {
@@ -17,41 +16,57 @@ class SignupScreen extends StatefulWidget {
 }
 
 class _SignupScreenState extends State<SignupScreen> {
-  final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _firstNameController = TextEditingController();
+  final TextEditingController _lastNameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _confirmPasswordController =
+      TextEditingController();
   String? _selectedArea;
   String? _selectedGender;
   bool _loading = false;
   bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
 
   Uint8List? _profileImageBytes;
   String? _profileImageBase64;
 
   Future<void> _pickProfileImage() async {
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 300,
-      maxHeight: 300,
-      imageQuality: 70,
-    );
-    if (picked == null) return;
-
-    final bytes = await picked.readAsBytes();
-    setState(() {
-      _profileImageBytes = bytes;
-      _profileImageBase64 = 'data:image/jpeg;base64,${base64Encode(bytes)}';
-    });
+    try {
+      final picked = await pickProfileImageAsDataUri();
+      if (picked == null) return;
+      setState(() {
+        _profileImageBytes = picked.bytes;
+        _profileImageBase64 = picked.dataUri;
+      });
+    } on ProfileImageTooLargeException {
+      _showAlert(
+        'Photo too large',
+        'That photo is too large — please pick a smaller one.',
+      );
+    }
   }
 
   Future<void> _handleSignup() async {
-    final username = _usernameController.text.trim();
+    final firstName = _firstNameController.text.trim();
+    final lastName = _lastNameController.text.trim();
+    final email = _emailController.text.trim();
     final phoneNumber = _phoneController.text.trim();
     final password = _passwordController.text;
+    final confirmPassword = _confirmPasswordController.text;
 
-    if (username.isEmpty || phoneNumber.isEmpty || password.isEmpty) {
+    if (firstName.isEmpty ||
+        lastName.isEmpty ||
+        email.isEmpty ||
+        phoneNumber.isEmpty ||
+        password.isEmpty ||
+        confirmPassword.isEmpty) {
       _showAlert('Missing fields', 'Please fill in all fields.');
+      return;
+    }
+    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+      _showAlert('Invalid email', 'Enter a valid email address.');
       return;
     }
     if (_selectedArea == null) {
@@ -66,6 +81,10 @@ class _SignupScreenState extends State<SignupScreen> {
       _showAlert('Weak password', 'Password must be at least 6 characters.');
       return;
     }
+    if (password != confirmPassword) {
+      _showAlert('Mismatch', 'Passwords do not match.');
+      return;
+    }
     if (!RegExp(r'^\d{10}$').hasMatch(phoneNumber)) {
       _showAlert('Invalid number', 'Enter a valid 10-digit mobile number.');
       return;
@@ -74,29 +93,30 @@ class _SignupScreenState extends State<SignupScreen> {
     setState(() => _loading = true);
 
     try {
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/auth/signup'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'username': username,
+      final res = await ApiClient.post(
+        '/auth/signup',
+        body: {
+          'firstName': firstName,
+          'lastName': lastName,
+          'email': email,
           'phoneNumber': phoneNumber,
           'password': password,
-          'location': _selectedArea,
+          'confirmPassword': confirmPassword,
+          'city': 'Bangalore',
+          'area': _selectedArea,
           'gender': _selectedGender,
           'profilePicUrl': _profileImageBase64,
-        }),
+        },
       );
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode != 201) {
-        _showAlert('Signup failed', data['error'] ?? 'Something went wrong.');
+      if (res.statusCode != 201) {
+        _showAlert('Signup failed', res.errorOr('Something went wrong.'));
         return;
       }
 
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('authToken', data['token']);
-      await prefs.setString('user', jsonEncode(data['user']));
+      await prefs.setString('authToken', res.data['token']);
+      await prefs.setString('user', jsonEncode(res.data['user']));
 
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/select-sports');
@@ -213,11 +233,33 @@ class _SignupScreenState extends State<SignupScreen> {
               ),
 
               const SizedBox(height: 26),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _firstNameController,
+                      decoration: const InputDecoration(
+                        labelText: 'First Name',
+                        prefixIcon: Icon(Icons.person_outline),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      controller: _lastNameController,
+                      decoration: const InputDecoration(labelText: 'Last Name'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
               TextField(
-                controller: _usernameController,
+                controller: _emailController,
+                keyboardType: TextInputType.emailAddress,
                 decoration: const InputDecoration(
-                  labelText: 'Username',
-                  prefixIcon: Icon(Icons.person_outline),
+                  labelText: 'Email',
+                  prefixIcon: Icon(Icons.email_outlined),
                 ),
               ),
               const SizedBox(height: 14),
@@ -246,6 +288,25 @@ class _SignupScreenState extends State<SignupScreen> {
                     ),
                     onPressed: () =>
                         setState(() => _obscurePassword = !_obscurePassword),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _confirmPasswordController,
+                obscureText: _obscureConfirmPassword,
+                decoration: InputDecoration(
+                  labelText: 'Confirm Password',
+                  prefixIcon: const Icon(Icons.lock_outline),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscureConfirmPassword
+                          ? Icons.visibility_off
+                          : Icons.visibility,
+                    ),
+                    onPressed: () => setState(
+                      () => _obscureConfirmPassword = !_obscureConfirmPassword,
+                    ),
                   ),
                 ),
               ),
