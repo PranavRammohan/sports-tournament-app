@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('./db');
 const { calculateNewRatings, reverseRatingChange } = require('./ratingEngine');
+const { createNotifications } = require('./notifications');
 const { RouteError } = pool;
 
 // Generates standard tournament bracket seed order for any power-of-two size,
@@ -889,7 +890,19 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
       );
 
       const updatedMatchResult = await client.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
-      await finalizePlayoffMatch(client, updatedMatchResult.rows[0], league);
+      const updatedMatch = updatedMatchResult.rows[0];
+      await finalizePlayoffMatch(client, updatedMatch, league);
+
+      await createNotifications(
+        client,
+        [updatedMatch.player1_id, updatedMatch.player1_partner_id, updatedMatch.player2_id, updatedMatch.player2_partner_id],
+        {
+          type: 'match_confirmed',
+          title: 'Match result entered',
+          body: `The host entered a confirmed score for your bracket match in ${league.name}.`,
+          leagueId: league.id,
+        }
+      );
     });
 
     res.status(200).json({ message: 'Match confirmed.' });
@@ -1161,6 +1174,17 @@ router.post('/match/:matchId/confirm', async (req, res) => {
       }
 
       await finalizePlayoffMatch(client, match, league);
+
+      await createNotifications(
+        client,
+        participantIds.filter((id) => id !== userId),
+        {
+          type: 'match_confirmed',
+          title: 'Match confirmed',
+          body: `Your bracket match in ${league.name} was confirmed and ratings were updated.`,
+          leagueId: match.league_id,
+        }
+      );
     });
 
     res.status(200).json({ message: 'Match confirmed.' });
@@ -1210,6 +1234,16 @@ router.post('/match/:matchId/reject', async (req, res) => {
        WHERE id = $1`,
       [matchId]
     );
+
+    const reporterSide = [match.player1_id, match.player1_partner_id].includes(match.reported_by)
+      ? [match.player1_id, match.player1_partner_id]
+      : [match.player2_id, match.player2_partner_id];
+    await createNotifications(pool, reporterSide, {
+      type: 'match_rejected',
+      title: 'Score rejected',
+      body: `Your reported bracket score in ${league.name} was rejected. You can report it again.`,
+      leagueId: match.league_id,
+    });
 
     res.status(200).json({ message: 'Result rejected. It can be reported again.' });
   } catch (err) {

@@ -17,14 +17,23 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _index = 0;
   int _pendingCount = 0;
+  int _unreadNotifCount = 0;
 
   final _homeKey = GlobalKey<State<HomeScreen>>();
   final _leaguesKey = GlobalKey<State<MyLeaguesScreen>>();
   final _pendingKey = GlobalKey<State<PendingMatchesScreen>>();
   final _profileKey = GlobalKey<State<ProfileScreen>>();
 
-  late final _screens = [
-    HomeScreen(key: _homeKey),
+  // A getter (not `late final`) so HomeScreen is reconstructed with a fresh
+  // `unreadNotifCount` on every MainShell rebuild — its GlobalKey preserves
+  // the underlying State across those rebuilds, so this doesn't re-run
+  // initState, just feeds it the current count via didUpdateWidget.
+  List<Widget> get _screens => [
+    HomeScreen(
+      key: _homeKey,
+      unreadNotifCount: _unreadNotifCount,
+      onNotificationsChanged: _loadUnreadNotifCount,
+    ),
     MyLeaguesScreen(key: _leaguesKey),
     PendingMatchesScreen(key: _pendingKey, onPendingChanged: _loadPendingCount),
     ProfileScreen(key: _profileKey),
@@ -34,6 +43,7 @@ class _MainShellState extends State<MainShell> {
   void initState() {
     super.initState();
     _loadPendingCount();
+    _loadUnreadNotifCount();
   }
 
   Future<void> _loadPendingCount() async {
@@ -41,6 +51,17 @@ class _MainShellState extends State<MainShell> {
       final res = await ApiClient.get('/matches/pending');
       if (res.statusCode == 200 && mounted) {
         setState(() => _pendingCount = (res.data['matches'] as List).length);
+      }
+    } catch (err) {
+      // fail silently
+    }
+  }
+
+  Future<void> _loadUnreadNotifCount() async {
+    try {
+      final res = await ApiClient.get('/notifications/unread-count');
+      if (res.statusCode == 200 && mounted) {
+        setState(() => _unreadNotifCount = res.data['count'] ?? 0);
       }
     } catch (err) {
       // fail silently
@@ -72,6 +93,11 @@ class _MainShellState extends State<MainShell> {
     // catches any other way the count could have changed while the user
     // was on a different tab.
     if (i == 2) _loadPendingCount();
+    // Unlike the Pending badge (only shown on the Pending tab itself, so
+    // refreshing on arrival is enough), the notification bell lives on Home
+    // and needs to stay fresh no matter which tab the user is switching
+    // *from* or *to* — refresh on every switch, not gated to one index.
+    _loadUnreadNotifCount();
   }
 
   @override

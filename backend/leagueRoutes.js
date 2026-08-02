@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('./db');
 const { reverseRatingChange } = require('./ratingEngine');
+const { createNotification } = require('./notifications');
 const { RouteError } = pool;
 
 // Round robin means everyone plays everyone, which scales as n(n-1)/2 —
@@ -533,6 +534,14 @@ router.post('/:id/select-partner', async (req, res) => {
       [partnerId, leagueId, userId]
     );
 
+    await createNotification(pool, {
+      userId: parseInt(partnerId, 10),
+      type: 'partner_request',
+      title: 'Partner request',
+      body: `Someone wants to be your doubles partner in ${league.name}.`,
+      leagueId,
+    });
+
     res.status(200).json({ message: 'Partner request sent. Waiting for them to accept.' });
   } catch (err) {
     console.error('Select partner error:', err);
@@ -564,12 +573,22 @@ router.post('/:id/respond-partner', async (req, res) => {
     }
     const requesterId = requestResult.rows[0].user_id;
 
+    const leagueNameResult = await pool.query('SELECT name FROM leagues WHERE id = $1', [leagueId]);
+    const leagueName = leagueNameResult.rows[0]?.name;
+
     if (accept !== true) {
       await pool.query(
         `UPDATE league_members SET partner_id = NULL, partner_status = NULL
          WHERE league_id = $1 AND user_id = $2`,
         [leagueId, requesterId]
       );
+      await createNotification(pool, {
+        userId: requesterId,
+        type: 'partner_response',
+        title: 'Partner request declined',
+        body: `Your partner request in ${leagueName} was declined.`,
+        leagueId,
+      });
       return res.status(200).json({ message: 'Partner request declined.' });
     }
 
@@ -583,6 +602,14 @@ router.post('/:id/respond-partner', async (req, res) => {
        WHERE league_id = $1 AND user_id = $2`,
       [leagueId, requesterId]
     );
+
+    await createNotification(pool, {
+      userId: requesterId,
+      type: 'partner_response',
+      title: 'Partner request accepted',
+      body: `Your partner request in ${leagueName} was accepted.`,
+      leagueId,
+    });
 
     res.status(200).json({ message: 'Partner confirmed!' });
   } catch (err) {
@@ -2167,6 +2194,14 @@ router.post('/:id/add-player', async (req, res) => {
       'INSERT INTO league_members (league_id, user_id) VALUES ($1, $2)',
       [leagueId, playerId]
     );
+
+    await createNotification(pool, {
+      userId: playerId,
+      type: 'added_to_league',
+      title: 'Added to a tournament',
+      body: `The host added you to ${league.name}.`,
+      leagueId,
+    });
 
     res.status(201).json({ message: 'Player added successfully.' });
   } catch (err) {

@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('./db');
 const { calculateNewRatings, reverseRatingChange } = require('./ratingEngine');
+const { createNotification, createNotifications } = require('./notifications');
 const { RouteError } = pool;
 
 // A reasonable ceiling for any single unit count (games/points won in a
@@ -394,6 +395,13 @@ router.post('/report', async (req, res) => {
       ]
     );
 
+    await createNotifications(pool, [opponentId, opponentPartnerId], {
+      type: 'match_reported',
+      title: 'New score reported',
+      body: `A score was reported in ${league.name} — confirm or reject it.`,
+      leagueId,
+    });
+
     res.status(201).json({ match: result.rows[0] });
   } catch (err) {
     console.error('Report match error:', err);
@@ -491,6 +499,17 @@ router.post('/report-as-host', async (req, res) => {
 
       match = result.rows[0];
       await finalizeMatch(client, match, league);
+
+      await createNotifications(
+        client,
+        [player1Id, player1PartnerId, player2Id, player2PartnerId],
+        {
+          type: 'match_confirmed',
+          title: 'Match result entered',
+          body: `The host entered a confirmed score for you in ${league.name}.`,
+          leagueId,
+        }
+      );
     });
 
     res.status(201).json({ match });
@@ -855,6 +874,17 @@ router.post('/:id/confirm', async (req, res) => {
       }
 
       await finalizeMatch(client, match, league);
+
+      await createNotifications(
+        client,
+        participants.filter((id) => id !== userId),
+        {
+          type: 'match_confirmed',
+          title: 'Match confirmed',
+          body: `Your match in ${league.name} was confirmed and ratings were updated.`,
+          leagueId: match.league_id,
+        }
+      );
     });
 
     res.status(200).json({ message: 'Match confirmed and ratings updated.' });
@@ -900,6 +930,16 @@ router.post('/:id/reject', async (req, res) => {
     }
 
     await pool.query(`UPDATE matches SET status = 'rejected' WHERE id = $1`, [matchId]);
+
+    const reporterSide = [match.player1_id, match.player1_partner_id].includes(match.reported_by)
+      ? [match.player1_id, match.player1_partner_id]
+      : [match.player2_id, match.player2_partner_id];
+    await createNotifications(pool, reporterSide, {
+      type: 'match_rejected',
+      title: 'Score rejected',
+      body: `Your reported score in ${league.name} was rejected. You can report it again with the correct score.`,
+      leagueId: match.league_id,
+    });
 
     res.status(200).json({ message: 'Match report rejected. It can be reported again with the correct score.' });
   } catch (err) {

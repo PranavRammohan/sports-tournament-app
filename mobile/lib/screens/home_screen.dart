@@ -16,9 +16,22 @@ import 'my_leagues_screen.dart';
 import 'match_history_screen.dart';
 import 'pending_matches_screen.dart';
 import 'league_detail_screen.dart';
+import 'notifications_screen.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  // Owned by MainShell so the badge count stays live across tab switches —
+  // see main_shell.dart's _loadUnreadNotifCount for why this can't just be
+  // fetched once inside HomeScreen itself (Pending's badge lives directly in
+  // MainShell's own NavigationBar for the same reason; this is the version
+  // of that for a per-screen AppBar action instead of a nav destination).
+  final int unreadNotifCount;
+  final VoidCallback? onNotificationsChanged;
+
+  const HomeScreen({
+    super.key,
+    this.unreadNotifCount = 0,
+    this.onNotificationsChanged,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -181,7 +194,29 @@ class _HomeScreenState extends State<HomeScreen> {
         : Colors.grey.shade600;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('RallyX')),
+      appBar: AppBar(
+        title: const Text('RallyX'),
+        actions: [
+          IconButton(
+            tooltip: 'Notifications',
+            icon: widget.unreadNotifCount > 0
+                ? Badge(
+                    label: Text('${widget.unreadNotifCount}'),
+                    backgroundColor: AppColors.danger,
+                    child: const Icon(Icons.notifications_outlined),
+                  )
+                : const Icon(Icons.notifications_outlined),
+            onPressed: () async {
+              HapticFeedback.selectionClick();
+              await Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+              );
+              widget.onNotificationsChanged?.call();
+            },
+          ),
+        ],
+      ),
       body: _loading
           ? const SkeletonList()
           : _error != null
