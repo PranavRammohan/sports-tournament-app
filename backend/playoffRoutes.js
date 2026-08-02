@@ -1252,6 +1252,49 @@ router.post('/match/:matchId/reject', async (req, res) => {
   }
 });
 
+// ---------- SET/EDIT A PLAYOFF MATCH'S SCHEDULE (host only) ----------
+// Unlike scheduled_matches's equivalent route, this never touches
+// player1Id/player2Id — knockout slots are filled by bracket progression
+// (advanceWinner), not manually, so this only ever writes scheduled_time/venue.
+router.put('/match/:matchId/schedule', async (req, res) => {
+  const userId = req.userId;
+  const matchId = req.params.matchId;
+  const { scheduledTime, venue } = req.body;
+
+  if (venue && venue.length > 200) {
+    return res.status(400).json({ error: 'Venue must be 200 characters or fewer.' });
+  }
+
+  try {
+    const matchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
+    if (matchResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Match not found.' });
+    }
+    const match = matchResult.rows[0];
+
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can edit the schedule.' });
+    }
+    const completedError = checkNotCompleted(league);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
+    }
+
+    await pool.query(
+      `UPDATE playoff_matches SET scheduled_time = $1, venue = $2 WHERE id = $3`,
+      [scheduledTime || null, venue || null, matchId]
+    );
+
+    res.status(200).json({ message: 'Match schedule updated.' });
+  } catch (err) {
+    console.error('Edit playoff schedule error:', err);
+    res.status(500).json({ error: 'Something went wrong updating the schedule.' });
+  }
+});
+
 // Attached the same way matchRoutes.js attaches resolvePointsConfig, and
 // db.js attaches withTransaction/RouteError to the pool — module-private
 // helpers the test suite can reach without changing how server.js consumes

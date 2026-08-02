@@ -601,6 +601,53 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     }
   }
 
+  // Playoff matches never have their players manually edited here (bracket
+  // progression fills those slots), so unlike _openEditFixtureDialog this
+  // only ever touches scheduled_time/venue.
+  Future<void> _editPlayoffSchedule(dynamic m) async {
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => _EditPlayoffScheduleDialog(
+        initialScheduledTime: m['scheduled_time'],
+        initialVenue: m['venue'],
+      ),
+    );
+    if (result == null) return;
+
+    HapticFeedback.lightImpact();
+    try {
+      final res = await ApiClient.put(
+        '/playoffs/match/${m['id']}/schedule',
+        body: {
+          'scheduledTime': result['scheduledTime'],
+          'venue': result['venue'],
+        },
+      );
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Match schedule updated.'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadAll();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not update schedule.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    }
+  }
+
   Future<void> _reportKnockoutMatch(int matchId) async {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -810,6 +857,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         initialPlayer2Id: f['player2_id'],
         initialPlayer2PartnerId: f['player2_partner_id'],
         initialScheduledTime: f['scheduled_time'],
+        initialVenue: f['venue'],
       ),
     );
     if (result == null) return;
@@ -824,6 +872,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           'player2Id': result['player2Id'],
           'player2PartnerId': result['player2PartnerId'],
           'scheduledTime': result['scheduledTime'],
+          'venue': result['venue'],
         },
       );
       if (!mounted) return;
@@ -2274,6 +2323,66 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                               ),
                           ],
                         ),
+                        if (m['scheduled_time'] != null) ...[
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.event,
+                                size: 12,
+                                color: AppColors.textGrey,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                _formatScheduledTime(m['scheduled_time']),
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: AppColors.textGrey,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                        if (m['venue'] != null) ...[
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.place,
+                                size: 12,
+                                color: AppColors.textGrey,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                m['venue'],
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: AppColors.textGrey,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                        if (isHost && !_isCompleted) ...[
+                          const SizedBox(height: 6),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              onPressed: () => _editPlayoffSchedule(m),
+                              icon: const Icon(Icons.edit_calendar, size: 15),
+                              label: const Text(
+                                'Edit schedule',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                              style: TextButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                ),
+                                visualDensity: VisualDensity.compact,
+                              ),
+                            ),
+                          ),
+                        ],
                         if (m['set_scores'] != null) ...[
                           const SizedBox(height: 4),
                           Text(
@@ -2723,6 +2832,19 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 const SizedBox(width: 4),
                 Text(
                   _formatScheduledTime(f['scheduled_time']),
+                  style: TextStyle(fontSize: 11, color: subtleVsColor),
+                ),
+              ],
+            ),
+          ],
+          if (f['venue'] != null) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Icon(Icons.place, size: 12, color: subtleVsColor),
+                const SizedBox(width: 4),
+                Text(
+                  f['venue'],
                   style: TextStyle(fontSize: 11, color: subtleVsColor),
                 ),
               ],
@@ -3205,6 +3327,7 @@ class _EditFixtureDialog extends StatefulWidget {
   final int? initialPlayer2Id;
   final int? initialPlayer2PartnerId;
   final String? initialScheduledTime;
+  final String? initialVenue;
 
   const _EditFixtureDialog({
     required this.format,
@@ -3214,6 +3337,7 @@ class _EditFixtureDialog extends StatefulWidget {
     this.initialPlayer2Id,
     this.initialPlayer2PartnerId,
     this.initialScheduledTime,
+    this.initialVenue,
   });
 
   @override
@@ -3226,6 +3350,7 @@ class _EditFixtureDialogState extends State<_EditFixtureDialog> {
   int? _player2Id;
   int? _player2PartnerId;
   DateTime? _scheduledDateTime;
+  final TextEditingController _venueController = TextEditingController();
   String? _error;
 
   bool get _isDoubles => widget.format == 'doubles';
@@ -3237,11 +3362,18 @@ class _EditFixtureDialogState extends State<_EditFixtureDialog> {
     _player1PartnerId = widget.initialPlayer1PartnerId;
     _player2Id = widget.initialPlayer2Id;
     _player2PartnerId = widget.initialPlayer2PartnerId;
+    _venueController.text = widget.initialVenue ?? '';
     if (widget.initialScheduledTime != null) {
       _scheduledDateTime = DateTime.tryParse(
         widget.initialScheduledTime!,
       )?.toLocal();
     }
+  }
+
+  @override
+  void dispose() {
+    _venueController.dispose();
+    super.dispose();
   }
 
   List<DropdownMenuItem<int>> _items() {
@@ -3400,6 +3532,15 @@ class _EditFixtureDialogState extends State<_EditFixtureDialog> {
                   ),
               ],
             ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _venueController,
+              decoration: const InputDecoration(
+                labelText: 'Venue (optional)',
+                prefixIcon: Icon(Icons.place_outlined),
+                isDense: true,
+              ),
+            ),
           ],
         ),
       ),
@@ -3430,6 +3571,173 @@ class _EditFixtureDialogState extends State<_EditFixtureDialog> {
               'player2Id': _player2Id,
               'player2PartnerId': _player2PartnerId,
               'scheduledTime': _scheduledDateTime?.toIso8601String(),
+              'venue': _venueController.text.trim().isEmpty
+                  ? null
+                  : _venueController.text.trim(),
+            });
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+// Trimmed version of _EditFixtureDialog for knockout matches — no player
+// dropdowns, since bracket slots are filled by advanceWinner, not manually.
+class _EditPlayoffScheduleDialog extends StatefulWidget {
+  final dynamic initialScheduledTime;
+  final String? initialVenue;
+
+  const _EditPlayoffScheduleDialog({
+    this.initialScheduledTime,
+    this.initialVenue,
+  });
+
+  @override
+  State<_EditPlayoffScheduleDialog> createState() =>
+      _EditPlayoffScheduleDialogState();
+}
+
+class _EditPlayoffScheduleDialogState
+    extends State<_EditPlayoffScheduleDialog> {
+  DateTime? _scheduledDateTime;
+  final TextEditingController _venueController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _venueController.text = widget.initialVenue ?? '';
+    if (widget.initialScheduledTime != null) {
+      _scheduledDateTime = DateTime.tryParse(
+        widget.initialScheduledTime.toString(),
+      )?.toLocal();
+    }
+  }
+
+  @override
+  void dispose() {
+    _venueController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDateTime() async {
+    final now = DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _scheduledDateTime ?? now,
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 2),
+    );
+    if (date == null) return;
+    if (!mounted) return;
+
+    final time = await showTimePicker(
+      context: context,
+      initialTime: _scheduledDateTime != null
+          ? TimeOfDay(
+              hour: _scheduledDateTime!.hour,
+              minute: _scheduledDateTime!.minute,
+            )
+          : const TimeOfDay(hour: 18, minute: 0),
+    );
+    if (time == null) return;
+
+    setState(() {
+      _scheduledDateTime = DateTime(
+        date.year,
+        date.month,
+        date.day,
+        time.hour,
+        time.minute,
+      );
+    });
+  }
+
+  String _formatPicked(DateTime dt) {
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final hour12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+    return '${months[dt.month - 1]} ${dt.day}, ${dt.year} · $hour12:$minute $ampm';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      title: const Text('Edit Schedule'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Date & Time (optional)',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _scheduledDateTime != null
+                        ? _formatPicked(_scheduledDateTime!)
+                        : 'Not set',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _pickDateTime,
+                  child: Text(_scheduledDateTime != null ? 'Change' : 'Set'),
+                ),
+                if (_scheduledDateTime != null)
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    tooltip: 'Clear',
+                    onPressed: () => setState(() => _scheduledDateTime = null),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _venueController,
+              decoration: const InputDecoration(
+                labelText: 'Venue (optional)',
+                prefixIcon: Icon(Icons.place_outlined),
+                isDense: true,
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            Navigator.pop(context, {
+              'scheduledTime': _scheduledDateTime?.toIso8601String(),
+              'venue': _venueController.text.trim().isEmpty
+                  ? null
+                  : _venueController.text.trim(),
             });
           },
           child: const Text('Save'),

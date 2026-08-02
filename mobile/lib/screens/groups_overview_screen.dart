@@ -573,6 +573,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
         initialPlayer1Id: f['player1_id'],
         initialPlayer2Id: f['player2_id'],
         initialScheduledTime: f['scheduled_time'],
+        initialVenue: f['venue'],
       ),
     );
     if (result == null) return;
@@ -585,6 +586,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
           'player1Id': result['player1Id'],
           'player2Id': result['player2Id'],
           'scheduledTime': result['scheduledTime'],
+          'venue': result['venue'],
         },
       );
       if (!mounted) return;
@@ -927,6 +929,19 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
               ],
             ),
           ],
+          if (f['venue'] != null) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Icon(Icons.place, size: 12, color: subtleColor),
+                const SizedBox(width: 4),
+                Text(
+                  f['venue'],
+                  style: TextStyle(fontSize: 11, color: subtleColor),
+                ),
+              ],
+            ),
+          ],
           if (isCompleted) ...[
             const SizedBox(height: 4),
             Text(
@@ -1196,12 +1211,14 @@ class _EditGroupFixtureDialog extends StatefulWidget {
   final int? initialPlayer1Id;
   final int? initialPlayer2Id;
   final dynamic initialScheduledTime;
+  final String? initialVenue;
 
   const _EditGroupFixtureDialog({
     required this.members,
     this.initialPlayer1Id,
     this.initialPlayer2Id,
     this.initialScheduledTime,
+    this.initialVenue,
   });
 
   @override
@@ -1213,6 +1230,7 @@ class _EditGroupFixtureDialogState extends State<_EditGroupFixtureDialog> {
   int? _player1Id;
   int? _player2Id;
   DateTime? _scheduledDateTime;
+  final TextEditingController _venueController = TextEditingController();
   String? _error;
 
   @override
@@ -1220,11 +1238,18 @@ class _EditGroupFixtureDialogState extends State<_EditGroupFixtureDialog> {
     super.initState();
     _player1Id = widget.initialPlayer1Id;
     _player2Id = widget.initialPlayer2Id;
+    _venueController.text = widget.initialVenue ?? '';
     if (widget.initialScheduledTime != null) {
       _scheduledDateTime = DateTime.tryParse(
         widget.initialScheduledTime.toString(),
       )?.toLocal();
     }
+  }
+
+  @override
+  void dispose() {
+    _venueController.dispose();
+    super.dispose();
   }
 
   List<DropdownMenuItem<int>> _items() {
@@ -1361,6 +1386,15 @@ class _EditGroupFixtureDialogState extends State<_EditGroupFixtureDialog> {
                   ),
               ],
             ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _venueController,
+              decoration: const InputDecoration(
+                labelText: 'Venue (optional)',
+                prefixIcon: Icon(Icons.place_outlined),
+                isDense: true,
+              ),
+            ),
           ],
         ),
       ),
@@ -1383,6 +1417,9 @@ class _EditGroupFixtureDialogState extends State<_EditGroupFixtureDialog> {
               'player1Id': _player1Id,
               'player2Id': _player2Id,
               'scheduledTime': _scheduledDateTime?.toIso8601String(),
+              'venue': _venueController.text.trim().isEmpty
+                  ? null
+                  : _venueController.text.trim(),
             });
           },
           child: const Text('Save'),

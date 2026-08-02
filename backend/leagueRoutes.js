@@ -1140,7 +1140,7 @@ router.get('/:id/groups/:groupId/schedule', async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT sm.id, sm.scheduled_time,
+      `SELECT sm.id, sm.scheduled_time, sm.venue,
               sm.player1_id, sm.player1_partner_id, sm.player2_id, sm.player2_partner_id,
               p1.username as player1_username, p1.phone_number as player1_phone,
               pp1.username as player1_partner_username, pp1.phone_number as player1_partner_phone,
@@ -3400,7 +3400,7 @@ router.get('/:id/schedule', async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT sm.id, sm.tier_number, sm.scheduled_time,
+      `SELECT sm.id, sm.tier_number, sm.scheduled_time, sm.venue,
               sm.player1_id, sm.player1_partner_id, sm.player2_id, sm.player2_partner_id,
               p1.username as player1_username, p1.phone_number as player1_phone,
               pp1.username as player1_partner_username, pp1.phone_number as player1_partner_phone,
@@ -3649,10 +3649,13 @@ router.put('/:id', async (req, res) => {
 router.put('/:id/schedule/:scheduledMatchId', async (req, res) => {
   const userId = req.userId;
   const { id: leagueId, scheduledMatchId } = req.params;
-  const { player1Id, player1PartnerId, player2Id, player2PartnerId, scheduledTime } = req.body;
+  const { player1Id, player1PartnerId, player2Id, player2PartnerId, scheduledTime, venue } = req.body;
 
   if (!player1Id || !player2Id) {
     return res.status(400).json({ error: 'Please select both sides of the match.' });
+  }
+  if (venue && venue.length > 200) {
+    return res.status(400).json({ error: 'Venue must be 200 characters or fewer.' });
   }
 
   try {
@@ -3709,9 +3712,9 @@ router.put('/:id/schedule/:scheduledMatchId', async (req, res) => {
 
     await pool.query(
       `UPDATE scheduled_matches SET player1_id = $1, player1_partner_id = $2, player2_id = $3, player2_partner_id = $4,
-       scheduled_time = $5
-       WHERE id = $6`,
-      [player1Id, player1PartnerId || null, player2Id, player2PartnerId || null, scheduledTime || null, scheduledMatchId]
+       scheduled_time = $5, venue = $6
+       WHERE id = $7`,
+      [player1Id, player1PartnerId || null, player2Id, player2PartnerId || null, scheduledTime || null, venue || null, scheduledMatchId]
     );
 
     res.status(200).json({ message: 'Match updated.' });
