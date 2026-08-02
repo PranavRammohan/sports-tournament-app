@@ -27,6 +27,10 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
   bool _loading = true;
   String? _error;
   int? _currentUserId;
+  // Ids of matches currently being confirmed/rejected — disables just that
+  // row's buttons so a slow connection can't be double-tapped into a second
+  // confirm/reject request, matching the pattern in add_players_screen.dart.
+  final Set<dynamic> _actingIds = {};
 
   @override
   void initState() {
@@ -73,6 +77,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
 
   Future<void> _confirmMatch(dynamic m) async {
     HapticFeedback.lightImpact();
+    setState(() => _actingIds.add(m['id']));
     try {
       final path = _isPlayoff(m)
           ? '/playoffs/match/${m['id']}/confirm'
@@ -103,6 +108,8 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _actingIds.remove(m['id']));
     }
   }
 
@@ -133,6 +140,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     if (confirmed != true) return;
 
     HapticFeedback.mediumImpact();
+    setState(() => _actingIds.add(m['id']));
     try {
       final path = _isPlayoff(m)
           ? '/playoffs/match/${m['id']}/reject'
@@ -163,6 +171,8 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _actingIds.remove(m['id']));
     }
   }
 
@@ -278,6 +288,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                       separatorBuilder: (_, __) => const SizedBox(height: 8),
                       itemBuilder: (context, index) {
                         final m = _matches[index];
+                        final isActing = _actingIds.contains(m['id']);
                         final isDoubles = m['league_format'] == 'doubles';
                         final isPlayoff = _isPlayoff(m);
                         final team1 = isDoubles
@@ -398,11 +409,22 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                                             vertical: 10,
                                           ),
                                         ),
-                                        onPressed: () => _rejectMatch(m),
-                                        child: const Text(
-                                          'Reject',
-                                          style: TextStyle(fontSize: 13),
-                                        ),
+                                        onPressed: isActing
+                                            ? null
+                                            : () => _rejectMatch(m),
+                                        child: isActing
+                                            ? const SizedBox(
+                                                height: 14,
+                                                width: 14,
+                                                child: CircularProgressIndicator(
+                                                  strokeWidth: 2,
+                                                  color: AppColors.danger,
+                                                ),
+                                              )
+                                            : const Text(
+                                                'Reject',
+                                                style: TextStyle(fontSize: 13),
+                                              ),
                                       ),
                                     ),
                                     const SizedBox(width: 8),
@@ -413,11 +435,22 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                                             vertical: 10,
                                           ),
                                         ),
-                                        onPressed: () => _confirmMatch(m),
-                                        child: const Text(
-                                          'Confirm',
-                                          style: TextStyle(fontSize: 13),
-                                        ),
+                                        onPressed: isActing
+                                            ? null
+                                            : () => _confirmMatch(m),
+                                        child: isActing
+                                            ? const SizedBox(
+                                                height: 14,
+                                                width: 14,
+                                                child: CircularProgressIndicator(
+                                                  strokeWidth: 2,
+                                                  color: Colors.white,
+                                                ),
+                                              )
+                                            : const Text(
+                                                'Confirm',
+                                                style: TextStyle(fontSize: 13),
+                                              ),
                                       ),
                                     ),
                                   ],

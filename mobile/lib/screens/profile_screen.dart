@@ -8,6 +8,8 @@ import '../api_client.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/player_avatar.dart';
 import '../widgets/loading_skeleton.dart';
+import '../widgets/win_rate_bar.dart';
+import '../widgets/rating_sparkline.dart';
 import 'add_sport_screen.dart';
 import 'edit_profile_screen.dart';
 
@@ -80,6 +82,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _handleLogout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Log out?'),
+        content: const Text("You'll need to sign in again to use RallyX."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Log Out',
+              style: TextStyle(color: AppColors.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
     HapticFeedback.mediumImpact();
     final prefs = await SharedPreferences.getInstance();
     // Clear only the session, not app-level preferences like darkMode/
@@ -140,7 +165,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
       body: _loading
           ? const SkeletonList()
           : _error != null
-          ? Center(child: Text(_error!))
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_error!, textAlign: TextAlign.center),
+                    const SizedBox(height: 12),
+                    TextButton(
+                      onPressed: _loadProfile,
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            )
           : RefreshIndicator(
               onRefresh: _loadProfile,
               child: ListView(
@@ -373,15 +413,40 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 '${data['matches_played']} matches · ${data['wins']}W ${data['losses']}L',
                 style: TextStyle(fontSize: 11, color: subtleTextColor),
               ),
+              if ((data['matches_played'] ?? 0) > 0) ...[
+                const SizedBox(height: 4),
+                SizedBox(
+                  width: 90,
+                  child: WinRateBar(
+                    wins: data['wins'] ?? 0,
+                    losses: data['losses'] ?? 0,
+                  ),
+                ),
+              ],
             ],
           ),
-          Text(
-            '${data['rating']}',
-            style: const TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.bold,
-              color: AppColors.accent,
-            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_user?['id'] != null &&
+                  data['matches_played'] != null &&
+                  data['matches_played'] > 0) ...[
+                RatingSparkline(
+                  userId: _user!['id'] as int,
+                  sport: data['sport'],
+                  format: data['format'],
+                ),
+                const SizedBox(width: 10),
+              ],
+              Text(
+                '${data['rating']}',
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.accent,
+                ),
+              ),
+            ],
           ),
         ],
       ),

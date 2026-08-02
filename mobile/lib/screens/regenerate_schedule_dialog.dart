@@ -1,5 +1,6 @@
 // regenerate_schedule_dialog.dart
 import 'package:flutter/material.dart';
+import '../main.dart';
 
 class RegenerateScheduleResult {
   final String? scheduleType;
@@ -28,6 +29,7 @@ class RegenerateScheduleDialog extends StatefulWidget {
 class _RegenerateScheduleDialogState extends State<RegenerateScheduleDialog> {
   late String _scheduleType;
   late final TextEditingController _matchesPerPlayerController;
+  String? _error;
 
   @override
   void initState() {
@@ -54,6 +56,14 @@ class _RegenerateScheduleDialogState extends State<RegenerateScheduleDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: AppColors.danger, fontSize: 13),
+                ),
+              ),
             const Text(
               'This wipes all match history for this tournament — every confirmed result, rating change, and point awarded so far will be reversed — and builds a fresh, all-pending fixture list with everyone currently in the tournament (including new joiners). This cannot be undone.',
               style: TextStyle(fontSize: 13),
@@ -155,7 +165,10 @@ class _RegenerateScheduleDialogState extends State<RegenerateScheduleDialog> {
               matchesPerPlayer = int.tryParse(
                 _matchesPerPlayerController.text.trim(),
               );
-              if (matchesPerPlayer == null || matchesPerPlayer < 1) return;
+              if (matchesPerPlayer == null || matchesPerPlayer < 1) {
+                setState(() => _error = 'Enter how many matches, at least 1.');
+                return;
+              }
             }
             Navigator.pop(
               context,

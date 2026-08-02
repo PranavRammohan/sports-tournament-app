@@ -1284,7 +1284,22 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     if (_error != null) {
       return Scaffold(
         appBar: AppBar(title: const Text('Tournament')),
-        body: Center(child: Text(_error!)),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_error!, textAlign: TextAlign.center),
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: () => _loadAll(showFullLoading: true),
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          ),
+        ),
       );
     }
 
