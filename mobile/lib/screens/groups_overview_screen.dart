@@ -511,6 +511,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
                           format: 'singles',
                           sport: _league?['sport'] ?? '',
                           members: members,
+                          groupId: group['id'] as int,
                         ),
                       ),
                     );

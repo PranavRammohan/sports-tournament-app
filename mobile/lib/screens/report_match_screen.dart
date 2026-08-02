@@ -12,6 +12,12 @@ class ReportMatchScreen extends StatefulWidget {
   final String format;
   final String sport;
   final List<dynamic> members;
+  // When set, fixtures are loaded from this group's own schedule instead of
+  // the whole league's — without this, a player in more than one group
+  // (nested groups allow that) could be shown a fixture from a different
+  // group than the one they tapped Report from, one that doesn't appear in
+  // that group's own Schedule/My Matches view at all.
+  final int? groupId;
 
   const ReportMatchScreen({
     super.key,
@@ -19,6 +25,7 @@ class ReportMatchScreen extends StatefulWidget {
     required this.format,
     required this.sport,
     required this.members,
+    this.groupId,
   });
 
   @override
@@ -65,7 +72,11 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
         _currentUserId = jsonDecode(userJson)['id'];
       }
 
-      final res = await ApiClient.get('/leagues/${widget.leagueId}/schedule');
+      final res = await ApiClient.get(
+        widget.groupId != null
+            ? '/leagues/${widget.leagueId}/groups/${widget.groupId}/schedule'
+            : '/leagues/${widget.leagueId}/schedule',
+      );
 
       if (res.statusCode == 200) {
         final List allFixtures = res.data['schedule'];
