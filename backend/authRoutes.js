@@ -290,7 +290,7 @@ router.post('/forgot-password', async (req, res) => {
     const identifier = email.trim();
     const result = await pool.query(
       `SELECT id FROM users
-       WHERE (LOWER(email) = LOWER($1) OR username ILIKE $1) AND phone_number = $2`,
+       WHERE (LOWER(email) = LOWER($1) OR LOWER(username) = LOWER($1)) AND phone_number = $2`,
       [identifier, phoneNumber]
     );
 

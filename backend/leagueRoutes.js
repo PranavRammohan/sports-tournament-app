@@ -675,6 +675,7 @@ router.post('/:id/unpair', async (req, res) => {
 
 // ---------- GET PARTNER STATUS LIST (for self-select/host-manual UI) ----------
 router.get('/:id/partners', async (req, res) => {
+  const userId = req.userId;
   const leagueId = req.params.id;
 
   try {
@@ -683,6 +684,18 @@ router.get('/:id/partners', async (req, res) => {
       return res.status(404).json({ error: 'League not found.' });
     }
     const league = leagueResult.rows[0];
+
+    // Contact/partner status is only for people in this league — anyone else
+    // is just another authenticated account, not a member.
+    if (league.created_by !== userId) {
+      const memberCheck = await pool.query(
+        'SELECT 1 FROM league_members WHERE league_id = $1 AND user_id = $2',
+        [leagueId, userId]
+      );
+      if (memberCheck.rows.length === 0) {
+        return res.status(403).json({ error: 'Only members of this league can view this.' });
+      }
+    }
 
     const result = await pool.query(
       `SELECT u.id, u.username, lm.partner_id, lm.partner_status, p.username as partner_username
@@ -1044,6 +1057,7 @@ router.get('/:id/groups', async (req, res) => {
 
 // ---------- GET ONE GROUP'S SCHEDULE (fixtures + contact info) ----------
 router.get('/:id/groups/:groupId/schedule', async (req, res) => {
+  const userId = req.userId;
   const { id: leagueId, groupId } = req.params;
 
   try {
@@ -1053,6 +1067,22 @@ router.get('/:id/groups/:groupId/schedule', async (req, res) => {
     );
     if (groupCheck.rows.length === 0) {
       return res.status(404).json({ error: 'Group not found.' });
+    }
+
+    // Fixture rows below carry contact info — only this league's host/members
+    // should see it, not any other authenticated account.
+    const leagueResult = await pool.query('SELECT created_by FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    if (leagueResult.rows[0].created_by !== userId) {
+      const memberCheck = await pool.query(
+        'SELECT 1 FROM league_members WHERE league_id = $1 AND user_id = $2',
+        [leagueId, userId]
+      );
+      if (memberCheck.rows.length === 0) {
+        return res.status(403).json({ error: 'Only members of this league can view this.' });
+      }
     }
 
     const result = await pool.query(
@@ -3206,9 +3236,26 @@ function generateNearestRatingScheduleForTeams(teams, matchesPerTeam) {
 
 // ---------- GET SCHEDULE (with completion status + contact info) ----------
 router.get('/:id/schedule', async (req, res) => {
+  const userId = req.userId;
   const leagueId = req.params.id;
 
   try {
+    // Fixture rows below carry contact info — only this league's host/members
+    // should see it, not any other authenticated account.
+    const leagueResult = await pool.query('SELECT created_by FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    if (leagueResult.rows[0].created_by !== userId) {
+      const memberCheck = await pool.query(
+        'SELECT 1 FROM league_members WHERE league_id = $1 AND user_id = $2',
+        [leagueId, userId]
+      );
+      if (memberCheck.rows.length === 0) {
+        return res.status(403).json({ error: 'Only members of this league can view this.' });
+      }
+    }
+
     const result = await pool.query(
       `SELECT sm.id, sm.tier_number, sm.scheduled_time,
               sm.player1_id, sm.player1_partner_id, sm.player2_id, sm.player2_partner_id,
