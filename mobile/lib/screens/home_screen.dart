@@ -17,6 +17,7 @@ import 'match_history_screen.dart';
 import 'pending_matches_screen.dart';
 import 'league_detail_screen.dart';
 import 'notifications_screen.dart';
+import 'find_players_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   // Owned by MainShell so the badge count stays live across tab switches —
@@ -197,6 +198,17 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('RallyX'),
         actions: [
+          IconButton(
+            tooltip: 'Find Players',
+            icon: const Icon(Icons.person_search),
+            onPressed: () {
+              HapticFeedback.selectionClick();
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const FindPlayersScreen()),
+              );
+            },
+          ),
           IconButton(
             tooltip: 'Notifications',
             icon: widget.unreadNotifCount > 0

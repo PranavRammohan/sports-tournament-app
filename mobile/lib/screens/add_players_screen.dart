@@ -5,11 +5,17 @@ import 'package:flutter/services.dart';
 import '../main.dart';
 import '../api_client.dart';
 import '../widgets/loading_skeleton.dart';
+import 'add_guest_dialog.dart';
 
 class AddPlayersScreen extends StatefulWidget {
   final int leagueId;
+  final String sport;
 
-  const AddPlayersScreen({super.key, required this.leagueId});
+  const AddPlayersScreen({
+    super.key,
+    required this.leagueId,
+    required this.sport,
+  });
 
   @override
   State<AddPlayersScreen> createState() => _AddPlayersScreenState();
@@ -21,8 +27,16 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
   bool _searching = false;
   String? _error;
   Timer? _debounce;
-  final Set<int> _addingIds = {};
+  bool _submitting = false;
+  // Checked but not yet submitted — this batch's whole point (GAP-05) is
+  // letting a host add several players in one action instead of one tap
+  // each.
+  final Set<int> _selectedIds = {};
   final Set<int> _addedIds = {};
+  // Tracks whether the caller's roster needs refreshing on pop — separate
+  // from _addedIds since a guest add doesn't put anything in the search
+  // results list to check off.
+  bool _anyChanges = false;
 
   void _onSearchChanged(String query) {
     _debounce?.cancel();
@@ -66,40 +80,79 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
     }
   }
 
-  Future<void> _addPlayer(int playerId) async {
-    HapticFeedback.lightImpact();
-    setState(() => _addingIds.add(playerId));
-
-    try {
-      final res = await ApiClient.post(
-        '/leagues/${widget.leagueId}/add-player',
-        body: {'playerId': playerId},
-      );
-
-      if (!mounted) return;
-      if (res.statusCode == 201) {
-        setState(() => _addedIds.add(playerId));
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Player added!'),
-            backgroundColor: AppColors.success,
-          ),
-        );
+  void _toggleSelected(int id) {
+    HapticFeedback.selectionClick();
+    setState(() {
+      if (_selectedIds.contains(id)) {
+        _selectedIds.remove(id);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(res.errorOr('Could not add player.')),
-            backgroundColor: AppColors.danger,
-          ),
-        );
+        _selectedIds.add(id);
       }
-    } catch (err) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Network error.')));
-    } finally {
-      if (mounted) setState(() => _addingIds.remove(playerId));
+    });
+  }
+
+  Future<void> _addSelected() async {
+    if (_selectedIds.isEmpty || _submitting) return;
+    HapticFeedback.lightImpact();
+    setState(() => _submitting = true);
+
+    final toAdd = _selectedIds.toList();
+    var succeeded = 0;
+    String? lastError;
+
+    for (final playerId in toAdd) {
+      try {
+        final res = await ApiClient.post(
+          '/leagues/${widget.leagueId}/add-player',
+          body: {'playerId': playerId},
+        );
+        if (res.statusCode == 201) {
+          succeeded++;
+          _addedIds.add(playerId);
+          _anyChanges = true;
+        } else {
+          lastError = res.errorOr('Could not add player.');
+        }
+      } catch (err) {
+        lastError = 'Network error.';
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _selectedIds.clear();
+      _submitting = false;
+    });
+
+    final failed = toAdd.length - succeeded;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          failed == 0
+              ? (succeeded == 1 ? 'Player added!' : '$succeeded players added!')
+              : '$succeeded added, $failed skipped${lastError != null ? ': $lastError' : ''}',
+        ),
+        backgroundColor: failed == 0 ? AppColors.success : AppColors.warning,
+      ),
+    );
+  }
+
+  Future<void> _addGuest() async {
+    final added = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AddGuestDialog(
+        leagueId: widget.leagueId,
+        sport: widget.sport,
+      ),
+    );
+    if (added == true && mounted) {
+      setState(() => _anyChanges = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Guest added!'),
+          backgroundColor: AppColors.success,
+        ),
+      );
     }
   }
 
@@ -111,7 +164,7 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
   }
 
   void _handleBack() {
-    Navigator.pop(context, _addedIds.isNotEmpty);
+    Navigator.pop(context, _anyChanges);
   }
 
   @override
@@ -136,6 +189,13 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
             icon: const Icon(Icons.arrow_back),
             onPressed: _handleBack,
           ),
+          actions: [
+            TextButton.icon(
+              onPressed: _addGuest,
+              icon: const Icon(Icons.person_add_alt_1, size: 18),
+              label: const Text('Guest'),
+            ),
+          ],
         ),
         body: Column(
           children: [
@@ -190,12 +250,12 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
                       separatorBuilder: (_, __) => const SizedBox(height: 8),
                       itemBuilder: (context, index) {
                         final user = _results[index];
-                        final isAdding = _addingIds.contains(user['id']);
                         final isAdded = _addedIds.contains(user['id']);
+                        final isSelected = _selectedIds.contains(user['id']);
 
                         return Container(
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
+                            horizontal: 4,
                             vertical: 4,
                           ),
                           decoration: BoxDecoration(
@@ -204,8 +264,18 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
                             border: Border.all(color: borderColor),
                             boxShadow: AppShadows.card(isDark),
                           ),
-                          child: ListTile(
-                            contentPadding: EdgeInsets.zero,
+                          child: CheckboxListTile(
+                            value: isAdded ? true : isSelected,
+                            onChanged: isAdded || _submitting
+                                ? null
+                                : (_) => _toggleSelected(user['id']),
+                            controlAffinity: ListTileControlAffinity.leading,
+                            secondary: isAdded
+                                ? const Icon(
+                                    Icons.check_circle,
+                                    color: AppColors.success,
+                                  )
+                                : null,
                             title: Text(
                               user['username'],
                               style: TextStyle(
@@ -220,40 +290,35 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
                                 color: subtitleColor,
                               ),
                             ),
-                            trailing: isAdded
-                                ? const Icon(
-                                    Icons.check_circle,
-                                    color: AppColors.success,
-                                  )
-                                : ElevatedButton(
-                                    style: ElevatedButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 14,
-                                        vertical: 8,
-                                      ),
-                                    ),
-                                    onPressed: isAdding
-                                        ? null
-                                        : () => _addPlayer(user['id']),
-                                    child: isAdding
-                                        ? const SizedBox(
-                                            height: 14,
-                                            width: 14,
-                                            child: CircularProgressIndicator(
-                                              color: Colors.white,
-                                              strokeWidth: 2,
-                                            ),
-                                          )
-                                        : const Text(
-                                            'Add',
-                                            style: TextStyle(fontSize: 13),
-                                          ),
-                                  ),
                           ),
                         );
                       },
                     ),
             ),
+            if (_selectedIds.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _submitting ? null : _addSelected,
+                    child: _submitting
+                        ? const SizedBox(
+                            height: 18,
+                            width: 18,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : Text(
+                            _selectedIds.length == 1
+                                ? 'Add Player'
+                                : 'Add ${_selectedIds.length} Players',
+                          ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),

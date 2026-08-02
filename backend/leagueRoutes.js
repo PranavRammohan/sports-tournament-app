@@ -1,10 +1,16 @@
 // leagueRoutes.js
 const express = require('express');
 const router = express.Router();
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const pool = require('./db');
 const { reverseRatingChange } = require('./ratingEngine');
 const { createNotification } = require('./notifications');
+const { findSchedulingConflicts } = require('./scheduling');
+const { seedStartingRating } = require('./sportsRoutes');
 const { RouteError } = pool;
+
+const GUEST_SALT_ROUNDS = 10;
 
 // Round robin means everyone plays everyone, which scales as n(n-1)/2 —
 // fine for small groups, but can silently balloon into hundreds of matches
@@ -989,7 +995,7 @@ async function getGroupsWithStandings(league, leagueId) {
   // scoped to the specific group they were earned in (see the per-group
   // query below), not merged across every group they've ever played in.
   const membersResult = await pool.query(
-    `SELECT u.id, u.username, us.rating,
+    `SELECT u.id, u.username, u.is_guest, us.rating,
             lm.partner_id, pu.username AS partner_username
      FROM league_members lm
      JOIN users u ON u.id = lm.user_id
@@ -2210,6 +2216,88 @@ router.post('/:id/add-player', async (req, res) => {
   }
 });
 
+// ---------- ADD A GUEST PLAYER (host only, no account required) ----------
+// GAP-05 from the codebase audit — "non-users can't be added at all." A
+// guest gets a real (login-less) users row rather than a parallel
+// placeholder concept, so scheduling/matches/ratings all work unchanged;
+// see migration_guest_players.sql for the full reasoning. phone_number and
+// password_hash are both NOT NULL/UNIQUE-ish columns a real signup fills in
+// for real — a guest gets synthesized placeholders that can never be typed
+// in at login (a random bcrypt hash, and a phone number derived from the
+// new row's own id, set in a second UPDATE since it can't be known before
+// the INSERT assigns one).
+router.post('/:id/add-guest', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { guestName, skillLevel } = req.body;
+
+  if (!guestName || !guestName.trim()) {
+    return res.status(400).json({ error: "Please enter the guest's name." });
+  }
+  if (guestName.trim().length > 30) {
+    return res.status(400).json({ error: 'Guest name must be 30 characters or fewer.' });
+  }
+  if (!skillLevel) {
+    return res.status(400).json({ error: "Please select the guest's skill level." });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can add players.' });
+    }
+    const completedError = checkNotCompleted(league);
+    if (completedError) {
+      return res.status(400).json({ error: completedError });
+    }
+
+    const genderChar = league.gender_category === 'mens' ? 'M' : 'F';
+
+    let newUserId;
+    await pool.withTransaction(async (client) => {
+      const passwordHash = await bcrypt.hash(
+        crypto.randomBytes(24).toString('hex'),
+        GUEST_SALT_ROUNDS
+      );
+      const insertResult = await client.query(
+        `INSERT INTO users (username, phone_number, password_hash, gender, is_guest)
+         VALUES ($1, 'PENDING', $2, $3, true)
+         RETURNING id`,
+        [guestName.trim(), passwordHash, genderChar]
+      );
+      newUserId = insertResult.rows[0].id;
+
+      await client.query(`UPDATE users SET phone_number = $1 WHERE id = $2`, [
+        `GUEST${newUserId}`,
+        newUserId,
+      ]);
+
+      const seedError = await seedStartingRating(client, newUserId, league.sport, skillLevel);
+      if (seedError) {
+        throw new RouteError(400, seedError);
+      }
+
+      await client.query('INSERT INTO league_members (league_id, user_id) VALUES ($1, $2)', [
+        leagueId,
+        newUserId,
+      ]);
+    });
+
+    res.status(201).json({ message: 'Guest added.', playerId: newUserId });
+  } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
+    console.error('Add guest error:', err);
+    res.status(500).json({ error: 'Something went wrong adding the guest.' });
+  }
+});
+
 // ---------- LEAVE LEAGUE ----------
 router.post('/:id/leave', async (req, res) => {
   const userId = req.userId;
@@ -2378,7 +2466,7 @@ router.get('/:id', async (req, res) => {
     const leagueData = league.rows[0];
 
     const leaderboard = await pool.query(
-      `SELECT u.id, u.username, u.gender, u.profile_pic_url, us.rating, lm.points,
+      `SELECT u.id, u.username, u.gender, u.profile_pic_url, u.is_guest, us.rating, lm.points,
               COALESCE(match_stats.matches_played, 0) AS matches_played,
               COALESCE(match_stats.wins, 0) AS wins,
               COALESCE(match_stats.losses, 0) AS losses
@@ -3649,7 +3737,7 @@ router.put('/:id', async (req, res) => {
 router.put('/:id/schedule/:scheduledMatchId', async (req, res) => {
   const userId = req.userId;
   const { id: leagueId, scheduledMatchId } = req.params;
-  const { player1Id, player1PartnerId, player2Id, player2PartnerId, scheduledTime, venue } = req.body;
+  const { player1Id, player1PartnerId, player2Id, player2PartnerId, scheduledTime, venue, force } = req.body;
 
   if (!player1Id || !player2Id) {
     return res.status(400).json({ error: 'Please select both sides of the match.' });
@@ -3703,6 +3791,20 @@ router.put('/:id/schedule/:scheduledMatchId', async (req, res) => {
     );
     if (memberCheck.rows.length !== allIds.length) {
       return res.status(400).json({ error: 'All selected players must be members of this league.' });
+    }
+
+    if (scheduledTime && !force) {
+      const conflicts = await findSchedulingConflicts(pool, {
+        userIds: allIds,
+        scheduledTime,
+        excludeScheduledMatchId: scheduledMatchId,
+      });
+      if (conflicts.length > 0) {
+        return res.status(409).json({
+          error: 'One or more players already have a match scheduled around this time.',
+          conflicts,
+        });
+      }
     }
 
     await pool.query(

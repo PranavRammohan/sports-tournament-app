@@ -565,17 +565,59 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
     return '$weekday, $month ${dt.day} · $hour12:$minute $ampm';
   }
 
-  Future<void> _openEditFixtureDialog(dynamic f, List<dynamic> members) async {
-    final result = await showDialog<Map<String, dynamic>>(
+  // Same "warn, then force" pattern as league_detail_screen.dart's
+  // _confirmScheduleConflict — kept as a separate copy rather than a shared
+  // widget since this screen has no import relationship with that one.
+  Future<bool> _confirmScheduleConflict(dynamic conflicts) async {
+    final List list = conflicts is List ? conflicts : [];
+    final proceed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => _EditGroupFixtureDialog(
-        members: members,
-        initialPlayer1Id: f['player1_id'],
-        initialPlayer2Id: f['player2_id'],
-        initialScheduledTime: f['scheduled_time'],
-        initialVenue: f['venue'],
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Scheduling conflict'),
+        content: Text(
+          list.isEmpty
+              ? 'One or more players already have a match scheduled around this time.'
+              : list
+                    .map(
+                      (c) =>
+                          '${c['league_name']} · ${_formatScheduledTime(c['scheduled_time'])}',
+                    )
+                    .join('\n'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Schedule Anyway'),
+          ),
+        ],
       ),
     );
+    return proceed == true;
+  }
+
+  Future<void> _openEditFixtureDialog(
+    dynamic f,
+    List<dynamic> members, {
+    Map<String, dynamic>? overrideResult,
+    bool force = false,
+  }) async {
+    final result =
+        overrideResult ??
+        await showDialog<Map<String, dynamic>>(
+          context: context,
+          builder: (ctx) => _EditGroupFixtureDialog(
+            members: members,
+            initialPlayer1Id: f['player1_id'],
+            initialPlayer2Id: f['player2_id'],
+            initialScheduledTime: f['scheduled_time'],
+            initialVenue: f['venue'],
+          ),
+        );
     if (result == null) return;
 
     HapticFeedback.lightImpact();
@@ -587,6 +629,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
           'player2Id': result['player2Id'],
           'scheduledTime': result['scheduledTime'],
           'venue': result['venue'],
+          if (force) 'force': true,
         },
       );
       if (!mounted) return;
@@ -598,6 +641,15 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
           ),
         );
         _load();
+      } else if (res.statusCode == 409 && res.data is Map && res.data['conflicts'] != null) {
+        if (await _confirmScheduleConflict(res.data['conflicts'])) {
+          await _openEditFixtureDialog(
+            f,
+            members,
+            overrideResult: result,
+            force: true,
+          );
+        }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1257,7 +1309,9 @@ class _EditGroupFixtureDialogState extends State<_EditGroupFixtureDialog> {
         .map<DropdownMenuItem<int>>(
           (m) => DropdownMenuItem(
             value: m['id'] as int,
-            child: Text('${m['username']} (${m['rating']})'),
+            child: Text(
+              '${m['username']} (${m['rating']})${m['is_guest'] == true ? ' · Guest' : ''}',
+            ),
           ),
         )
         .toList();

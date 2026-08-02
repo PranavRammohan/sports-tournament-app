@@ -38,6 +38,84 @@ const STARTING_RATINGS = {
   },
 };
 
+// ---------- SEARCH PLAYERS (GAP-04 — discovery outside a shared league) ----------
+// Unlike leagueRoutes.js's /:id/search-players, this is NOT scoped to a league
+// or host — any authenticated user can search any other user. This is safe:
+// PlayerProfileScreen's own backend calls (GET /sports/user/:userId and
+// GET /matches/head-to-head/:userId) already have no shared-league check, so a
+// search endpoint doesn't open anything that wasn't already reachable by id.
+router.get('/search', async (req, res) => {
+  const { q, sport, format } = req.query;
+
+  if (!q || q.trim().length < 2) {
+    return res.status(400).json({ error: 'Enter at least 2 characters to search.' });
+  }
+
+  try {
+    // Only join user_sports (and so only surface a rating) when both sport
+    // and format are given — a bare LEFT JOIN with optional filters would
+    // return one row per sport/format a user has, and DISTINCT can't collapse
+    // those since the rating differs per row.
+    const result =
+      sport && format
+        ? await pool.query(
+            `SELECT DISTINCT u.id, u.username, u.location, us.rating
+             FROM users u
+             LEFT JOIN user_sports us ON us.user_id = u.id AND us.sport = $2 AND us.format = $3
+             WHERE u.username ILIKE $1
+             ORDER BY u.username
+             LIMIT 20`,
+            [`%${q.trim()}%`, sport, format]
+          )
+        : await pool.query(
+            `SELECT u.id, u.username, u.location, NULL AS rating
+             FROM users u
+             WHERE u.username ILIKE $1
+             ORDER BY u.username
+             LIMIT 20`,
+            [`%${q.trim()}%`]
+          );
+    res.status(200).json({ users: result.rows });
+  } catch (err) {
+    console.error('Search players error:', err);
+    res.status(500).json({ error: 'Something went wrong searching for players.' });
+  }
+});
+
+// Seeds both the singles and doubles user_sports rows for one sport at the
+// given skill level (table tennis shares one rating across both formats by
+// design, but still gets both rows — see CLAUDE.md). `client` is whatever the
+// caller has in scope (plain `pool`, or a transaction client) — same
+// zero-branching convention as notifications.js/scheduling.js. Returns an
+// error message string on bad input, or null on success, rather than
+// throwing, so both this file's own /select route and leagueRoutes.js's
+// guest-add flow (POST /:id/add-guest — a guest needs the same starting-
+// rating seeding a real signup gets) can each decide their own status code.
+async function seedStartingRating(client, userId, sport, level) {
+  const sportRatings = STARTING_RATINGS[sport];
+  if (!sportRatings) {
+    return `Unknown sport: ${sport}`;
+  }
+  const rating = sportRatings[level];
+  if (rating == null) {
+    return `Unknown skill level "${level}" for ${sport}`;
+  }
+
+  await client.query(
+    `INSERT INTO user_sports (user_id, sport, format, rating)
+     VALUES ($1, $2, 'singles', $3)
+     ON CONFLICT (user_id, sport, format) DO NOTHING`,
+    [userId, sport, rating]
+  );
+  await client.query(
+    `INSERT INTO user_sports (user_id, sport, format, rating)
+     VALUES ($1, $2, 'doubles', $3)
+     ON CONFLICT (user_id, sport, format) DO NOTHING`,
+    [userId, sport, rating]
+  );
+  return null;
+}
+
 // ---------- SELECT SPORTS (signup, or adding a sport later) ----------
 router.post('/select', async (req, res) => {
   const userId = req.userId;
@@ -49,42 +127,9 @@ router.post('/select', async (req, res) => {
 
   try {
     for (const s of sports) {
-      const sportRatings = STARTING_RATINGS[s.sport];
-      if (!sportRatings) {
-        return res.status(400).json({ error: `Unknown sport: ${s.sport}` });
-      }
-      const rating = sportRatings[s.level];
-      if (rating == null) {
-        return res.status(400).json({ error: `Unknown skill level "${s.level}" for ${s.sport}` });
-      }
-
-      if (s.sport === 'table_tennis') {
-        // Table tennis shares one rating across singles/doubles.
-        await pool.query(
-          `INSERT INTO user_sports (user_id, sport, format, rating)
-           VALUES ($1, $2, 'singles', $3)
-           ON CONFLICT (user_id, sport, format) DO NOTHING`,
-          [userId, s.sport, rating]
-        );
-        await pool.query(
-          `INSERT INTO user_sports (user_id, sport, format, rating)
-           VALUES ($1, $2, 'doubles', $3)
-           ON CONFLICT (user_id, sport, format) DO NOTHING`,
-          [userId, s.sport, rating]
-        );
-      } else {
-        await pool.query(
-          `INSERT INTO user_sports (user_id, sport, format, rating)
-           VALUES ($1, $2, 'singles', $3)
-           ON CONFLICT (user_id, sport, format) DO NOTHING`,
-          [userId, s.sport, rating]
-        );
-        await pool.query(
-          `INSERT INTO user_sports (user_id, sport, format, rating)
-           VALUES ($1, $2, 'doubles', $3)
-           ON CONFLICT (user_id, sport, format) DO NOTHING`,
-          [userId, s.sport, rating]
-        );
+      const error = await seedStartingRating(pool, userId, s.sport, s.level);
+      if (error) {
+        return res.status(400).json({ error });
       }
     }
 
@@ -235,5 +280,6 @@ router.get('/user/:userId/rating-history', async (req, res) => {
 // withTransaction/RouteError — lets the test suite reach this pure function
 // without changing how server.js consumes this file.
 router.reconstructRatingHistory = reconstructRatingHistory;
+router.seedStartingRating = seedStartingRating;
 
 module.exports = router;

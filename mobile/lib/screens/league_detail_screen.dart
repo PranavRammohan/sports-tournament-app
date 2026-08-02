@@ -604,14 +604,20 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   // Playoff matches never have their players manually edited here (bracket
   // progression fills those slots), so unlike _openEditFixtureDialog this
   // only ever touches scheduled_time/venue.
-  Future<void> _editPlayoffSchedule(dynamic m) async {
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (ctx) => _EditPlayoffScheduleDialog(
-        initialScheduledTime: m['scheduled_time'],
-        initialVenue: m['venue'],
-      ),
-    );
+  Future<void> _editPlayoffSchedule(
+    dynamic m, {
+    Map<String, dynamic>? overrideResult,
+    bool force = false,
+  }) async {
+    final result =
+        overrideResult ??
+        await showDialog<Map<String, dynamic>>(
+          context: context,
+          builder: (ctx) => _EditPlayoffScheduleDialog(
+            initialScheduledTime: m['scheduled_time'],
+            initialVenue: m['venue'],
+          ),
+        );
     if (result == null) return;
 
     HapticFeedback.lightImpact();
@@ -621,6 +627,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         body: {
           'scheduledTime': result['scheduledTime'],
           'venue': result['venue'],
+          if (force) 'force': true,
         },
       );
       if (!mounted) return;
@@ -632,6 +639,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           ),
         );
         _loadAll();
+      } else if (res.statusCode == 409 && res.data is Map && res.data['conflicts'] != null) {
+        if (await _confirmScheduleConflict(res.data['conflicts'])) {
+          await _editPlayoffSchedule(m, overrideResult: result, force: true);
+        }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -846,20 +857,62 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     }
   }
 
-  Future<void> _openEditFixtureDialog(dynamic f) async {
-    final result = await showDialog<Map<String, dynamic>>(
+  // Shared by every schedule-save call site (round-robin, group, playoff) —
+  // shows the conflicting fixtures a 409 came back with and asks whether to
+  // save anyway, mirroring the existing "Generate Anyway" pattern used for
+  // large round-robin generation (see _generateSchedule above).
+  Future<bool> _confirmScheduleConflict(dynamic conflicts) async {
+    final List list = conflicts is List ? conflicts : [];
+    final proceed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => _EditFixtureDialog(
-        format: _league!['format'],
-        members: _leaderboard,
-        initialPlayer1Id: f['player1_id'],
-        initialPlayer1PartnerId: f['player1_partner_id'],
-        initialPlayer2Id: f['player2_id'],
-        initialPlayer2PartnerId: f['player2_partner_id'],
-        initialScheduledTime: f['scheduled_time'],
-        initialVenue: f['venue'],
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Scheduling conflict'),
+        content: Text(
+          list.isEmpty
+              ? 'One or more players already have a match scheduled around this time.'
+              : list
+                    .map(
+                      (c) =>
+                          '${c['league_name']} · ${_formatScheduledTime(c['scheduled_time'])}',
+                    )
+                    .join('\n'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Schedule Anyway'),
+          ),
+        ],
       ),
     );
+    return proceed == true;
+  }
+
+  Future<void> _openEditFixtureDialog(
+    dynamic f, {
+    Map<String, dynamic>? overrideResult,
+    bool force = false,
+  }) async {
+    final result =
+        overrideResult ??
+        await showDialog<Map<String, dynamic>>(
+          context: context,
+          builder: (ctx) => _EditFixtureDialog(
+            format: _league!['format'],
+            members: _leaderboard,
+            initialPlayer1Id: f['player1_id'],
+            initialPlayer1PartnerId: f['player1_partner_id'],
+            initialPlayer2Id: f['player2_id'],
+            initialPlayer2PartnerId: f['player2_partner_id'],
+            initialScheduledTime: f['scheduled_time'],
+            initialVenue: f['venue'],
+          ),
+        );
     if (result == null) return;
 
     HapticFeedback.lightImpact();
@@ -873,6 +926,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           'player2PartnerId': result['player2PartnerId'],
           'scheduledTime': result['scheduledTime'],
           'venue': result['venue'],
+          if (force) 'force': true,
         },
       );
       if (!mounted) return;
@@ -884,6 +938,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           ),
         );
         _loadAll();
+      } else if (res.statusCode == 409 && res.data is Map && res.data['conflicts'] != null) {
+        if (await _confirmScheduleConflict(res.data['conflicts'])) {
+          await _openEditFixtureDialog(f, overrideResult: result, force: true);
+        }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1403,8 +1461,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                   final result = await Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) =>
-                          AddPlayersScreen(leagueId: widget.leagueId),
+                      builder: (_) => AddPlayersScreen(
+                        leagueId: widget.leagueId,
+                        sport: _league!['sport'],
+                      ),
                     ),
                   );
                   if (result != null) _loadAll();
@@ -2028,12 +2088,41 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                         ],
                       ),
                     ),
-                    title: Text(
-                      player['username'],
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
-                      ),
+                    title: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            player['username'],
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (player['is_guest'] == true) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.textGrey.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'Guest',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textGrey,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     subtitle: Text(
                       '${player['matches_played']} matches · ${player['wins']}W ${player['losses']}L',
@@ -3381,7 +3470,9 @@ class _EditFixtureDialogState extends State<_EditFixtureDialog> {
         .map<DropdownMenuItem<int>>(
           (m) => DropdownMenuItem(
             value: m['id'] as int,
-            child: Text('${m['username']} (${m['rating']})'),
+            child: Text(
+              '${m['username']} (${m['rating']})${m['is_guest'] == true ? ' · Guest' : ''}',
+            ),
           ),
         )
         .toList();

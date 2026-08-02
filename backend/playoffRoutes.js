@@ -4,6 +4,7 @@ const router = express.Router();
 const pool = require('./db');
 const { calculateNewRatings, reverseRatingChange } = require('./ratingEngine');
 const { createNotifications } = require('./notifications');
+const { findSchedulingConflicts } = require('./scheduling');
 const { RouteError } = pool;
 
 // Generates standard tournament bracket seed order for any power-of-two size,
@@ -1259,7 +1260,7 @@ router.post('/match/:matchId/reject', async (req, res) => {
 router.put('/match/:matchId/schedule', async (req, res) => {
   const userId = req.userId;
   const matchId = req.params.matchId;
-  const { scheduledTime, venue } = req.body;
+  const { scheduledTime, venue, force } = req.body;
 
   if (venue && venue.length > 200) {
     return res.status(400).json({ error: 'Venue must be 200 characters or fewer.' });
@@ -1281,6 +1282,20 @@ router.put('/match/:matchId/schedule', async (req, res) => {
     const completedError = checkNotCompleted(league);
     if (completedError) {
       return res.status(400).json({ error: completedError });
+    }
+
+    if (scheduledTime && !force) {
+      const conflicts = await findSchedulingConflicts(pool, {
+        userIds: [match.player1_id, match.player1_partner_id, match.player2_id, match.player2_partner_id],
+        scheduledTime,
+        excludePlayoffMatchId: matchId,
+      });
+      if (conflicts.length > 0) {
+        return res.status(409).json({
+          error: 'One or more players already have a match scheduled around this time.',
+          conflicts,
+        });
+      }
     }
 
     await pool.query(
