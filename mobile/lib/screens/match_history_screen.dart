@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
+import '../date_utils.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
@@ -287,7 +288,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                                                       TextOverflow.ellipsis,
                                                 ),
                                                 Text(
-                                                  '$tournamentLabel · ${_formatSetScores(m['set_scores'])}',
+                                                  '$tournamentLabel · ${_formatSetScores(m['set_scores'])} · ${formatMatchDate(m['created_at'])}',
                                                   style: const TextStyle(
                                                     fontSize: 10,
                                                     color: AppColors.textGrey,

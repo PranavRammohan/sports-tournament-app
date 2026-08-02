@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import '../api_client.dart';
 import '../constants/areas.dart';
+import '../main.dart';
 
 const List<String> sportsList = [
   'Badminton',
@@ -304,7 +305,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
+                    color: Theme.of(ctx).colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
@@ -336,6 +337,13 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                 child: const Text('OK'),
               ),
             ],
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Tournament created.'),
+            backgroundColor: AppColors.success,
           ),
         );
       }

@@ -1,11 +1,8 @@
 // partner_selection_screen.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import '../widgets/loading_skeleton.dart';
 
 // Handles both doubles partner-selection flows:
@@ -52,18 +49,12 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
       _error = null;
     });
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final res = await http.get(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/partners'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(res.body);
+      final res = await ApiClient.get('/leagues/${widget.leagueId}/partners');
       if (res.statusCode == 200) {
-        setState(() => _members = data['members']);
+        setState(() => _members = res.data['members']);
       } else {
         setState(
-          () => _error = data['error'] ?? 'Could not load partner status.',
+          () => _error = res.errorOr('Could not load partner status.'),
         );
       }
     } catch (err) {
@@ -109,22 +100,15 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
     HapticFeedback.lightImpact();
     setState(() => _submitting = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final res = await http.post(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/select-partner'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({'partnerId': partnerId}),
+      final res = await ApiClient.post(
+        '/leagues/${widget.leagueId}/select-partner',
+        body: {'partnerId': partnerId},
       );
-      final data = jsonDecode(res.body);
       if (!mounted) return;
       if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['message'] ?? 'Request sent.'),
+            content: Text(res.data['message'] ?? 'Request sent.'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -132,7 +116,7 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not send request.'),
+            content: Text(res.errorOr('Could not send request.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -151,22 +135,15 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
     HapticFeedback.lightImpact();
     setState(() => _submitting = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final res = await http.post(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/respond-partner'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({'accept': accept, 'requesterId': requesterId}),
+      final res = await ApiClient.post(
+        '/leagues/${widget.leagueId}/respond-partner',
+        body: {'accept': accept, 'requesterId': requesterId},
       );
-      final data = jsonDecode(res.body);
       if (!mounted) return;
       if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['message'] ?? 'Done.'),
+            content: Text(res.data['message'] ?? 'Done.'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -174,7 +151,7 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not respond.'),
+            content: Text(res.errorOr('Could not respond.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -193,22 +170,15 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
     HapticFeedback.mediumImpact();
     setState(() => _submitting = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final res = await http.post(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/unpair'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({if (targetUserId != null) 'userId': targetUserId}),
+      final res = await ApiClient.post(
+        '/leagues/${widget.leagueId}/unpair',
+        body: {if (targetUserId != null) 'userId': targetUserId},
       );
-      final data = jsonDecode(res.body);
       if (!mounted) return;
       if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['message'] ?? 'Removed.'),
+            content: Text(res.data['message'] ?? 'Removed.'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -216,7 +186,7 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not unpair.'),
+            content: Text(res.errorOr('Could not unpair.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -238,22 +208,15 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
     HapticFeedback.lightImpact();
     setState(() => _submitting = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final res = await http.post(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/assign-partner'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({'player1Id': _selectedA, 'player2Id': _selectedB}),
+      final res = await ApiClient.post(
+        '/leagues/${widget.leagueId}/assign-partner',
+        body: {'player1Id': _selectedA, 'player2Id': _selectedB},
       );
-      final data = jsonDecode(res.body);
       if (!mounted) return;
       if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['message'] ?? 'Paired.'),
+            content: Text(res.data['message'] ?? 'Paired.'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -265,7 +228,7 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not pair.'),
+            content: Text(res.errorOr('Could not pair.')),
             backgroundColor: AppColors.danger,
           ),
         );

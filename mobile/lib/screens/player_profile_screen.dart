@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
+import '../date_utils.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/player_avatar.dart';
 import '../widgets/match_badges.dart';
@@ -338,26 +339,6 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
         : m['winner_id'] == m['player2_id'];
   }
 
-  String _formatMatchDate(dynamic raw) {
-    final dt = DateTime.tryParse(raw.toString())?.toLocal();
-    if (dt == null) return '';
-    const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-    return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
-  }
-
   String _formatH2HSetScores(dynamic raw, bool iAmSideOne) {
     if (raw == null) return '';
     try {
@@ -400,7 +381,7 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
         : (_user?['username'] ?? 'Them');
 
     final scoreText = _formatH2HSetScores(m['set_scores'], iAmSideOne);
-    final dateText = _formatMatchDate(m['created_at']);
+    final dateText = formatMatchDate(m['created_at']);
     final subtitle = [
       scoreText,
       dateText,

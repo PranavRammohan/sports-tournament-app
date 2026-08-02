@@ -15,6 +15,9 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
   final TextEditingController _newController = TextEditingController();
   final TextEditingController _confirmController = TextEditingController();
   bool _loading = false;
+  bool _obscureCurrent = true;
+  bool _obscureNew = true;
+  bool _obscureConfirm = true;
 
   Future<void> _handleChange() async {
     final current = _currentController.text;
@@ -91,28 +94,48 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
           children: [
             TextField(
               controller: _currentController,
-              obscureText: true,
-              decoration: const InputDecoration(
+              obscureText: _obscureCurrent,
+              decoration: InputDecoration(
                 labelText: 'Current Password',
-                prefixIcon: Icon(Icons.lock_outline),
+                prefixIcon: const Icon(Icons.lock_outline),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscureCurrent ? Icons.visibility_off : Icons.visibility,
+                  ),
+                  onPressed: () =>
+                      setState(() => _obscureCurrent = !_obscureCurrent),
+                ),
               ),
             ),
             const SizedBox(height: 14),
             TextField(
               controller: _newController,
-              obscureText: true,
-              decoration: const InputDecoration(
+              obscureText: _obscureNew,
+              decoration: InputDecoration(
                 labelText: 'New Password',
-                prefixIcon: Icon(Icons.lock_reset),
+                prefixIcon: const Icon(Icons.lock_reset),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscureNew ? Icons.visibility_off : Icons.visibility,
+                  ),
+                  onPressed: () => setState(() => _obscureNew = !_obscureNew),
+                ),
               ),
             ),
             const SizedBox(height: 14),
             TextField(
               controller: _confirmController,
-              obscureText: true,
-              decoration: const InputDecoration(
+              obscureText: _obscureConfirm,
+              decoration: InputDecoration(
                 labelText: 'Confirm New Password',
-                prefixIcon: Icon(Icons.lock_reset),
+                prefixIcon: const Icon(Icons.lock_reset),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscureConfirm ? Icons.visibility_off : Icons.visibility,
+                  ),
+                  onPressed: () =>
+                      setState(() => _obscureConfirm = !_obscureConfirm),
+                ),
               ),
             ),
             const SizedBox(height: 24),

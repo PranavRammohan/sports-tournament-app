@@ -1267,7 +1267,19 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
             ),
           ),
         );
-        if (reported == true) _loadAll();
+        if (reported == true) {
+          _loadAll();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Score submitted — waiting for your opponent to confirm.',
+                ),
+                backgroundColor: AppColors.success,
+              ),
+            );
+          }
+        }
       },
       icon: const Icon(Icons.sports_score),
       label: const Text('Report'),
@@ -1361,6 +1373,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                         ),
                       )
                     : const Icon(Icons.delete_outline),
+                tooltip: 'Delete tournament',
                 onPressed: _deleting ? null : _confirmDelete,
               ),
           ],
@@ -1544,34 +1557,52 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 10,
-                      vertical: 8,
+                      vertical: 4,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.background,
+                      color: Theme.of(context).cardColor,
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(color: AppColors.cardBorder(isDark)),
                     ),
                     child: Row(
                       children: [
-                        const Icon(
+                        Icon(
                           Icons.key_outlined,
                           size: 16,
-                          color: AppColors.textDark,
+                          color: Theme.of(context).textTheme.bodyMedium?.color,
                         ),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
                             'Join code: ${_league!['join_code']}',
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.bold,
-                              color: AppColors.textDark,
+                              color: Theme.of(context).textTheme.bodyMedium?.color,
                               letterSpacing: 1,
                             ),
                           ),
                         ),
-                        InkWell(
-                          onTap: () {
+                        IconButton(
+                          tooltip: 'Copy join code',
+                          icon: const Icon(Icons.copy_outlined, size: 18),
+                          onPressed: () {
+                            HapticFeedback.selectionClick();
+                            Clipboard.setData(
+                              ClipboardData(text: _league!['join_code']),
+                            );
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Join code copied.'),
+                                backgroundColor: AppColors.success,
+                              ),
+                            );
+                          },
+                        ),
+                        IconButton(
+                          tooltip: 'Share join code',
+                          icon: const Icon(Icons.share_outlined, size: 18),
+                          onPressed: () {
                             HapticFeedback.selectionClick();
                             SharePlus.instance.share(
                               ShareParams(
@@ -1580,11 +1611,6 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                               ),
                             );
                           },
-                          child: const Icon(
-                            Icons.share_outlined,
-                            size: 18,
-                            color: AppColors.textDark,
-                          ),
                         ),
                       ],
                     ),
@@ -2416,6 +2442,22 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
   }
 
+  String _bracketStatusLabel(dynamic status) {
+    switch (status) {
+      case 'ready':
+        return 'Not played';
+      case 'reported':
+        return 'Awaiting confirmation';
+      case 'confirmed':
+        return 'Done';
+      default:
+        final s = status?.toString() ?? '';
+        return s.isEmpty
+            ? ''
+            : s[0].toUpperCase() + s.substring(1).replaceAll('_', ' ');
+    }
+  }
+
   Widget _buildMyMatchesTab(bool isHost) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -2448,45 +2490,50 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           title: 'No bracket matches for you yet.',
         );
       }
-      return ListView(
-        padding: const EdgeInsets.all(16),
-        children: myMatches.map((m) {
-          final isDoublesMatch = m['player1_partner_username'] != null;
-          final p1 = isDoublesMatch
-              ? '${m['player1_username'] ?? 'TBD'}${m['player1_partner_username'] != null ? ' & ${m['player1_partner_username']}' : ''}'
-              : (m['player1_username'] ?? 'TBD');
-          final p2 = isDoublesMatch
-              ? '${m['player2_username'] ?? 'TBD'}${m['player2_partner_username'] != null ? ' & ${m['player2_partner_username']}' : ''}'
-              : (m['player2_username'] ?? 'TBD');
-          final isConfirmed = m['status'] == 'confirmed';
-          return Container(
-            margin: const EdgeInsets.only(bottom: 8),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: Theme.of(context).cardColor,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: AppColors.cardBorder(isDark)),
-              boxShadow: AppShadows.card(isDark),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '$p1 vs $p2',
-                    style: const TextStyle(fontSize: 13),
+      return RefreshIndicator(
+        onRefresh: _loadAll,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: myMatches.map((m) {
+            final isDoublesMatch = m['player1_partner_username'] != null;
+            final p1 = isDoublesMatch
+                ? '${m['player1_username'] ?? 'TBD'}${m['player1_partner_username'] != null ? ' & ${m['player1_partner_username']}' : ''}'
+                : (m['player1_username'] ?? 'TBD');
+            final p2 = isDoublesMatch
+                ? '${m['player2_username'] ?? 'TBD'}${m['player2_partner_username'] != null ? ' & ${m['player2_partner_username']}' : ''}'
+                : (m['player2_username'] ?? 'TBD');
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
+              decoration: BoxDecoration(
+                color: Theme.of(context).cardColor,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.cardBorder(isDark)),
+                boxShadow: AppShadows.card(isDark),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '$p1 vs $p2',
+                      style: const TextStyle(fontSize: 13),
+                    ),
                   ),
-                ),
-                Text(
-                  isConfirmed ? 'Done' : m['status'],
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AppColors.textGrey,
+                  Text(
+                    _bracketStatusLabel(m['status']),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textGrey,
+                    ),
                   ),
-                ),
-              ],
-            ),
-          );
-        }).toList(),
+                ],
+              ),
+            );
+          }).toList(),
+        ),
       );
     }
 
@@ -2843,6 +2890,7 @@ class _SelfReportSetsDialog extends StatefulWidget {
 }
 
 class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
+  static const int _maxSets = 7;
   late List<_SetScore> _sets;
   String? _error;
 
@@ -2889,6 +2937,10 @@ class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
                       child: TextField(
                         controller: set.myScore,
                         keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(3),
+                        ],
                         decoration: InputDecoration(
                           labelText: '${widget.unitLabel} ${index + 1} — You',
                           isDense: true,
@@ -2903,6 +2955,10 @@ class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
                       child: TextField(
                         controller: set.opponentScore,
                         keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(3),
+                        ],
                         decoration: InputDecoration(
                           labelText: widget.opponentName,
                           isDense: true,
@@ -2921,11 +2977,12 @@ class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
                 ),
               );
             }),
-            TextButton.icon(
-              onPressed: () => setState(() => _sets.add(_SetScore())),
-              icon: const Icon(Icons.add),
-              label: Text('Add ${widget.unitLabel}'),
-            ),
+            if (_sets.length < _maxSets)
+              TextButton.icon(
+                onPressed: () => setState(() => _sets.add(_SetScore())),
+                icon: const Icon(Icons.add),
+                label: Text('Add ${widget.unitLabel}'),
+              ),
           ],
         ),
       ),
@@ -2996,6 +3053,7 @@ class _HostReportSetsDialog extends StatefulWidget {
 }
 
 class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
+  static const int _maxSets = 7;
   late List<_SetScore> _sets;
   String? _error;
 
@@ -3042,6 +3100,10 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
                       child: TextField(
                         controller: set.myScore,
                         keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(3),
+                        ],
                         decoration: InputDecoration(
                           labelText:
                               '${widget.unitLabel} ${index + 1} — ${widget.player1Name}',
@@ -3057,6 +3119,10 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
                       child: TextField(
                         controller: set.opponentScore,
                         keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(3),
+                        ],
                         decoration: InputDecoration(
                           labelText: widget.player2Name,
                           isDense: true,
@@ -3075,11 +3141,12 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
                 ),
               );
             }),
-            TextButton.icon(
-              onPressed: () => setState(() => _sets.add(_SetScore())),
-              icon: const Icon(Icons.add),
-              label: Text('Add ${widget.unitLabel}'),
-            ),
+            if (_sets.length < _maxSets)
+              TextButton.icon(
+                onPressed: () => setState(() => _sets.add(_SetScore())),
+                icon: const Icon(Icons.add),
+                label: Text('Add ${widget.unitLabel}'),
+              ),
           ],
         ),
       ),

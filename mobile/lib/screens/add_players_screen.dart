@@ -1,12 +1,9 @@
 // add_players_screen.dart
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import '../widgets/loading_skeleton.dart';
 
 class AddPlayersScreen extends StatefulWidget {
@@ -22,6 +19,7 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
   final TextEditingController _searchController = TextEditingController();
   List<dynamic> _results = [];
   bool _searching = false;
+  String? _error;
   Timer? _debounce;
   final Set<int> _addingIds = {};
   final Set<int> _addedIds = {};
@@ -33,34 +31,38 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
 
   Future<void> _search(String query) async {
     if (query.trim().length < 2) {
-      setState(() => _results = []);
+      setState(() {
+        _results = [];
+        _error = null;
+      });
       return;
     }
 
-    setState(() => _searching = true);
+    setState(() {
+      _searching = true;
+      _error = null;
+    });
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final uri = Uri.parse(
-        '$baseApiUrl/leagues/${widget.leagueId}/search-players',
-      ).replace(queryParameters: {'q': query.trim()});
-
-      final response = await http.get(
-        uri,
-        headers: {'Authorization': 'Bearer $token'},
+      final res = await ApiClient.get(
+        '/leagues/${widget.leagueId}/search-players',
+        queryParams: {'q': query.trim()},
       );
-      final data = jsonDecode(response.body);
 
-      if (response.statusCode == 200) {
-        setState(() => _results = data['users']);
+      if (res.statusCode == 200) {
+        setState(() => _results = res.data['users']);
       } else {
-        setState(() => _results = []);
+        setState(() {
+          _results = [];
+          _error = res.errorOr('Could not search for players.');
+        });
       }
     } catch (err) {
-      setState(() => _results = []);
+      setState(() {
+        _results = [];
+        _error = 'Could not reach the server.';
+      });
     } finally {
-      setState(() => _searching = false);
+      if (mounted) setState(() => _searching = false);
     }
   }
 
@@ -69,22 +71,13 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
     setState(() => _addingIds.add(playerId));
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}/add-player'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({'playerId': playerId}),
+      final res = await ApiClient.post(
+        '/leagues/${widget.leagueId}/add-player',
+        body: {'playerId': playerId},
       );
 
-      final data = jsonDecode(response.body);
-
       if (!mounted) return;
-      if (response.statusCode == 201) {
+      if (res.statusCode == 201) {
         setState(() => _addedIds.add(playerId));
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -95,7 +88,7 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not add player.'),
+            content: Text(res.errorOr('Could not add player.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -160,6 +153,24 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
             Expanded(
               child: _searching
                   ? const SkeletonList(count: 3)
+                  : _error != null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(_error!, textAlign: TextAlign.center),
+                            const SizedBox(height: 12),
+                            TextButton(
+                              onPressed: () =>
+                                  _search(_searchController.text),
+                              child: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
                   : _results.isEmpty
                   ? Center(
                       child: Padding(

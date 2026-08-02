@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
+import '../date_utils.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
@@ -333,7 +334,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                                             CrossAxisAlignment.start,
                                         children: [
                                           Text(
-                                            sportLabel,
+                                            '$sportLabel · ${formatRelativeTime(m['created_at'])}',
                                             style: TextStyle(
                                               fontSize: 10,
                                               color: subtleTextColor,

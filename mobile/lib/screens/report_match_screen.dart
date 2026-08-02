@@ -154,7 +154,10 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
     }
   }
 
+  static const int _maxSets = 7;
+
   void _addSet() {
+    if (_sets.length >= _maxSets) return;
     HapticFeedback.selectionClick();
     setState(() => _sets.add(_SetScore()));
   }
@@ -176,6 +179,17 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
       _showAlert(
         'Missing info',
         'Doubles matches need both partners selected.',
+      );
+      return;
+    }
+
+    final allSelected = [_currentUserId, _partnerId, _opponentId, _opponentPartnerId]
+        .whereType<int>()
+        .toList();
+    if (allSelected.toSet().length != allSelected.length) {
+      _showAlert(
+        'Duplicate selection',
+        'The same player cannot appear twice in one match.',
       );
       return;
     }
@@ -466,6 +480,10 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                       child: TextField(
                         controller: set.myScore,
                         keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(3),
+                        ],
                         decoration: InputDecoration(
                           labelText: '$_unitLabel ${index + 1} — You',
                           isDense: true,
@@ -480,6 +498,10 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                       child: TextField(
                         controller: set.opponentScore,
                         keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(3),
+                        ],
                         decoration: const InputDecoration(
                           labelText: 'Opponent',
                           isDense: true,
@@ -498,11 +520,12 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                 ),
               );
             }),
-            TextButton.icon(
-              onPressed: _addSet,
-              icon: const Icon(Icons.add),
-              label: Text('Add $_unitLabel'),
-            ),
+            if (_sets.length < _maxSets)
+              TextButton.icon(
+                onPressed: _addSet,
+                icon: const Icon(Icons.add),
+                label: Text('Add $_unitLabel'),
+              ),
             const SizedBox(height: 24),
             ElevatedButton(
               onPressed: _submitting ? null : _handleSubmit,
