@@ -55,6 +55,14 @@ function isValidSetScores(setScores) {
   });
 }
 
+// Same guard matchRoutes.js uses — kept as a local copy here for the same
+// reason as the rest of this file's duplicated helpers. Cross-checks the
+// declared winner against the reported unit counts, since without this "I
+// won" with a lower score than the opponent is accepted as-is.
+function winnerUnitsAreConsistent(winnerIsPlayer1, player1Units, player2Units) {
+  return winnerIsPlayer1 ? player1Units > player2Units : player2Units > player1Units;
+}
+
 async function getRating(db, userId, sport, format) {
   const result = await db.query(
     'SELECT rating FROM user_sports WHERE user_id = $1 AND sport = $2 AND format = $3',
@@ -229,14 +237,28 @@ async function finalizePlayoffMatch(db, match, league) {
   if (!isDoubles) {
     const rating1 = await getRating(db, match.player1_id, sport, format);
     const rating2 = await getRating(db, match.player2_id, sport, format);
+
+    // Both participants must have a rating row for this sport+format before
+    // a match involving them can be scored — a missing one would otherwise
+    // silently corrupt the calculation (see matchRoutes.js's finalizeMatch
+    // for the same guard, kept as a local copy here for the same reason as
+    // the rest of this file's duplicated helpers).
+    const missingId = (rating1 == null && match.player1_id) || (rating2 == null && match.player2_id) || null;
+    if (missingId) {
+      throw new RouteError(
+        400,
+        `Player ${missingId} hasn't added ${sport.replace('_', ' ')} (${format}) to their profile yet — they need to before this match can be confirmed.`
+      );
+    }
+
     const team1Won = match.winner_id === match.player1_id;
 
     const { newRating1, newRating2 } = calculateNewRatings(
       sport, rating1, rating2, team1Won, match.player1_units, match.player2_units
     );
 
-    const updatedRating1 = Math.round(newRating1 * 10) / 10;
-    const updatedRating2 = Math.round(newRating2 * 10) / 10;
+    const updatedRating1 = Math.round(newRating1 * 100) / 100;
+    const updatedRating2 = Math.round(newRating2 * 100) / 100;
     const change1 = Math.round((updatedRating1 - rating1) * 100) / 100;
     const change2 = Math.round((updatedRating2 - rating2) * 100) / 100;
 
@@ -258,6 +280,19 @@ async function finalizePlayoffMatch(db, match, league) {
     const r2a = await getRating(db, match.player2_id, sport, format);
     const r2b = await getRating(db, match.player2_partner_id, sport, format);
 
+    const missingId =
+      (r1a == null && match.player1_id) ||
+      (r1b == null && match.player1_partner_id) ||
+      (r2a == null && match.player2_id) ||
+      (r2b == null && match.player2_partner_id) ||
+      null;
+    if (missingId) {
+      throw new RouteError(
+        400,
+        `Player ${missingId} hasn't added ${sport.replace('_', ' ')} (${format}) to their profile yet — they need to before this match can be confirmed.`
+      );
+    }
+
     const team1Rating = (r1a + r1b) / 2;
     const team2Rating = (r2a + r2b) / 2;
     const team1Won = match.winner_id === match.player1_id;
@@ -269,10 +304,10 @@ async function finalizePlayoffMatch(db, match, league) {
     const team1Delta = newTeam1Rating - team1Rating;
     const team2Delta = newTeam2Rating - team2Rating;
 
-    const updated1a = Math.round((r1a + team1Delta) * 10) / 10;
-    const updated1b = Math.round((r1b + team1Delta) * 10) / 10;
-    const updated2a = Math.round((r2a + team2Delta) * 10) / 10;
-    const updated2b = Math.round((r2b + team2Delta) * 10) / 10;
+    const updated1a = Math.round((r1a + team1Delta) * 100) / 100;
+    const updated1b = Math.round((r1b + team1Delta) * 100) / 100;
+    const updated2a = Math.round((r2a + team2Delta) * 100) / 100;
+    const updated2b = Math.round((r2b + team2Delta) * 100) / 100;
 
     const change1a = Math.round((updated1a - r1a) * 100) / 100;
     const change1b = Math.round((updated1b - r1b) * 100) / 100;
@@ -689,6 +724,9 @@ router.post('/match/:matchId/report', async (req, res) => {
   if (!isValidSetScores(setScores)) {
     return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
   }
+  if (!winnerUnitsAreConsistent(iWon, myUnits, opponentUnits)) {
+    return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
+  }
 
   try {
     const matchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
@@ -749,6 +787,9 @@ router.put('/match/:matchId/edit-report', async (req, res) => {
   if (!isValidSetScores(setScores)) {
     return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
   }
+  if (!winnerUnitsAreConsistent(iWon, myUnits, opponentUnits)) {
+    return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
+  }
 
   try {
     const matchResult = await pool.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
@@ -805,6 +846,9 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
   }
   if (!isValidSetScores(setScores)) {
     return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
+  }
+  if (!winnerUnitsAreConsistent(player1Won, player1Units, player2Units)) {
+    return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
   }
 
   try {
@@ -876,6 +920,9 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
   }
   if (!isValidSetScores(setScores)) {
     return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
+  }
+  if (!winnerUnitsAreConsistent(player1Won, player1Units, player2Units)) {
+    return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
   }
 
   try {
@@ -970,12 +1017,21 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
       if (!isDoubles) {
         const rating1 = await getRating(client, updatedMatch.player1_id, league.sport, league.format);
         const rating2 = await getRating(client, updatedMatch.player2_id, league.sport, league.format);
+
+        const missingId1 = (rating1 == null && updatedMatch.player1_id) || (rating2 == null && updatedMatch.player2_id) || null;
+        if (missingId1) {
+          throw new RouteError(
+            400,
+            `Player ${missingId1} hasn't added ${league.sport.replace('_', ' ')} (${league.format}) to their profile yet — they need to before this score can be re-applied.`
+          );
+        }
+
         const team1Won = updatedMatch.winner_id === updatedMatch.player1_id;
         const { newRating1, newRating2 } = calculateNewRatings(
           league.sport, rating1, rating2, team1Won, updatedMatch.player1_units, updatedMatch.player2_units
         );
-        const updatedRating1 = Math.round(newRating1 * 10) / 10;
-        const updatedRating2 = Math.round(newRating2 * 10) / 10;
+        const updatedRating1 = Math.round(newRating1 * 100) / 100;
+        const updatedRating2 = Math.round(newRating2 * 100) / 100;
         const change1 = Math.round((updatedRating1 - rating1) * 100) / 100;
         const change2 = Math.round((updatedRating2 - rating2) * 100) / 100;
 
@@ -999,6 +1055,19 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
         const r2a = await getRating(client, updatedMatch.player2_id, league.sport, league.format);
         const r2b = await getRating(client, updatedMatch.player2_partner_id, league.sport, league.format);
 
+        const missingId2 =
+          (r1a == null && updatedMatch.player1_id) ||
+          (r1b == null && updatedMatch.player1_partner_id) ||
+          (r2a == null && updatedMatch.player2_id) ||
+          (r2b == null && updatedMatch.player2_partner_id) ||
+          null;
+        if (missingId2) {
+          throw new RouteError(
+            400,
+            `Player ${missingId2} hasn't added ${league.sport.replace('_', ' ')} (${league.format}) to their profile yet — they need to before this score can be re-applied.`
+          );
+        }
+
         const team1Rating = (r1a + r1b) / 2;
         const team2Rating = (r2a + r2b) / 2;
         const team1Won = updatedMatch.winner_id === updatedMatch.player1_id;
@@ -1010,10 +1079,10 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
         const team1Delta = newTeam1Rating - team1Rating;
         const team2Delta = newTeam2Rating - team2Rating;
 
-        const updated1a = Math.round((r1a + team1Delta) * 10) / 10;
-        const updated1b = Math.round((r1b + team1Delta) * 10) / 10;
-        const updated2a = Math.round((r2a + team2Delta) * 10) / 10;
-        const updated2b = Math.round((r2b + team2Delta) * 10) / 10;
+        const updated1a = Math.round((r1a + team1Delta) * 100) / 100;
+        const updated1b = Math.round((r1b + team1Delta) * 100) / 100;
+        const updated2a = Math.round((r2a + team2Delta) * 100) / 100;
+        const updated2b = Math.round((r2b + team2Delta) * 100) / 100;
 
         const change1a = Math.round((updated1a - r1a) * 100) / 100;
         const change1b = Math.round((updated1b - r1b) * 100) / 100;

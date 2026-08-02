@@ -91,6 +91,24 @@ function checkRegistrationWindow(league) {
   return null;
 }
 
+// Once a schedule exists, it already embeds whoever a player's partner was
+// at generation time — changing the partner afterward leaves the schedule
+// silently pointing at a pairing that no longer exists (results get
+// reported and rated for a partnership that isn't real, and later
+// group-advance operations fail with a confusing "unpaired members" error).
+// Shared by select-partner/assign-partner/unpair so a player's partner is
+// locked in as soon as any fixture involving them has been generated.
+async function playerHasScheduledFixtures(leagueId, userId) {
+  const result = await pool.query(
+    `SELECT 1 FROM scheduled_matches
+     WHERE league_id = $1
+       AND (player1_id = $2 OR player1_partner_id = $2 OR player2_id = $2 OR player2_partner_id = $2)
+     LIMIT 1`,
+    [leagueId, userId]
+  );
+  return result.rows.length > 0;
+}
+
 const VALID_PARTNER_MODES = ['host_auto', 'self_select', 'host_manual'];
 
 // A reasonable ceiling for a single win/loss point value — high enough to
@@ -494,6 +512,9 @@ router.post('/:id/select-partner', async (req, res) => {
     if (myMembership.rows[0].partner_status === 'confirmed') {
       return res.status(409).json({ error: 'You already have a confirmed partner.' });
     }
+    if (await playerHasScheduledFixtures(leagueId, userId)) {
+      return res.status(400).json({ error: "You can't change partners once the schedule has already been generated." });
+    }
 
     const partnerMembership = await pool.query(
       'SELECT * FROM league_members WHERE league_id = $1 AND user_id = $2',
@@ -608,6 +629,9 @@ router.post('/:id/assign-partner', async (req, res) => {
     if (membersResult.rows.some((m) => m.partner_status === 'confirmed')) {
       return res.status(409).json({ error: 'One of these players already has a confirmed partner. Unpair them first.' });
     }
+    if ((await playerHasScheduledFixtures(leagueId, player1Id)) || (await playerHasScheduledFixtures(leagueId, player2Id))) {
+      return res.status(400).json({ error: "You can't change partners once the schedule has already been generated." });
+    }
 
     await pool.query(
       `UPDATE league_members SET partner_id = $1, partner_status = 'confirmed'
@@ -652,6 +676,9 @@ router.post('/:id/unpair', async (req, res) => {
     );
     if (memberResult.rows.length === 0 || memberResult.rows[0].partner_id == null) {
       return res.status(404).json({ error: 'No partner pairing found to remove.' });
+    }
+    if (await playerHasScheduledFixtures(leagueId, subjectId)) {
+      return res.status(400).json({ error: "You can't change partners once the schedule has already been generated." });
     }
     const partnerId = memberResult.rows[0].partner_id;
 
@@ -1146,6 +1173,35 @@ router.delete('/:id/groups/:groupId', async (req, res) => {
       return res.status(400).json({ error: 'Delete or move the groups inside it first.' });
     }
 
+    // An unlocked (e.g. 'custom') group can still have real confirmed match
+    // history — it never needs locking to have matches added — so refuse to
+    // delete it rather than let a foreign-key violation surface as an opaque
+    // 500, or silently destroy real results. Only unconfirmed fixtures are
+    // safe to clean up automatically here.
+    const confirmedScheduled = await pool.query(
+      `SELECT 1 FROM scheduled_matches sm
+       JOIN matches m ON m.scheduled_match_id = sm.id AND m.status = 'confirmed'
+       WHERE sm.group_id = $1 LIMIT 1`,
+      [groupId]
+    );
+    const confirmedPlayoff = await pool.query(
+      `SELECT 1 FROM playoff_matches WHERE group_id = $1 AND status = 'confirmed' LIMIT 1`,
+      [groupId]
+    );
+    if (confirmedScheduled.rows.length > 0 || confirmedPlayoff.rows.length > 0) {
+      return res.status(400).json({
+        error: 'This group has confirmed results — those can\'t be removed by deleting the group.',
+      });
+    }
+
+    await pool.query(
+      `DELETE FROM matches
+       WHERE status IN ('pending', 'rejected')
+         AND scheduled_match_id IN (SELECT id FROM scheduled_matches WHERE group_id = $1)`,
+      [groupId]
+    );
+    await pool.query('DELETE FROM scheduled_matches WHERE group_id = $1', [groupId]);
+    await pool.query(`DELETE FROM playoff_matches WHERE group_id = $1 AND status != 'confirmed'`, [groupId]);
     await pool.query('DELETE FROM group_members WHERE group_id = $1', [groupId]);
     await pool.query('DELETE FROM league_groups WHERE id = $1', [groupId]);
 
@@ -1625,7 +1681,9 @@ router.post('/:id/groups/:groupId/lock', async (req, res) => {
       const unitCount = isDoubles ? teams.length : members.length;
       const unitNoun = isDoubles ? 'team' : 'player';
 
-      let matchCount = 0;
+      // matchCount is the outer-scope variable declared before this
+      // transaction (read by the response after it commits) — no local
+      // re-declaration here, or the outer one stays 0 forever.
       if (group.schedule_type === 'custom') {
         // Nothing to generate — the host adds matches to this group by hand.
       } else if (group.schedule_type === 'knockout') {
@@ -1969,7 +2027,15 @@ router.post('/:id/groups/advance', async (req, res) => {
     );
     const newGroup = newGroupResult.rows[0];
 
-    for (const qualifier of qualifiers) {
+    // A player (or, for doubles, both members of a team) who qualifies from
+    // more than one source group ends up in `qualifiers` more than once —
+    // dedupe before inserting/counting, since newGroup was just created
+    // above and can't already have members, so ON CONFLICT DO NOTHING here
+    // would otherwise silently swallow a genuine duplicate and understate
+    // qualifierCount below.
+    const uniqueQualifiers = [...new Map(qualifiers.map((q) => [q.id, q])).values()];
+
+    for (const qualifier of uniqueQualifiers) {
       await pool.query(
         `INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)
          ON CONFLICT (group_id, user_id) DO NOTHING`,
@@ -1978,9 +2044,9 @@ router.post('/:id/groups/advance', async (req, res) => {
     }
 
     res.status(201).json({
-      message: `"${newGroup.name}" created with ${qualifiers.length} qualifier(s) — review its membership, then lock it whenever ready.`,
+      message: `"${newGroup.name}" created with ${uniqueQualifiers.length} qualifier(s) — review its membership, then lock it whenever ready.`,
       group: newGroup,
-      qualifierCount: qualifiers.length,
+      qualifierCount: uniqueQualifiers.length,
     });
   } catch (err) {
     console.error('Advance players error:', err);
@@ -2011,17 +2077,23 @@ router.get('/:id/search-players', async (req, res) => {
 
     const genderChar = league.gender_category === 'mens' ? 'M' : 'F';
 
+    // Joins on format too (not just sport) — needed to know which rating to
+    // check against the league's min/max band below, and a latent gap on
+    // its own for doubles leagues, which could otherwise offer a player
+    // whose only rating on file is for the other format.
     const result = await pool.query(
       `SELECT DISTINCT u.id, u.username, u.location
        FROM users u
-       JOIN user_sports us ON us.user_id = u.id AND us.sport = $1
-       WHERE u.username ILIKE $2
-         AND u.gender = $3
+       JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+       WHERE u.username ILIKE $3
+         AND u.gender = $4
          AND u.id NOT IN (
-           SELECT user_id FROM league_members WHERE league_id = $4
+           SELECT user_id FROM league_members WHERE league_id = $5
          )
+         AND ($6::numeric IS NULL OR us.rating >= $6::numeric)
+         AND ($7::numeric IS NULL OR us.rating <= $7::numeric)
        LIMIT 15`,
-      [league.sport, `%${q.trim()}%`, genderChar, leagueId]
+      [league.sport, league.format, `%${q.trim()}%`, genderChar, leagueId, league.min_rating, league.max_rating]
     );
 
     res.status(200).json({ users: result.rows });
@@ -2073,6 +2145,16 @@ router.post('/:id/add-player', async (req, res) => {
       return res.status(400).json({ error: 'This player has not added this sport to their profile yet.' });
     }
 
+    // Same rating-band check self-service /join enforces (checkRatingEligibility,
+    // above) — without it, a host's own picker could offer and add a player
+    // well outside the league's stated rating range. Registration-window is
+    // deliberately NOT enforced here: a host adding a late replacement after
+    // registration formally closes is a reasonable, common thing to want.
+    const ratingError = await checkRatingEligibility(league, playerId);
+    if (ratingError) {
+      return res.status(400).json({ error: ratingError });
+    }
+
     const existing = await pool.query(
       'SELECT id FROM league_members WHERE league_id = $1 AND user_id = $2',
       [leagueId, playerId]
@@ -2116,6 +2198,32 @@ router.post('/:id/leave', async (req, res) => {
     }
     const partnerId = memberResult.rows[0].partner_id;
 
+    // Same fixture cleanup as host-initiated removal (DELETE /:id/members/:userId
+    // below) — without this, every fixture already generated still lists the
+    // player who left: they'd still show up in the schedule, could still
+    // report a result into it, and ratings/points would apply against
+    // someone no longer in the league.
+    await pool.query(
+      `DELETE FROM matches
+       WHERE league_id = $1 AND status IN ('pending', 'rejected')
+         AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)`,
+      [leagueId, userId]
+    );
+    await pool.query(
+      `DELETE FROM scheduled_matches
+       WHERE league_id = $1
+         AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)
+         AND id NOT IN (
+           SELECT scheduled_match_id FROM matches WHERE scheduled_match_id IS NOT NULL AND status = 'confirmed'
+         )`,
+      [leagueId, userId]
+    );
+    await pool.query(
+      `DELETE FROM playoff_matches
+       WHERE league_id = $1 AND status != 'confirmed'
+         AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)`,
+      [leagueId, userId]
+    );
     await pool.query(
       `DELETE FROM group_members
        WHERE user_id = $1 AND group_id IN (SELECT id FROM league_groups WHERE league_id = $2)`,

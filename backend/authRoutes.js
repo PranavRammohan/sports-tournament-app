@@ -70,6 +70,13 @@ router.post('/signup', async (req, res) => {
   if (!['M', 'F'].includes(gender)) {
     return res.status(400).json({ error: 'Gender must be M or F.' });
   }
+  // username (the app-wide display name, derived below) is written into a
+  // varchar(30) column — without this check, a longer combined name fails
+  // signup with a raw, unexplained 500 at the INSERT instead of a clear
+  // message here.
+  if (deriveDisplayName(firstName, lastName).length > 30) {
+    return res.status(400).json({ error: 'First and last name combined must be 30 characters or fewer.' });
+  }
 
   try {
     const existing = await pool.query(
@@ -178,6 +185,9 @@ router.patch('/profile', authMiddleware, async (req, res) => {
   }
   if (!['M', 'F'].includes(gender)) {
     return res.status(400).json({ error: 'Gender must be M or F.' });
+  }
+  if (deriveDisplayName(firstName, lastName).length > 30) {
+    return res.status(400).json({ error: 'First and last name combined must be 30 characters or fewer.' });
   }
 
   try {

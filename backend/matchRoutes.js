@@ -27,6 +27,18 @@ function isValidSetScores(setScores) {
   });
 }
 
+// Cross-checks the declared winner against the reported unit counts —
+// without this, "I won" with a lower score than the opponent is accepted:
+// an internally contradictory result that still credits a win and full
+// win-points while the rating engine (correctly, since it goes by units)
+// computes an actual-share below 50% for the declared "winner". Returns
+// true only if the declared winner's units are strictly greater than the
+// opponent's — also naturally rejects a tie, which isValidSetScores only
+// enforces at the per-set level, not in aggregate.
+function winnerUnitsAreConsistent(winnerIsPlayer1, player1Units, player2Units) {
+  return winnerIsPlayer1 ? player1Units > player2Units : player2Units > player1Units;
+}
+
 // Same guard leagueRoutes.js uses — kept as a local copy here since this file
 // has no shared module with leagueRoutes.js. Returns a user-facing error
 // string if the league has been marked completed (read-only), or null if
@@ -134,6 +146,24 @@ async function finalizeMatch(db, match, league) {
   const rating1b = match.player1_partner_id ? await getRating(db, match.player1_partner_id, sport, format) : null;
   const rating2b = match.player2_partner_id ? await getRating(db, match.player2_partner_id, sport, format) : null;
 
+  // Every participant must have a rating row for this sport+format before a
+  // match involving them can be scored — a missing one would otherwise
+  // silently corrupt the calculation: `null` coerces to 0 in the doubles
+  // team-average, and drives a singles ratingDiff to roughly the max
+  // possible swing, both moving the OTHER player's rating by a bogus amount.
+  const missingId =
+    (rating1a == null && match.player1_id) ||
+    (rating2a == null && match.player2_id) ||
+    (match.player1_partner_id && rating1b == null && match.player1_partner_id) ||
+    (match.player2_partner_id && rating2b == null && match.player2_partner_id) ||
+    null;
+  if (missingId) {
+    throw new RouteError(
+      400,
+      `Player ${missingId} hasn't added ${sport.replace('_', ' ')} (${format}) to their profile yet — they need to before this match can be confirmed.`
+    );
+  }
+
   const team1Rating = rating1b != null ? (rating1a + rating1b) / 2 : rating1a;
   const team2Rating = rating2b != null ? (rating2a + rating2b) / 2 : rating2a;
 
@@ -148,7 +178,7 @@ async function finalizeMatch(db, match, league) {
 
   const applyChange = async (playerId, individualRating, change, won) => {
     if (individualRating == null) return null;
-    const updated = Math.round((individualRating + change) * 10) / 10;
+    const updated = Math.round((individualRating + change) * 100) / 100;
     const actualChange = Math.round((updated - individualRating) * 100) / 100;
     await updateRating(db, playerId, sport, format, updated, won);
     return actualChange;
@@ -282,6 +312,9 @@ router.post('/report', async (req, res) => {
   if (!isValidSetScores(setScores)) {
     return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
   }
+  if (!winnerUnitsAreConsistent(iWon, myUnits, opponentUnits)) {
+    return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
+  }
 
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
@@ -391,6 +424,9 @@ router.post('/report-as-host', async (req, res) => {
   }
   if (!isValidSetScores(setScores)) {
     return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
+  }
+  if (!winnerUnitsAreConsistent(player1Won, player1Units, player2Units)) {
+    return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
   }
 
   try {
@@ -891,6 +927,9 @@ router.put('/:id/edit-report', async (req, res) => {
   if (!isValidSetScores(setScores)) {
     return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
   }
+  if (!winnerUnitsAreConsistent(iWon, myUnits, opponentUnits)) {
+    return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
+  }
 
   try {
     const matchResult = await pool.query('SELECT * FROM matches WHERE id = $1', [matchId]);
@@ -948,6 +987,9 @@ router.put('/:id/edit', async (req, res) => {
   }
   if (!isValidSetScores(setScores)) {
     return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
+  }
+  if (!winnerUnitsAreConsistent(player1Won, player1Units, player2Units)) {
+    return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
   }
 
   try {
@@ -1051,5 +1093,6 @@ router.delete('/:id', async (req, res) => {
 router.resolvePointsConfig = resolvePointsConfig;
 router.awardLeaguePoints = awardLeaguePoints;
 router.reverseMatchEffects = reverseMatchEffects;
+router.winnerUnitsAreConsistent = winnerUnitsAreConsistent;
 
 module.exports = router;
