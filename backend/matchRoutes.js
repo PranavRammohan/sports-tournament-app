@@ -4,6 +4,7 @@ const router = express.Router();
 const pool = require('./db');
 const { calculateNewRatings, reverseRatingChange } = require('./ratingEngine');
 const { createNotification, createNotifications } = require('./notifications');
+const { isLeagueAdmin } = require('./authorization');
 const { RouteError } = pool;
 
 // A reasonable ceiling for any single unit count (games/points won in a
@@ -447,7 +448,7 @@ router.post('/report-as-host', async (req, res) => {
       }
       const league = leagueResult.rows[0];
 
-      if (!league.host_enters_scores || league.created_by !== userId) {
+      if (!league.host_enters_scores || !(await isLeagueAdmin(client, league, userId))) {
         throw new RouteError(403, 'Only the host can enter scores directly for this league.');
       }
       if (league.status === 'completed') {
@@ -1049,7 +1050,7 @@ router.put('/:id/edit', async (req, res) => {
       const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
       const league = leagueResult.rows[0];
 
-      if (league.created_by !== userId) {
+      if (!(await isLeagueAdmin(client, league, userId))) {
         throw new RouteError(403, 'Only the league host can edit match scores.');
       }
 
@@ -1101,7 +1102,7 @@ router.delete('/:id', async (req, res) => {
       const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
       const league = leagueResult.rows[0];
 
-      if (league.created_by !== userId) {
+      if (!(await isLeagueAdmin(client, league, userId))) {
         throw new RouteError(403, 'Only the league host can delete a match.');
       }
 

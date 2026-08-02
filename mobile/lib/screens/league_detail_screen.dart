@@ -52,6 +52,12 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   bool get _isMember =>
       _currentUserId != null &&
       _leaderboard.any((p) => p['id'] == _currentUserId);
+  // The narrower "is this the original creator" check — used only for the
+  // handful of actions co-hosts still can't do (delete league, manage
+  // co-hosts). Everything else in this app should use the widened `isHost`
+  // computed in build() instead.
+  bool get _isPrimaryHost =>
+      _league != null && _league!['created_by'] == _currentUserId;
   bool get _isKnockout =>
       _league != null && _league!['schedule_type'] == 'knockout';
   bool get _isCustom =>
@@ -1273,6 +1279,45 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     }
   }
 
+  Future<void> _toggleCoHost(dynamic player) async {
+    final isCoHost = player['is_co_host'] == true;
+    HapticFeedback.selectionClick();
+    try {
+      final res = isCoHost
+          ? await ApiClient.delete(
+              '/leagues/${widget.leagueId}/co-hosts/${player['id']}',
+            )
+          : await ApiClient.post(
+              '/leagues/${widget.leagueId}/co-hosts',
+              body: {'userId': player['id']},
+            );
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isCoHost ? 'Co-host removed.' : 'Co-host added.',
+            ),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadAll();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not update co-host status.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    }
+  }
+
   String _formatSport(String sport) => sport
       .split('_')
       .map((w) => w[0].toUpperCase() + w.substring(1))
@@ -1395,7 +1440,18 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isHost = _league != null && _league!['created_by'] == _currentUserId;
+    // isHost is deliberately widened to mean "host or co-host" — every
+    // downstream consumer of it (this file's own actions, plus the 4 screens
+    // it's prop-drilled into: groups_overview_screen.dart, playoffs_screen.dart,
+    // partner_selection_screen.dart, widgets/bracket_view.dart) just gates
+    // "can perform privileged actions," which a co-host should pass too.
+    // _isPrimaryHost below is the narrower check for the handful of things
+    // that stay creator-only (delete league, manage co-hosts).
+    final myMembership = _leaderboard.firstWhere(
+      (p) => p['id'] == _currentUserId,
+      orElse: () => null,
+    );
+    final isHost = _isPrimaryHost || (myMembership?['is_co_host'] == true);
 
     if (_loading) {
       return const Scaffold(body: SkeletonList());
@@ -1470,7 +1526,9 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                   if (result != null) _loadAll();
                 },
               ),
-            if (isHost)
+            // Deliberately _isPrimaryHost, not the widened isHost — deleting
+            // the league stays creator-only even for a co-host.
+            if (_isPrimaryHost)
               IconButton(
                 icon: _deleting
                     ? const SizedBox(
@@ -2122,6 +2180,27 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                             ),
                           ),
                         ],
+                        if (player['is_co_host'] == true) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.accent.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'Co-Host',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.accent,
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                     subtitle: Text(
@@ -2151,6 +2230,25 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                             ),
                           ],
                         ),
+                        // Deliberately _isPrimaryHost, not the widened isHost —
+                        // granting/revoking co-host status stays creator-only,
+                        // so co-hosts can't promote/demote each other.
+                        if (_isPrimaryHost &&
+                            player['id'] != _currentUserId &&
+                            player['is_guest'] != true)
+                          IconButton(
+                            icon: Icon(
+                              player['is_co_host'] == true
+                                  ? Icons.remove_moderator_outlined
+                                  : Icons.add_moderator_outlined,
+                              size: 20,
+                              color: AppColors.accent,
+                            ),
+                            tooltip: player['is_co_host'] == true
+                                ? 'Remove co-host'
+                                : 'Make co-host',
+                            onPressed: () => _toggleCoHost(player),
+                          ),
                         if (isHost && player['id'] != _currentUserId)
                           IconButton(
                             icon: const Icon(

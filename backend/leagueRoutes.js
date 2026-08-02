@@ -8,6 +8,7 @@ const { reverseRatingChange } = require('./ratingEngine');
 const { createNotification } = require('./notifications');
 const { findSchedulingConflicts } = require('./scheduling');
 const { seedStartingRating } = require('./sportsRoutes');
+const { isLeagueAdmin } = require('./authorization');
 const { RouteError } = pool;
 
 const GUEST_SALT_ROUNDS = 10;
@@ -641,7 +642,7 @@ router.post('/:id/assign-partner', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can assign partners.' });
     }
     const completedError = checkNotCompleted(league);
@@ -696,10 +697,10 @@ router.post('/:id/unpair', async (req, res) => {
       return res.status(404).json({ error: 'League not found.' });
     }
     const league = leagueResult.rows[0];
-    const isHost = league.created_by === userId;
-    const subjectId = isHost && targetUserId ? targetUserId : userId;
+    const isAdmin = await isLeagueAdmin(pool, league, userId);
+    const subjectId = isAdmin && targetUserId ? targetUserId : userId;
 
-    if (!isHost && subjectId !== userId) {
+    if (!isAdmin && subjectId !== userId) {
       return res.status(403).json({ error: 'You can only unpair yourself.' });
     }
 
@@ -908,7 +909,7 @@ router.post('/:id/groups', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can create groups.' });
     }
     if (league.schedule_type !== 'groups') {
@@ -1183,7 +1184,7 @@ router.delete('/:id/groups/:groupId', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can delete groups.' });
     }
 
@@ -1261,7 +1262,7 @@ router.patch('/:id/groups/:groupId/parent', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can move groups.' });
     }
 
@@ -1326,7 +1327,7 @@ router.post('/:id/groups/:groupId/assign', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can assign players to groups.' });
     }
 
@@ -1409,7 +1410,7 @@ router.post('/:id/groups/:groupId/unassign', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can remove players from groups.' });
     }
 
@@ -1467,7 +1468,7 @@ router.post('/:id/groups/auto-assign', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can auto-assign groups.' });
     }
 
@@ -1649,7 +1650,7 @@ router.post('/:id/groups/:groupId/lock', async (req, res) => {
       }
       const league = leagueResult.rows[0];
 
-      if (league.created_by !== userId) {
+      if (!(await isLeagueAdmin(client, league, userId))) {
         throw new RouteError(403, 'Only the league host can lock a group.');
       }
 
@@ -1808,7 +1809,7 @@ router.post('/:id/groups/:groupId/unlock', async (req, res) => {
       }
       const league = leagueResult.rows[0];
 
-      if (league.created_by !== userId) {
+      if (!(await isLeagueAdmin(client, league, userId))) {
         throw new RouteError(403, 'Only the league host can unlock a group.');
       }
 
@@ -1880,7 +1881,7 @@ router.put('/:id/groups/:groupId/config', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can edit this.' });
     }
 
@@ -1969,7 +1970,7 @@ router.post('/:id/groups/advance', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can advance players.' });
     }
     if (league.schedule_type !== 'groups') {
@@ -2104,7 +2105,7 @@ router.get('/:id/search-players', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can search for players.' });
     }
 
@@ -2153,7 +2154,7 @@ router.post('/:id/add-player', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can add players.' });
     }
     const completedError = checkNotCompleted(league);
@@ -2248,7 +2249,7 @@ router.post('/:id/add-guest', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can add players.' });
     }
     const completedError = checkNotCompleted(league);
@@ -2295,6 +2296,73 @@ router.post('/:id/add-guest', async (req, res) => {
     }
     console.error('Add guest error:', err);
     res.status(500).json({ error: 'Something went wrong adding the guest.' });
+  }
+});
+
+// ---------- GRANT CO-HOST (primary host only) ----------
+// Deliberately gated on the primary host specifically (league.created_by),
+// not isLeagueAdmin — co-hosts can't promote/demote each other or create an
+// unbounded chain of admins.
+router.post('/:id/co-hosts', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { userId: targetUserId } = req.body;
+
+  if (!targetUserId) {
+    return res.status(400).json({ error: 'Please select a player to make co-host.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can grant co-host status.' });
+    }
+
+    const result = await pool.query(
+      `UPDATE league_members SET is_co_host = true WHERE league_id = $1 AND user_id = $2 RETURNING id`,
+      [leagueId, targetUserId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'This player is not a member of this league.' });
+    }
+
+    res.status(200).json({ message: 'Co-host added.' });
+  } catch (err) {
+    console.error('Grant co-host error:', err);
+    res.status(500).json({ error: 'Something went wrong granting co-host status.' });
+  }
+});
+
+// ---------- REVOKE CO-HOST (primary host only) ----------
+router.delete('/:id/co-hosts/:userId', async (req, res) => {
+  const userId = req.userId;
+  const { id: leagueId, userId: targetUserId } = req.params;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'League not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the league host can revoke co-host status.' });
+    }
+
+    await pool.query(
+      `UPDATE league_members SET is_co_host = false WHERE league_id = $1 AND user_id = $2`,
+      [leagueId, targetUserId]
+    );
+
+    res.status(200).json({ message: 'Co-host removed.' });
+  } catch (err) {
+    console.error('Revoke co-host error:', err);
+    res.status(500).json({ error: 'Something went wrong revoking co-host status.' });
   }
 });
 
@@ -2382,7 +2450,7 @@ router.delete('/:id/members/:userId', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== hostId) {
+    if (!(await isLeagueAdmin(pool, league, hostId))) {
       return res.status(403).json({ error: 'Only the league host can remove players.' });
     }
     if (targetUserId === hostId) {
@@ -2395,6 +2463,12 @@ router.delete('/:id/members/:userId', async (req, res) => {
     );
     if (memberCheck.rows.length === 0) {
       return res.status(404).json({ error: 'This player is not a member of this league.' });
+    }
+    // A co-host can remove regular players, but not another co-host — only
+    // the primary host can do that, same reasoning as why co-host status
+    // itself can only be granted/revoked by the primary host.
+    if (memberCheck.rows[0].is_co_host && league.created_by !== hostId) {
+      return res.status(403).json({ error: 'Only the league host can remove a co-host.' });
     }
     const partnerId = memberCheck.rows[0].partner_id;
 
@@ -2466,7 +2540,7 @@ router.get('/:id', async (req, res) => {
     const leagueData = league.rows[0];
 
     const leaderboard = await pool.query(
-      `SELECT u.id, u.username, u.gender, u.profile_pic_url, u.is_guest, us.rating, lm.points,
+      `SELECT u.id, u.username, u.gender, u.profile_pic_url, u.is_guest, lm.is_co_host, us.rating, lm.points,
               COALESCE(match_stats.matches_played, 0) AS matches_played,
               COALESCE(match_stats.wins, 0) AS wins,
               COALESCE(match_stats.losses, 0) AS losses
@@ -2665,7 +2739,7 @@ router.post('/:id/generate-schedule', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can generate the schedule.' });
     }
     const completedError = checkNotCompleted(league);
@@ -2880,7 +2954,7 @@ router.post('/:id/add-manual-match', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can add matches.' });
     }
     const completedError = checkNotCompleted(league);
@@ -3085,7 +3159,7 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
       }
       const league = leagueResult.rows[0];
 
-      if (league.created_by !== userId) {
+      if (!(await isLeagueAdmin(client, league, userId))) {
         throw new RouteError(403, 'Only the league host can regenerate the schedule.');
       }
       const completedError = checkNotCompleted(league);
@@ -3555,7 +3629,7 @@ router.post('/:id/complete', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can mark this tournament completed.' });
     }
     if (league.status === 'completed') {
@@ -3586,7 +3660,7 @@ router.post('/:id/reactivate', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can reactivate this tournament.' });
     }
     if (league.status !== 'completed') {
@@ -3622,7 +3696,7 @@ router.put('/:id', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can edit this league.' });
     }
 
@@ -3753,7 +3827,7 @@ router.put('/:id/schedule/:scheduledMatchId', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can edit the schedule.' });
     }
     const completedError = checkNotCompleted(league);
@@ -3838,7 +3912,7 @@ router.delete('/:id/schedule/:scheduledMatchId', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can delete a scheduled match.' });
     }
 

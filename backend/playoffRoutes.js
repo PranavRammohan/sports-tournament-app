@@ -5,6 +5,7 @@ const pool = require('./db');
 const { calculateNewRatings, reverseRatingChange } = require('./ratingEngine');
 const { createNotifications } = require('./notifications');
 const { findSchedulingConflicts } = require('./scheduling');
+const { isLeagueAdmin } = require('./authorization');
 const { RouteError } = pool;
 
 // Generates standard tournament bracket seed order for any power-of-two size,
@@ -427,7 +428,7 @@ router.post('/:leagueId/generate', async (req, res) => {
     }
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can start playoffs.' });
     }
     if (league.status === 'completed') {
@@ -589,7 +590,7 @@ router.delete('/:leagueId', async (req, res) => {
       }
       const league = leagueResult.rows[0];
 
-      if (league.created_by !== userId) {
+      if (!(await isLeagueAdmin(client, league, userId))) {
         throw new RouteError(403, 'Only the league host can remove the playoff bracket.');
       }
 
@@ -864,7 +865,7 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
       const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
       const league = leagueResult.rows[0];
 
-      if (!league.host_enters_scores || league.created_by !== userId) {
+      if (!league.host_enters_scores || !(await isLeagueAdmin(client, league, userId))) {
         throw new RouteError(403, 'Only the host can enter scores directly for this league.');
       }
       if (league.status === 'completed') {
@@ -956,7 +957,7 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
 
       const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
       const league = leagueResult.rows[0];
-      if (league.created_by !== userId) {
+      if (!(await isLeagueAdmin(client, league, userId))) {
         throw new RouteError(403, 'Only the league host can edit match scores.');
       }
 
@@ -1276,7 +1277,7 @@ router.put('/match/:matchId/schedule', async (req, res) => {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
     const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
+    if (!(await isLeagueAdmin(pool, league, userId))) {
       return res.status(403).json({ error: 'Only the league host can edit the schedule.' });
     }
     const completedError = checkNotCompleted(league);
