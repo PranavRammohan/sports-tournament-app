@@ -8,6 +8,7 @@ import '../api_client.dart';
 import '../utils.dart';
 import '../validators.dart';
 import '../widgets/loading_skeleton.dart';
+import '../widgets/friendly_empty_state.dart';
 
 class ReportMatchScreen extends StatefulWidget {
   final int leagueId;
@@ -212,7 +213,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
   Future<void> _handleSubmit() async {
     if (!_formKey.currentState!.validate()) return;
     if (_opponentId == null) {
-      _showAlert('Missing info', 'Please select an opponent.');
+      _showAlert('Missing info', 'Please select a match to report.');
       return;
     }
     if (widget.format == 'doubles' &&
@@ -319,17 +320,6 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
     );
   }
 
-  List<DropdownMenuItem<int>> _memberItems() {
-    return widget.members
-        .map<DropdownMenuItem<int>>(
-          (m) => DropdownMenuItem(
-            value: m['id'],
-            child: Text('${m['username']} (${m['rating']})'),
-          ),
-        )
-        .toList();
-  }
-
   @override
   Widget build(BuildContext context) {
     if (_loadingFixtures) {
@@ -361,23 +351,36 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
       );
     }
 
-    if (_scheduleExists && _myPendingFixtures.isEmpty) {
+    // No scheduled fixtures exist anywhere in this league/group yet — e.g. a
+    // 'custom' league before the host has added a manual match, or a
+    // round-robin league before the schedule's been generated. The backend
+    // unconditionally requires a matching scheduled fixture to self-report
+    // (see matchRoutes.js's POST /report), so there is nothing reportable
+    // here — showing a free-pick "any opponent" form in this state used to
+    // look functional but always failed on submit.
+    if (!_scheduleExists) {
       return Scaffold(
         appBar: AppBar(title: const Text('Report Match')),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              "You don't have any pending scheduled matches left to report.",
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-          ),
+        body: const FriendlyEmptyState(
+          icon: Icons.calendar_today_outlined,
+          title: 'Nothing to report yet',
+          subtitle:
+              "The host hasn't set up a schedule or added any matches yet — check back once they have.",
         ),
       );
     }
 
-    final isDoubles = widget.format == 'doubles';
+    if (_myPendingFixtures.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Report Match')),
+        body: const FriendlyEmptyState(
+          icon: Icons.check_circle_outline,
+          title: 'All caught up',
+          subtitle: "You don't have any pending scheduled matches left to report.",
+        ),
+      );
+    }
+
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = Theme.of(context).cardColor;
     final unselectedBorder = isDark
@@ -399,13 +402,12 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
           child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (_scheduleExists) ...[
-              Text(
-                'Select your scheduled match',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 10),
-              ..._myPendingFixtures.map((fixture) {
+            Text(
+              'Select your scheduled match',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 10),
+            ..._myPendingFixtures.map((fixture) {
                 final selected =
                     _selectedFixture != null &&
                     _selectedFixture!['id'] == fixture['id'];
@@ -471,43 +473,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                   ),
                 );
               }),
-              const SizedBox(height: 24),
-            ] else ...[
-              if (isDoubles) ...[
-                Text(
-                  'Your Partner',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                DropdownButtonFormField<int>(
-                  initialValue: _partnerId,
-                  items: _memberItems(),
-                  onChanged: (v) => setState(() => _partnerId = v),
-                ),
-                const SizedBox(height: 20),
-              ],
-              Text('Opponent', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<int>(
-                initialValue: _opponentId,
-                items: _memberItems(),
-                onChanged: (v) => setState(() => _opponentId = v),
-              ),
-              if (isDoubles) ...[
-                const SizedBox(height: 20),
-                Text(
-                  "Opponent's Partner",
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                DropdownButtonFormField<int>(
-                  initialValue: _opponentPartnerId,
-                  items: _memberItems(),
-                  onChanged: (v) => setState(() => _opponentPartnerId = v),
-                ),
-              ],
-              const SizedBox(height: 24),
-            ],
+            const SizedBox(height: 24),
             Text(
               '$_unitLabel Scores',
               style: Theme.of(context).textTheme.titleMedium,
