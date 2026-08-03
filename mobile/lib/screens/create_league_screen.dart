@@ -5,6 +5,7 @@ import 'package:share_plus/share_plus.dart';
 import '../api_client.dart';
 import '../constants/areas.dart';
 import '../main.dart';
+import '../validators.dart';
 
 const List<String> sportsList = [
   'Badminton',
@@ -21,6 +22,7 @@ class CreateLeagueScreen extends StatefulWidget {
 }
 
 class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
+  final _formKey = GlobalKey<FormState>();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _academyNameController = TextEditingController();
   String? _selectedSport;
@@ -48,6 +50,9 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   bool _restrictByRating = false;
   final TextEditingController _minRatingController = TextEditingController();
   final TextEditingController _maxRatingController = TextEditingController();
+
+  bool _restrictCapacity = false;
+  final TextEditingController _maxPlayersController = TextEditingController();
 
   // Tournament points — flat points awarded for a win/loss. Defaults match
   // what every tournament got before this was configurable (2 for a win, 0
@@ -146,10 +151,10 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   }
 
   Future<void> _handleCreate() async {
+    if (!_formKey.currentState!.validate()) return;
     final name = _nameController.text.trim();
 
-    if (name.isEmpty ||
-        _selectedSport == null ||
+    if (_selectedSport == null ||
         _selectedArea == null ||
         _selectedFormat == null ||
         _selectedGenderCategory == null ||
@@ -238,6 +243,18 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
       }
     }
 
+    int? maxPlayers;
+    if (_restrictCapacity) {
+      maxPlayers = int.tryParse(_maxPlayersController.text.trim());
+      if (maxPlayers == null || maxPlayers < 1) {
+        _showAlert(
+          'Missing info',
+          'Enter a max player count of at least 1, or turn off the player limit.',
+        );
+        return;
+      }
+    }
+
     HapticFeedback.lightImpact();
     setState(() => _loading = true);
 
@@ -253,6 +270,8 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
           'format': _selectedFormat!.toLowerCase(),
           'genderCategory': _selectedGenderCategory == "Men's"
               ? 'mens'
+              : _selectedGenderCategory == 'Mixed'
+              ? 'mixed'
               : 'womens',
           'scheduleType': _scheduleType,
           'matchesPerPlayer': matchesPerPlayer,
@@ -274,6 +293,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
           'pointsEnabled': _pointsEnabled,
           'pointsWin': _pointsEnabled ? pointsWin : null,
           'pointsLoss': _pointsEnabled ? pointsLoss : null,
+          'maxPlayers': maxPlayers,
         },
       );
 
@@ -326,7 +346,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                   SharePlus.instance.share(
                     ShareParams(
                       text:
-                          'Join my tournament "${league['name']}" on RallyX! Use join code: ${league['join_code']}',
+                          'Join my tournament "${league['name']}" on RallyX! Use join code: ${league['join_code']}\nOr tap: rallyx://join/${league['join_code']}',
                     ),
                   );
                 },
@@ -401,14 +421,17 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
       appBar: AppBar(title: const Text('Create Tournament')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
-        child: Column(
+        child: Form(
+          key: _formKey,
+          child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextField(
+            TextFormField(
               controller: _nameController,
+              validator: (v) => requiredField(v, label: 'Tournament name'),
               decoration: const InputDecoration(
                 labelText: 'Tournament Name',
-                hintText: 'e.g. Koramangala Summer Tennis League',
+                hintText: 'e.g. Koramangala Summer Tennis Tournament',
                 prefixIcon: Icon(Icons.badge_outlined),
               ),
             ),
@@ -438,15 +461,23 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                 DropdownMenuItem(value: 'Singles', child: Text('Singles')),
                 DropdownMenuItem(value: 'Doubles', child: Text('Doubles')),
               ],
-              onChanged: (v) => setState(() => _selectedFormat = v),
+              onChanged: (v) => setState(() {
+                _selectedFormat = v;
+                // Mixed is doubles-only — singles must pick mens or womens.
+                if (v == 'Singles' && _selectedGenderCategory == 'Mixed') {
+                  _selectedGenderCategory = null;
+                }
+              }),
             ),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
               initialValue: _selectedGenderCategory,
               decoration: const InputDecoration(labelText: 'Category'),
-              items: const [
-                DropdownMenuItem(value: "Men's", child: Text("Men's")),
-                DropdownMenuItem(value: "Women's", child: Text("Women's")),
+              items: [
+                const DropdownMenuItem(value: "Men's", child: Text("Men's")),
+                const DropdownMenuItem(value: "Women's", child: Text("Women's")),
+                if (_selectedFormat == 'Doubles')
+                  const DropdownMenuItem(value: 'Mixed', child: Text('Mixed')),
               ],
               onChanged: (v) => setState(() => _selectedGenderCategory = v),
             ),
@@ -605,6 +636,30 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                     ),
                   ),
                 ],
+              ),
+
+            const SizedBox(height: 20),
+            const Divider(),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _restrictCapacity,
+              onChanged: (v) => setState(() => _restrictCapacity = v),
+              title: const Text('Limit number of players'),
+              subtitle: const Text(
+                'Once full, no one else can join or be added.',
+                style: TextStyle(fontSize: 11),
+              ),
+            ),
+            if (_restrictCapacity)
+              TextField(
+                controller: _maxPlayersController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Max players',
+                  isDense: true,
+                  prefixIcon: Icon(Icons.groups_outlined),
+                ),
               ),
 
             if (_selectedFormat == 'Doubles') ...[
@@ -835,6 +890,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                   : const Text('Create Tournament'),
             ),
           ],
+          ),
         ),
       ),
     );

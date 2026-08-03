@@ -10,8 +10,11 @@ import '../widgets/player_avatar.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/win_rate_bar.dart';
 import '../widgets/rating_sparkline.dart';
+import '../utils.dart';
+import '../constants/sports.dart';
 import 'add_sport_screen.dart';
 import 'edit_profile_screen.dart';
+import 'onboarding_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -79,6 +82,70 @@ class _ProfileScreenState extends State<ProfileScreen> {
     themeModeNotifier.value = value ? ThemeMode.dark : ThemeMode.light;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('darkMode', value);
+  }
+
+  Future<void> _handleDeleteAccount() async {
+    final passwordController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Delete account?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'This permanently removes your personal details. Your match '
+              'history stays visible to opponents, but your name is replaced '
+              'with "Deleted user" and you can never log in again.',
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: passwordController,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Enter your password to confirm',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Delete Account',
+              style: TextStyle(color: AppColors.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final res = await ApiClient.delete(
+      '/auth/account',
+      body: {'password': passwordController.text},
+    );
+
+    if (res.statusCode != 200) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(res.errorOr('Could not delete your account.'))),
+      );
+      return;
+    }
+
+    HapticFeedback.mediumImpact();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('authToken');
+    await prefs.remove('user');
+    if (!mounted) return;
+    Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
   }
 
   Future<void> _handleLogout() async {
@@ -283,13 +350,54 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: cardColor,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: borderColor),
+                      boxShadow: AppShadows.card(isDark),
+                    ),
+                    child: ListTile(
+                      leading: Icon(
+                        Icons.help_outline,
+                        color: primaryTextColor,
+                      ),
+                      title: Text(
+                        'How RallyX works',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                          color: primaryTextColor,
+                        ),
+                      ),
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const OnboardingScreen(replay: true),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
                   const SizedBox(height: 22),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        'Your Sports',
-                        style: Theme.of(context).textTheme.titleLarge,
+                      Row(
+                        children: [
+                          Text(
+                            'Your Sports',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.info_outline, size: 18),
+                            tooltip: 'About ratings',
+                            onPressed: _showRatingInfoDialog,
+                          ),
+                        ],
                       ),
                       TextButton.icon(
                         onPressed: () async {
@@ -376,6 +484,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ),
                       );
                     }),
+                  const SizedBox(height: 22),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: cardColor,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: AppColors.danger.withValues(alpha: 0.4)),
+                    ),
+                    child: ListTile(
+                      leading: const Icon(
+                        Icons.delete_outline,
+                        color: AppColors.danger,
+                      ),
+                      title: const Text(
+                        'Delete Account',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.danger,
+                        ),
+                      ),
+                      onTap: _handleDeleteAccount,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -438,15 +568,64 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
                 const SizedBox(width: 10),
               ],
-              Text(
-                '${data['rating']}',
-                style: const TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.accent,
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    formatRating(data['sport'], data['rating']),
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.accent,
+                    ),
+                  ),
+                  if (ratingBandFor(data['sport'], data['rating']) != null)
+                    Text(
+                      ratingBandFor(data['sport'], data['rating'])!,
+                      style: TextStyle(fontSize: 10, color: subtleTextColor),
+                    ),
+                ],
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showRatingInfoDialog() async {
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('About ratings'),
+        content: const SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Your rating moves after every confirmed match — up when you '
+                'win, down when you lose, more for a surprising result and '
+                'less for an expected one.',
+              ),
+              SizedBox(height: 12),
+              Text(
+                'Each sport uses its own practical scale, so the numbers '
+                "aren't comparable across sports:",
+              ),
+              SizedBox(height: 8),
+              Text('• Badminton: roughly 6000–8500'),
+              Text('• Tennis: roughly 2.5–13'),
+              Text('• Table Tennis: roughly 1000–2500'),
+              Text('• Pickleball: roughly 2.5–7'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Got it'),
           ),
         ],
       ),

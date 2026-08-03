@@ -9,6 +9,7 @@ import '../date_utils.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
+import '../widgets/match_photo_thumbnail.dart';
 import '../utils.dart';
 
 class PendingMatchesScreen extends StatefulWidget {
@@ -361,6 +362,12 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                                         ],
                                       ),
                                     ),
+                                    if (m['photo_url'] != null) ...[
+                                      const SizedBox(width: 8),
+                                      MatchPhotoThumbnail(
+                                        photoUrl: m['photo_url'],
+                                      ),
+                                    ],
                                   ],
                                 ),
                                 if (_opponentContacts(m).isNotEmpty) ...[

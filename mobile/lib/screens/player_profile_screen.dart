@@ -5,6 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
 import '../date_utils.dart';
+import '../utils.dart';
+import '../constants/sports.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/player_avatar.dart';
 import '../widgets/match_badges.dart';
@@ -583,13 +585,23 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
                 ),
                 const SizedBox(width: 10),
               ],
-              Text(
-                '${data['rating']}',
-                style: const TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.accent,
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    formatRating(data['sport'], data['rating']),
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.accent,
+                    ),
+                  ),
+                  if (ratingBandFor(data['sport'], data['rating']) != null)
+                    Text(
+                      ratingBandFor(data['sport'], data['rating'])!,
+                      style: TextStyle(fontSize: 10, color: subtleTextColor),
+                    ),
+                ],
               ),
             ],
           ),

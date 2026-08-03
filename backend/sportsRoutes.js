@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('./db');
+const { escapeLikePattern } = require('./sql');
 
 // Starting ratings per sport per skill level, matching each sport's real
 // practical rating range as used in this app.
@@ -52,6 +53,7 @@ router.get('/search', async (req, res) => {
   }
 
   try {
+    const likePattern = `%${escapeLikePattern(q.trim())}%`;
     // Only join user_sports (and so only surface a rating) when both sport
     // and format are given — a bare LEFT JOIN with optional filters would
     // return one row per sport/format a user has, and DISTINCT can't collapse
@@ -65,7 +67,7 @@ router.get('/search', async (req, res) => {
              WHERE u.username ILIKE $1
              ORDER BY u.username
              LIMIT 20`,
-            [`%${q.trim()}%`, sport, format]
+            [likePattern, sport, format]
           )
         : await pool.query(
             `SELECT u.id, u.username, u.location, NULL AS rating
@@ -73,7 +75,7 @@ router.get('/search', async (req, res) => {
              WHERE u.username ILIKE $1
              ORDER BY u.username
              LIMIT 20`,
-            [`%${q.trim()}%`]
+            [likePattern]
           );
     res.status(200).json({ users: result.rows });
   } catch (err) {

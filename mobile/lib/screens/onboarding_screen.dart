@@ -23,7 +23,7 @@ const List<_OnboardingSlide> _slides = [
     icon: Icons.emoji_events_outlined,
     title: 'Join or host tournaments',
     description:
-        'Round robins, knockouts, fixed-match leagues, or fully custom formats — join one, or set your own rules as host.',
+        'Round robins, knockouts, fixed-match formats, or fully custom rules — join one, or set your own as host.',
   ),
   _OnboardingSlide(
     icon: Icons.trending_up,
@@ -40,7 +40,14 @@ const List<_OnboardingSlide> _slides = [
 ];
 
 class OnboardingScreen extends StatefulWidget {
-  const OnboardingScreen({super.key});
+  // GAP-18 — set when this screen is reopened from Profile ("How RallyX
+  // works") instead of shown at first launch. Skip/finish then just pops
+  // back to Profile instead of touching the hasSeenOnboarding flag or
+  // routing to /login, which would otherwise dump an already-logged-in user
+  // onto the login screen.
+  final bool replay;
+
+  const OnboardingScreen({super.key, this.replay = false});
 
   @override
   State<OnboardingScreen> createState() => _OnboardingScreenState();
@@ -51,6 +58,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   int _page = 0;
 
   Future<void> _finish() async {
+    if (widget.replay) {
+      if (!mounted) return;
+      Navigator.pop(context);
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('hasSeenOnboarding', true);
     if (!mounted) return;
@@ -89,7 +101,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 padding: const EdgeInsets.all(12),
                 child: TextButton(
                   onPressed: _finish,
-                  child: const Text('Skip'),
+                  child: Text(widget.replay ? 'Close' : 'Skip'),
                 ),
               ),
             ),
@@ -162,7 +174,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 width: double.infinity,
                 child: ElevatedButton(
                   onPressed: _next,
-                  child: Text(isLast ? 'Get Started' : 'Next'),
+                  child: Text(
+                    isLast ? (widget.replay ? 'Done' : 'Get Started') : 'Next',
+                  ),
                 ),
               ),
             ),

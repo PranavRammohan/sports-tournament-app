@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 import '../main.dart';
 import '../config.dart';
 import '../constants/areas.dart';
+import '../validators.dart';
 import 'regenerate_schedule_dialog.dart';
 
 class EditLeagueScreen extends StatefulWidget {
@@ -25,6 +26,7 @@ class EditLeagueScreen extends StatefulWidget {
 }
 
 class _EditLeagueScreenState extends State<EditLeagueScreen> {
+  final _formKey = GlobalKey<FormState>();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _academyController = TextEditingController();
   String? _selectedArea;
@@ -52,6 +54,9 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
   bool _pointsEnabled = true;
   final TextEditingController _pointsWinController = TextEditingController();
   final TextEditingController _pointsLossController = TextEditingController();
+
+  bool _restrictCapacity = false;
+  final TextEditingController _maxPlayersController = TextEditingController();
 
   @override
   void initState() {
@@ -82,6 +87,11 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
     _pointsEnabled = l['points_enabled'] != false;
     _pointsWinController.text = (l['points_win'] ?? 2).toString();
     _pointsLossController.text = (l['points_loss'] ?? 0).toString();
+
+    _restrictCapacity = l['max_players'] != null;
+    if (l['max_players'] != null) {
+      _maxPlayersController.text = l['max_players'].toString();
+    }
 
     if (_isDoubles) {
       _loadPartnerStatus();
@@ -120,6 +130,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
     _academyController.dispose();
     _pointsWinController.dispose();
     _pointsLossController.dispose();
+    _maxPlayersController.dispose();
     super.dispose();
   }
 
@@ -348,10 +359,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
   }
 
   Future<void> _handleSave() async {
-    if (_nameController.text.trim().isEmpty) {
-      _showAlert('Missing name', 'Please enter a tournament name.');
-      return;
-    }
+    if (!_formKey.currentState!.validate()) return;
     if (_selectedArea == null) {
       _showAlert('Missing area', 'Please select an area.');
       return;
@@ -378,6 +386,26 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
         _showAlert(
           'Invalid window',
           'Registration start must be before registration end.',
+        );
+        return;
+      }
+    }
+
+    int? maxPlayers;
+    if (_restrictCapacity) {
+      maxPlayers = int.tryParse(_maxPlayersController.text.trim());
+      final memberCount = widget.league['member_count'] ?? 0;
+      if (maxPlayers == null || maxPlayers < 1) {
+        _showAlert(
+          'Missing info',
+          'Enter a max player count of at least 1, or turn off the player limit.',
+        );
+        return;
+      }
+      if (maxPlayers < memberCount) {
+        _showAlert(
+          'Too low',
+          "Max players can't be set below the current roster size ($memberCount).",
         );
         return;
       }
@@ -429,6 +457,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
           'pointsEnabled': _pointsEnabled,
           'pointsWin': _pointsEnabled ? pointsWin : null,
           'pointsLoss': _pointsEnabled ? pointsLoss : null,
+          'maxPlayers': _restrictCapacity ? maxPlayers : null,
         }),
       );
 
@@ -481,11 +510,14 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
       appBar: AppBar(title: const Text('Edit Tournament')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
-        child: Column(
+        child: Form(
+          key: _formKey,
+          child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextField(
+            TextFormField(
               controller: _nameController,
+              validator: (v) => requiredField(v, label: 'Tournament name'),
               decoration: const InputDecoration(
                 labelText: 'Tournament Name',
                 prefixIcon: Icon(Icons.emoji_events_outlined),
@@ -544,8 +576,8 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
             const SizedBox(height: 4),
             Text(
               widget.league['format'] == 'doubles'
-                  ? 'Doubles league. Sport, format, and category cannot be changed after creation — this affects players\' rating history.'
-                  : 'Singles league. Sport, format, and category cannot be changed after creation — this affects players\' rating history.',
+                  ? 'Doubles tournament. Sport, format, and category cannot be changed after creation — this affects players\' rating history.'
+                  : 'Singles tournament. Sport, format, and category cannot be changed after creation — this affects players\' rating history.',
               style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
             ),
             const SizedBox(height: 6),
@@ -621,6 +653,23 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                     ),
                   ),
                 ],
+              ),
+            const SizedBox(height: 14),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _restrictCapacity,
+              onChanged: (v) => setState(() => _restrictCapacity = v),
+              title: const Text('Limit number of players'),
+            ),
+            if (_restrictCapacity)
+              TextField(
+                controller: _maxPlayersController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Max players',
+                  isDense: true,
+                  prefixIcon: Icon(Icons.groups_outlined),
+                ),
               ),
             if (_isDoubles) ...[
               const SizedBox(height: 14),
@@ -739,7 +788,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                         SharePlus.instance.share(
                           ShareParams(
                             text:
-                                'Join my tournament "${_nameController.text.trim()}" on RallyX! Use join code: $_joinCode',
+                                'Join my tournament "${_nameController.text.trim()}" on RallyX! Use join code: $_joinCode\nOr tap: rallyx://join/$_joinCode',
                           ),
                         );
                       },
@@ -851,6 +900,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                   : const Text('Save Changes'),
             ),
           ],
+          ),
         ),
       ),
     );

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
+import '../utils.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/player_avatar.dart';
 import '../widgets/match_badges.dart';
@@ -688,18 +689,18 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 6),
           if (isTableTennis && singles != null)
-            _sportRatingLine('Rating', singles)
+            _sportRatingLine('Rating', singles, sport)
           else ...[
-            if (singles != null) _sportRatingLine('Singles', singles),
+            if (singles != null) _sportRatingLine('Singles', singles, sport),
             if (singles != null && doubles != null) const SizedBox(height: 4),
-            if (doubles != null) _sportRatingLine('Doubles', doubles),
+            if (doubles != null) _sportRatingLine('Doubles', doubles, sport),
           ],
         ],
       ),
     );
   }
 
-  Widget _sportRatingLine(String label, Map<String, dynamic> data) {
+  Widget _sportRatingLine(String label, Map<String, dynamic> data, String sport) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -708,7 +709,7 @@ class _HomeScreenState extends State<HomeScreen> {
           style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
         ),
         Text(
-          '${data['rating']}',
+          formatRating(sport, data['rating']),
           style: const TextStyle(
             fontSize: 15,
             fontWeight: FontWeight.bold,

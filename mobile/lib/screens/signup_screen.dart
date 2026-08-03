@@ -7,6 +7,7 @@ import '../main.dart';
 import '../api_client.dart';
 import '../utils.dart';
 import '../constants/areas.dart';
+import '../validators.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -16,6 +17,7 @@ class SignupScreen extends StatefulWidget {
 }
 
 class _SignupScreenState extends State<SignupScreen> {
+  final _formKey = GlobalKey<FormState>();
   final TextEditingController _firstNameController = TextEditingController();
   final TextEditingController _lastNameController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
@@ -49,6 +51,8 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 
   Future<void> _handleSignup() async {
+    if (!_formKey.currentState!.validate()) return;
+
     final firstName = _firstNameController.text.trim();
     final lastName = _lastNameController.text.trim();
     final email = _emailController.text.trim();
@@ -56,37 +60,12 @@ class _SignupScreenState extends State<SignupScreen> {
     final password = _passwordController.text;
     final confirmPassword = _confirmPasswordController.text;
 
-    if (firstName.isEmpty ||
-        lastName.isEmpty ||
-        email.isEmpty ||
-        phoneNumber.isEmpty ||
-        password.isEmpty ||
-        confirmPassword.isEmpty) {
-      _showAlert('Missing fields', 'Please fill in all fields.');
-      return;
-    }
-    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
-      _showAlert('Invalid email', 'Enter a valid email address.');
-      return;
-    }
     if (_selectedArea == null) {
       _showAlert('Missing area', 'Please select your area in Bangalore.');
       return;
     }
     if (_selectedGender == null) {
       _showAlert('Missing gender', 'Please select your gender.');
-      return;
-    }
-    if (password.length < 6) {
-      _showAlert('Weak password', 'Password must be at least 6 characters.');
-      return;
-    }
-    if (password != confirmPassword) {
-      _showAlert('Mismatch', 'Passwords do not match.');
-      return;
-    }
-    if (!RegExp(r'^\d{10}$').hasMatch(phoneNumber)) {
-      _showAlert('Invalid number', 'Enter a valid 10-digit mobile number.');
       return;
     }
 
@@ -102,7 +81,6 @@ class _SignupScreenState extends State<SignupScreen> {
           'phoneNumber': phoneNumber,
           'password': password,
           'confirmPassword': confirmPassword,
-          'city': 'Bangalore',
           'area': _selectedArea,
           'gender': _selectedGender,
           'profilePicUrl': _profileImageBase64,
@@ -157,17 +135,14 @@ class _SignupScreenState extends State<SignupScreen> {
     final avatarIconColor = isDark
         ? Colors.grey.shade500
         : Colors.grey.shade400;
-    final disabledFieldColor = isDark
-        ? Colors.grey.shade800
-        : Colors.grey.shade100;
-    final primaryTextColor =
-        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
 
     return Scaffold(
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(28.0),
-          child: Column(
+          child: Form(
+            key: _formKey,
+            child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -236,8 +211,10 @@ class _SignupScreenState extends State<SignupScreen> {
               Row(
                 children: [
                   Expanded(
-                    child: TextField(
+                    child: TextFormField(
                       controller: _firstNameController,
+                      validator: (v) =>
+                          requiredField(v, label: 'First name'),
                       decoration: const InputDecoration(
                         labelText: 'First Name',
                         prefixIcon: Icon(Icons.person_outline),
@@ -246,27 +223,30 @@ class _SignupScreenState extends State<SignupScreen> {
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: TextField(
+                    child: TextFormField(
                       controller: _lastNameController,
+                      validator: (v) => requiredField(v, label: 'Last name'),
                       decoration: const InputDecoration(labelText: 'Last Name'),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 14),
-              TextField(
+              TextFormField(
                 controller: _emailController,
                 keyboardType: TextInputType.emailAddress,
+                validator: emailValidator,
                 decoration: const InputDecoration(
                   labelText: 'Email',
                   prefixIcon: Icon(Icons.email_outlined),
                 ),
               ),
               const SizedBox(height: 14),
-              TextField(
+              TextFormField(
                 controller: _phoneController,
                 keyboardType: TextInputType.phone,
                 maxLength: 10,
+                validator: phoneValidator,
                 decoration: const InputDecoration(
                   labelText: 'Mobile Number',
                   prefixIcon: Icon(Icons.phone_outlined),
@@ -274,9 +254,10 @@ class _SignupScreenState extends State<SignupScreen> {
                 ),
               ),
               const SizedBox(height: 6),
-              TextField(
+              TextFormField(
                 controller: _passwordController,
                 obscureText: _obscurePassword,
+                validator: passwordValidator,
                 decoration: InputDecoration(
                   labelText: 'Password',
                   prefixIcon: const Icon(Icons.lock_outline),
@@ -286,15 +267,20 @@ class _SignupScreenState extends State<SignupScreen> {
                           ? Icons.visibility_off
                           : Icons.visibility,
                     ),
+                    tooltip: _obscurePassword ? 'Show password' : 'Hide password',
                     onPressed: () =>
                         setState(() => _obscurePassword = !_obscurePassword),
                   ),
                 ),
               ),
               const SizedBox(height: 14),
-              TextField(
+              TextFormField(
                 controller: _confirmPasswordController,
                 obscureText: _obscureConfirmPassword,
+                validator: (v) => confirmPasswordValidator(
+                  v,
+                  _passwordController.text,
+                ),
                 decoration: InputDecoration(
                   labelText: 'Confirm Password',
                   prefixIcon: const Icon(Icons.lock_outline),
@@ -304,6 +290,9 @@ class _SignupScreenState extends State<SignupScreen> {
                           ? Icons.visibility_off
                           : Icons.visibility,
                     ),
+                    tooltip: _obscureConfirmPassword
+                        ? 'Show password'
+                        : 'Hide password',
                     onPressed: () => setState(
                       () => _obscureConfirmPassword = !_obscureConfirmPassword,
                     ),
@@ -333,18 +322,6 @@ class _SignupScreenState extends State<SignupScreen> {
                 ],
               ),
               const SizedBox(height: 18),
-              TextField(
-                enabled: false,
-                style: TextStyle(color: primaryTextColor),
-                decoration: InputDecoration(
-                  labelText: 'City',
-                  prefixIcon: const Icon(Icons.location_city_outlined),
-                  filled: true,
-                  fillColor: disabledFieldColor,
-                ),
-                controller: TextEditingController(text: 'Bangalore'),
-              ),
-              const SizedBox(height: 14),
               DropdownButtonFormField<String>(
                 initialValue: _selectedArea,
                 decoration: const InputDecoration(
@@ -381,6 +358,7 @@ class _SignupScreenState extends State<SignupScreen> {
                 child: const Text('Already have an account? Log in'),
               ),
             ],
+            ),
           ),
         ),
       ),

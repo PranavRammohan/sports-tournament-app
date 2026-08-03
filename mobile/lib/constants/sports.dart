@@ -41,3 +41,31 @@ String capitalizeLevel(String level) {
       .map((w) => w.isEmpty ? w : w[0].toUpperCase() + w.substring(1))
       .join(' ');
 }
+
+// sportLevels above is keyed by the Title Case display name ("Table
+// Tennis"), but a rating value in hand is always tagged with the backend's
+// snake_case sport key ("table_tennis") — same reverse transform used
+// elsewhere in the mobile app (e.g. add_guest_dialog.dart's _sportLabel).
+String _titleCaseSport(String sport) => sport
+    .split('_')
+    .map((w) => w.isEmpty ? w : w[0].toUpperCase() + w.substring(1))
+    .join(' ');
+
+// GAP-11 — turns a raw rating number into a human skill-level label, so
+// "6500.0" also reads as "Intermediate" somewhere on screen. sportLevels'
+// thresholds are already in ascending order, so the band is just the
+// highest threshold at or below the given rating. `rating` is `dynamic`
+// since it may arrive as a String (see utils.dart's formatRating).
+String? ratingBandFor(String sport, dynamic rating) {
+  final value = rating is num ? rating : num.tryParse(rating.toString());
+  if (value == null) return null;
+  final levels = sportLevels[_titleCaseSport(sport)];
+  if (levels == null) return null;
+  String? band;
+  for (final entry in levels.entries) {
+    if (value >= entry.value) {
+      band = entry.key;
+    }
+  }
+  return band == null ? null : capitalizeLevel(band);
+}

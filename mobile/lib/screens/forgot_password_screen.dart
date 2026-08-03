@@ -1,6 +1,7 @@
 // forgot_password_screen.dart
 import 'package:flutter/material.dart';
 import '../api_client.dart';
+import '../validators.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
@@ -10,6 +11,7 @@ class ForgotPasswordScreen extends StatefulWidget {
 }
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
+  final _formKey = GlobalKey<FormState>();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _newPasswordController = TextEditingController();
@@ -20,33 +22,11 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   bool _obscureConfirm = true;
 
   Future<void> _handleReset() async {
+    if (!_formKey.currentState!.validate()) return;
+
     final email = _emailController.text.trim();
     final phoneNumber = _phoneController.text.trim();
     final newPassword = _newPasswordController.text;
-    final confirmPassword = _confirmPasswordController.text;
-
-    if (email.isEmpty ||
-        phoneNumber.isEmpty ||
-        newPassword.isEmpty ||
-        confirmPassword.isEmpty) {
-      _showAlert('Missing fields', 'Please fill in all fields.');
-      return;
-    }
-    if (!RegExp(r'^\d{10}$').hasMatch(phoneNumber)) {
-      _showAlert('Invalid number', 'Enter a valid 10-digit mobile number.');
-      return;
-    }
-    if (newPassword.length < 6) {
-      _showAlert(
-        'Weak password',
-        'New password must be at least 6 characters.',
-      );
-      return;
-    }
-    if (newPassword != confirmPassword) {
-      _showAlert('Mismatch', 'Passwords do not match.');
-      return;
-    }
 
     setState(() => _loading = true);
 
@@ -120,7 +100,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       appBar: AppBar(title: const Text('Forgot Password')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
-        child: Column(
+        child: Form(
+          key: _formKey,
+          child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
@@ -128,19 +110,21 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               style: TextStyle(fontSize: 13, color: Colors.grey),
             ),
             const SizedBox(height: 20),
-            TextField(
+            TextFormField(
               controller: _emailController,
               keyboardType: TextInputType.emailAddress,
+              validator: emailValidator,
               decoration: const InputDecoration(
                 labelText: 'Email',
                 prefixIcon: Icon(Icons.email_outlined),
               ),
             ),
             const SizedBox(height: 14),
-            TextField(
+            TextFormField(
               controller: _phoneController,
               keyboardType: TextInputType.phone,
               maxLength: 10,
+              validator: phoneValidator,
               decoration: const InputDecoration(
                 labelText: 'Mobile Number',
                 prefixIcon: Icon(Icons.phone_outlined),
@@ -148,9 +132,10 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               ),
             ),
             const SizedBox(height: 6),
-            TextField(
+            TextFormField(
               controller: _newPasswordController,
               obscureText: _obscureNew,
+              validator: passwordValidator,
               decoration: InputDecoration(
                 labelText: 'New Password',
                 prefixIcon: const Icon(Icons.lock_outline),
@@ -158,14 +143,17 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                   icon: Icon(
                     _obscureNew ? Icons.visibility_off : Icons.visibility,
                   ),
+                  tooltip: _obscureNew ? 'Show password' : 'Hide password',
                   onPressed: () => setState(() => _obscureNew = !_obscureNew),
                 ),
               ),
             ),
             const SizedBox(height: 14),
-            TextField(
+            TextFormField(
               controller: _confirmPasswordController,
               obscureText: _obscureConfirm,
+              validator: (v) =>
+                  confirmPasswordValidator(v, _newPasswordController.text),
               decoration: InputDecoration(
                 labelText: 'Confirm New Password',
                 prefixIcon: const Icon(Icons.lock_reset),
@@ -173,6 +161,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                   icon: Icon(
                     _obscureConfirm ? Icons.visibility_off : Icons.visibility,
                   ),
+                  tooltip: _obscureConfirm ? 'Show password' : 'Hide password',
                   onPressed: () =>
                       setState(() => _obscureConfirm = !_obscureConfirm),
                 ),
@@ -193,6 +182,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                   : const Text('Reset Password'),
             ),
           ],
+          ),
         ),
       ),
     );

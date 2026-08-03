@@ -1,4 +1,5 @@
 // browse_leagues_screen.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../main.dart';
@@ -19,6 +20,15 @@ const List<String> _browseSports = [
   'pickleball',
 ];
 
+const int _browsePageSize = 20;
+
+const Map<String, String> _browseSortLabels = {
+  'starting': 'Starting soonest',
+  'newest': 'Newest',
+  'players': 'Most players',
+  'name': 'Name (A-Z)',
+};
+
 class BrowseLeaguesScreen extends StatefulWidget {
   const BrowseLeaguesScreen({super.key});
 
@@ -35,8 +45,13 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
   String? _filterFormat;
   String? _filterSport;
   List<String> _filterAreas = [];
+  String _sort = 'starting';
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+  Timer? _searchDebounce;
+
+  bool _loadingMore = false;
+  bool _hasMore = false;
 
   final TextEditingController _codeController = TextEditingController();
   bool _joiningByCode = false;
@@ -50,7 +65,25 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
+  }
+
+  Map<String, String> _buildQueryParams({required int offset}) {
+    final queryParams = <String, String>{
+      'sort': _sort,
+      'limit': '$_browsePageSize',
+      'offset': '$offset',
+    };
+    if (_filterFormat != null) queryParams['format'] = _filterFormat!;
+    if (_filterSport != null) queryParams['sport'] = _filterSport!;
+    if (_filterAreas.isNotEmpty) {
+      queryParams['area'] = _filterAreas.join(',');
+    }
+    if (_searchQuery.trim().isNotEmpty) {
+      queryParams['q'] = _searchQuery.trim();
+    }
+    return queryParams;
   }
 
   Future<void> _loadLeagues() async {
@@ -59,17 +92,17 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
       _error = null;
     });
     try {
-      final queryParams = <String, String>{};
-      if (_filterFormat != null) queryParams['format'] = _filterFormat!;
-      if (_filterSport != null) queryParams['sport'] = _filterSport!;
-      if (_filterAreas.isNotEmpty) {
-        queryParams['area'] = _filterAreas.join(',');
-      }
-
-      final res = await ApiClient.get('/leagues', queryParams: queryParams);
+      final res = await ApiClient.get(
+        '/leagues',
+        queryParams: _buildQueryParams(offset: 0),
+      );
 
       if (res.statusCode == 200) {
-        setState(() => _leagues = res.data['leagues']);
+        final leagues = res.data['leagues'] as List<dynamic>;
+        setState(() {
+          _leagues = leagues;
+          _hasMore = leagues.length == _browsePageSize;
+        });
       } else {
         setState(() => _error = res.errorOr('Could not load tournaments.'));
       }
@@ -78,6 +111,34 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
     } finally {
       setState(() => _loading = false);
     }
+  }
+
+  Future<void> _loadMore() async {
+    if (_loadingMore || !_hasMore) return;
+    setState(() => _loadingMore = true);
+    try {
+      final res = await ApiClient.get(
+        '/leagues',
+        queryParams: _buildQueryParams(offset: _leagues.length),
+      );
+      if (res.statusCode == 200) {
+        final more = res.data['leagues'] as List<dynamic>;
+        setState(() {
+          _leagues = [..._leagues, ...more];
+          _hasMore = more.length == _browsePageSize;
+        });
+      }
+    } catch (err) {
+      // Non-critical — the user can just tap "Load more" again.
+    } finally {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() => _searchQuery = value);
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 350), _loadLeagues);
   }
 
   Future<void> _pickAreas() async {
@@ -212,6 +273,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
             title: const Text('Browse Tournaments'),
             leading: IconButton(
               icon: const Icon(Icons.arrow_back),
+              tooltip: 'Back',
               onPressed: () => Navigator.pop(context, _didJoinAny),
             ),
             bottom: const TabBar(
@@ -276,13 +338,43 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                   ? null
                   : IconButton(
                       icon: const Icon(Icons.clear, size: 18),
+                      tooltip: 'Clear search',
                       onPressed: () {
                         _searchController.clear();
                         setState(() => _searchQuery = '');
                       },
                     ),
             ),
-            onChanged: (v) => setState(() => _searchQuery = v),
+            onChanged: _onSearchChanged,
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  initialValue: _sort,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Sort',
+                    isDense: true,
+                  ),
+                  items: _browseSortLabels.entries
+                      .map(
+                        (e) => DropdownMenuItem(
+                          value: e.key,
+                          child: Text(e.value),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) {
+                    setState(() => _sort = v ?? 'starting');
+                    _loadLeagues();
+                  },
+                ),
+              ),
+            ],
           ),
         ),
         Padding(
@@ -377,47 +469,53 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                     ),
                   ),
                 )
-              : Builder(
-                  builder: (context) {
-                    final query = _searchQuery.trim().toLowerCase();
-                    final visibleLeagues = query.isEmpty
-                        ? _leagues
-                        : _leagues
-                              .where(
-                                (l) => (l['name'] as String)
-                                    .toLowerCase()
-                                    .contains(query),
-                              )
-                              .toList();
-
-                    return RefreshIndicator(
-                      onRefresh: _loadLeagues,
-                      child: visibleLeagues.isEmpty
-                          ? ListView(
-                              children: [
-                                SizedBox(
-                                  height:
-                                      MediaQuery.of(context).size.height * 0.4,
-                                  child: FriendlyEmptyState(
-                                    icon: Icons.search_off,
-                                    title: query.isEmpty
-                                        ? 'No tournaments match these filters.'
-                                        : 'No tournaments match "$_searchQuery".',
-                                    subtitle: 'Try a different area, sport, or search term.',
+              : RefreshIndicator(
+                  onRefresh: _loadLeagues,
+                  child: _leagues.isEmpty
+                      ? ListView(
+                          children: [
+                            SizedBox(
+                              height: MediaQuery.of(context).size.height * 0.4,
+                              child: FriendlyEmptyState(
+                                icon: Icons.search_off,
+                                title: _searchQuery.trim().isEmpty
+                                    ? 'No tournaments match these filters.'
+                                    : 'No tournaments match "$_searchQuery".',
+                                subtitle: 'Try a different area, sport, or search term.',
+                              ),
+                            ),
+                          ],
+                        )
+                      : ListView.separated(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: _leagues.length + (_hasMore ? 1 : 0),
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            if (index == _leagues.length) {
+                              return Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 12,
                                   ),
+                                  child: _loadingMore
+                                      ? const SizedBox(
+                                          height: 20,
+                                          width: 20,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : TextButton(
+                                          onPressed: _loadMore,
+                                          child: const Text('Load more'),
+                                        ),
                                 ),
-                              ],
-                            )
-                          : ListView.separated(
-                              padding: const EdgeInsets.all(16),
-                              itemCount: visibleLeagues.length,
-                              separatorBuilder: (_, __) =>
-                                  const SizedBox(height: 8),
-                              itemBuilder: (context, index) {
-                                final league = visibleLeagues[index];
-                                final alreadyJoined =
-                                    league['is_member'] == true;
-                                return FadeInListItem(
+                              );
+                            }
+                            final league = _leagues[index];
+                            final alreadyJoined = league['is_member'] == true;
+                            return FadeInListItem(
                                   index: index,
                                   child: Container(
                                   decoration: BoxDecoration(
@@ -482,7 +580,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                                   ),
                                                   const SizedBox(height: 3),
                                                   Text(
-                                                    '${formatDateOnly(league['season_start'])} – ${formatDateOnly(league['season_end'])} · ${league['member_count']} players',
+                                                    '${formatDateOnly(league['season_start'])} – ${formatDateOnly(league['season_end'])} · ${league['max_players'] != null ? '${league['member_count']}/${league['max_players']}' : league['member_count']} players',
                                                     style: TextStyle(
                                                       fontSize: 11,
                                                       color: subtleTextColor,
@@ -500,6 +598,9 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                                         league['gender_category'] ==
                                                                 'mens'
                                                             ? "Men's"
+                                                            : league['gender_category'] ==
+                                                                  'mixed'
+                                                            ? 'Mixed'
                                                             : "Women's",
                                                         subtleTextColor,
                                                       ),
@@ -551,8 +652,6 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                 );
                               },
                             ),
-                    );
-                  },
                 ),
         ),
       ],

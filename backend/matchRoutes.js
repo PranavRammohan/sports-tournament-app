@@ -5,6 +5,8 @@ const pool = require('./db');
 const { calculateNewRatings, reverseRatingChange } = require('./ratingEngine');
 const { createNotification, createNotifications } = require('./notifications');
 const { isLeagueAdmin } = require('./authorization');
+const { redactOwnSidePhones } = require('./privacy');
+const { recordAudit } = require('./audit');
 const { RouteError } = pool;
 
 // A reasonable ceiling for any single unit count (games/points won in a
@@ -303,6 +305,7 @@ router.post('/report', async (req, res) => {
     opponentUnits,
     iWon,
     setScores,
+    photoUrl,
   } = req.body;
 
   if (!leagueId || !opponentId || myUnits == null || opponentUnits == null || iWon == null) {
@@ -321,7 +324,7 @@ router.post('/report', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
@@ -329,7 +332,7 @@ router.post('/report', async (req, res) => {
       return res.status(400).json({ error: 'This tournament has been marked completed and is now read-only.' });
     }
     if (league.host_enters_scores) {
-      return res.status(403).json({ error: 'This league requires the host to enter all scores.' });
+      return res.status(403).json({ error: 'This tournament requires the host to enter all scores.' });
     }
 
     if (league.format === 'doubles' && (!partnerId || !opponentPartnerId)) {
@@ -377,8 +380,8 @@ router.post('/report', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO matches
         (league_id, player1_id, player1_partner_id, player2_id, player2_partner_id,
-         player1_units, player2_units, winner_id, reported_by, status, format, set_scores, scheduled_match_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11, $12)
+         player1_units, player2_units, winner_id, reported_by, status, format, set_scores, scheduled_match_id, photo_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11, $12, $13)
        RETURNING *`,
       [
         leagueId,
@@ -393,6 +396,7 @@ router.post('/report', async (req, res) => {
         league.format,
         JSON.stringify(setScores || []),
         scheduledMatchId,
+        photoUrl || null,
       ]
     );
 
@@ -423,6 +427,7 @@ router.post('/report-as-host', async (req, res) => {
     player2Units,
     player1Won,
     setScores,
+    photoUrl,
   } = req.body;
 
   if (!leagueId || !player1Id || !player2Id || player1Units == null || player2Units == null || player1Won == null) {
@@ -444,12 +449,12 @@ router.post('/report-as-host', async (req, res) => {
     await pool.withTransaction(async (client) => {
       const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
       if (leagueResult.rows.length === 0) {
-        throw new RouteError(404, 'League not found.');
+        throw new RouteError(404, 'Tournament not found.');
       }
       const league = leagueResult.rows[0];
 
       if (!league.host_enters_scores || !(await isLeagueAdmin(client, league, userId))) {
-        throw new RouteError(403, 'Only the host can enter scores directly for this league.');
+        throw new RouteError(403, 'Only the host can enter scores directly for this tournament.');
       }
       if (league.status === 'completed') {
         throw new RouteError(400, 'This tournament has been marked completed and is now read-only.');
@@ -479,8 +484,8 @@ router.post('/report-as-host', async (req, res) => {
       const result = await client.query(
         `INSERT INTO matches
           (league_id, player1_id, player1_partner_id, player2_id, player2_partner_id,
-           player1_units, player2_units, winner_id, reported_by, status, format, set_scores, scheduled_match_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'confirmed', $10, $11, $12)
+           player1_units, player2_units, winner_id, reported_by, status, format, set_scores, scheduled_match_id, photo_url)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'confirmed', $10, $11, $12, $13)
          RETURNING *`,
         [
           leagueId,
@@ -495,6 +500,7 @@ router.post('/report-as-host', async (req, res) => {
           league.format,
           JSON.stringify(setScores || []),
           scheduledMatchId,
+          photoUrl || null,
         ]
       );
 
@@ -532,7 +538,7 @@ router.get('/pending', async (req, res) => {
       `SELECT * FROM (
          SELECT m.id, m.league_id, NULL::int as round_number,
                 m.player1_id, m.player2_id, m.player1_partner_id, m.player2_partner_id,
-                m.player1_units, m.player2_units, m.winner_id, m.reported_by, m.set_scores, m.created_at,
+                m.player1_units, m.player2_units, m.winner_id, m.reported_by, m.set_scores, m.photo_url, m.created_at,
                 l.sport, l.format as league_format, l.name as league_name,
                 p1.username as player1_username, p1.phone_number as player1_phone,
                 p2.username as player2_username, p2.phone_number as player2_phone,
@@ -551,7 +557,7 @@ router.get('/pending', async (req, res) => {
          UNION ALL
          SELECT pm.id, pm.league_id, pm.round_number,
                 pm.player1_id, pm.player2_id, pm.player1_partner_id, pm.player2_partner_id,
-                pm.player1_units, pm.player2_units, pm.winner_id, pm.reported_by, pm.set_scores, pm.created_at,
+                pm.player1_units, pm.player2_units, pm.winner_id, pm.reported_by, pm.set_scores, pm.photo_url, pm.created_at,
                 l.sport, l.format as league_format, l.name as league_name,
                 p1.username as player1_username, p1.phone_number as player1_phone,
                 p2.username as player2_username, p2.phone_number as player2_phone,
@@ -572,7 +578,7 @@ router.get('/pending', async (req, res) => {
        LIMIT 100`,
       [userId]
     );
-    res.status(200).json({ matches: result.rows });
+    res.status(200).json({ matches: redactOwnSidePhones(result.rows, userId) });
   } catch (err) {
     console.error('Get pending matches error:', err);
     res.status(500).json({ error: 'Something went wrong fetching pending matches.' });
@@ -588,7 +594,7 @@ router.get('/pending-reported-by-me', async (req, res) => {
       `SELECT * FROM (
          SELECT m.id, m.league_id, NULL::int as round_number,
                 m.player1_id, m.player2_id, m.player1_partner_id, m.player2_partner_id,
-                m.player1_units, m.player2_units, m.winner_id, m.set_scores, m.created_at,
+                m.player1_units, m.player2_units, m.winner_id, m.set_scores, m.photo_url, m.created_at,
                 l.sport, l.format as league_format,
                 p1.username as player1_username, p2.username as player2_username,
                 pp1.username as player1_partner_username, pp2.username as player2_partner_username,
@@ -603,7 +609,7 @@ router.get('/pending-reported-by-me', async (req, res) => {
          UNION ALL
          SELECT pm.id, pm.league_id, pm.round_number,
                 pm.player1_id, pm.player2_id, pm.player1_partner_id, pm.player2_partner_id,
-                pm.player1_units, pm.player2_units, pm.winner_id, pm.set_scores, pm.created_at,
+                pm.player1_units, pm.player2_units, pm.winner_id, pm.set_scores, pm.photo_url, pm.created_at,
                 l.sport, l.format as league_format,
                 p1.username as player1_username, p2.username as player2_username,
                 pp1.username as player1_partner_username, pp2.username as player2_partner_username,
@@ -666,7 +672,7 @@ router.get('/history', async (req, res) => {
     const result = await pool.query(
       `SELECT * FROM (
          SELECT m.id, m.league_id, m.player1_id, m.player2_id, m.player1_partner_id, m.player2_partner_id,
-                m.player1_units, m.player2_units, m.set_scores, m.winner_id, m.created_at,
+                m.player1_units, m.player2_units, m.set_scores, m.winner_id, m.photo_url, m.created_at,
                 m.player1_rating_change, m.player2_rating_change,
                 m.player1_partner_rating_change, m.player2_partner_rating_change,
                 l.sport, l.format as league_format, l.area, l.name as league_name,
@@ -683,7 +689,7 @@ router.get('/history', async (req, res) => {
            AND (m.player1_id = $1 OR m.player2_id = $1 OR m.player1_partner_id = $1 OR m.player2_partner_id = $1)
          UNION ALL
          SELECT pm.id, pm.league_id, pm.player1_id, pm.player2_id, pm.player1_partner_id, pm.player2_partner_id,
-                pm.player1_units, pm.player2_units, pm.set_scores, pm.winner_id, pm.created_at,
+                pm.player1_units, pm.player2_units, pm.set_scores, pm.winner_id, pm.photo_url, pm.created_at,
                 pm.player1_rating_change, pm.player2_rating_change,
                 pm.player1_partner_rating_change, pm.player2_partner_rating_change,
                 l.sport, l.format as league_format, l.area, l.name as league_name,
@@ -1018,7 +1024,7 @@ router.put('/:id/edit-report', async (req, res) => {
 router.put('/:id/edit', async (req, res) => {
   const userId = req.userId;
   const matchId = req.params.id;
-  const { player1Units, player2Units, player1Won, setScores } = req.body;
+  const { player1Units, player2Units, player1Won, setScores, photoUrl } = req.body;
 
   if (player1Units == null || player2Units == null || player1Won == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
@@ -1051,7 +1057,7 @@ router.put('/:id/edit', async (req, res) => {
       const league = leagueResult.rows[0];
 
       if (!(await isLeagueAdmin(client, league, userId))) {
-        throw new RouteError(403, 'Only the league host can edit match scores.');
+        throw new RouteError(403, 'Only the tournament host or a co-host can edit match scores.');
       }
 
       hasDrift = await checkForRatingDrift(client, match, league);
@@ -1059,14 +1065,25 @@ router.put('/:id/edit', async (req, res) => {
       await reverseMatchEffects(client, match, league);
 
       const winnerId = player1Won ? match.player1_id : match.player2_id;
+      // photoUrl is optional-on-edit: only overwrite it when the caller
+      // actually sent one, so re-editing just the score doesn't wipe out a
+      // photo attached at report time.
       await client.query(
-        `UPDATE matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4
-         WHERE id = $5`,
-        [player1Units, player2Units, winnerId, JSON.stringify(setScores || []), matchId]
+        `UPDATE matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4,
+           photo_url = COALESCE($5, photo_url)
+         WHERE id = $6`,
+        [player1Units, player2Units, winnerId, JSON.stringify(setScores || []), photoUrl || null, matchId]
       );
 
       const updatedMatchResult = await client.query('SELECT * FROM matches WHERE id = $1', [matchId]);
       await finalizeMatch(client, updatedMatchResult.rows[0], league);
+
+      await recordAudit(client, {
+        leagueId: league.id,
+        actorId: userId,
+        action: 'edit_score',
+        summary: `Edited confirmed match #${matchId}.`,
+      });
     });
 
     res.status(200).json({
@@ -1103,7 +1120,7 @@ router.delete('/:id', async (req, res) => {
       const league = leagueResult.rows[0];
 
       if (!(await isLeagueAdmin(client, league, userId))) {
-        throw new RouteError(403, 'Only the league host can delete a match.');
+        throw new RouteError(403, 'Only the tournament host or a co-host can delete a match.');
       }
 
       if (match.status === 'confirmed') {
@@ -1115,6 +1132,13 @@ router.delete('/:id', async (req, res) => {
       }
 
       await client.query('DELETE FROM matches WHERE id = $1', [matchId]);
+
+      await recordAudit(client, {
+        leagueId: league.id,
+        actorId: userId,
+        action: 'delete_match',
+        summary: `Deleted match #${matchId}.`,
+      });
     });
 
     res.status(200).json({ message: 'Match deleted.', warning });

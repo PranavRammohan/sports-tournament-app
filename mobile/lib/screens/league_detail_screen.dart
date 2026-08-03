@@ -1,17 +1,21 @@
 // league_detail_screen.dart
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import '../main.dart';
 import '../api_client.dart';
 import '../utils.dart';
+import '../date_utils.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/player_avatar.dart';
 import '../widgets/match_badges.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
+import '../widgets/match_photo_thumbnail.dart';
 import 'report_match_screen.dart';
 import 'playoffs_screen.dart';
 import 'regenerate_schedule_dialog.dart';
@@ -22,6 +26,7 @@ import 'group_management_screen.dart';
 import 'groups_overview_screen.dart';
 import 'player_profile_screen.dart';
 import 'partner_selection_screen.dart';
+import 'audit_log_screen.dart';
 
 class LeagueDetailScreen extends StatefulWidget {
   final int leagueId;
@@ -39,6 +44,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   bool _showPairs = true;
   List<dynamic> _schedule = [];
   List<dynamic> _bracket = [];
+  List<dynamic> _announcements = [];
   int? _currentUserId;
   bool _loading = true;
   bool _deleting = false;
@@ -179,6 +185,13 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         if (scheduleRes.statusCode == 200) {
           setState(() => _schedule = scheduleRes.data['schedule']);
         }
+      }
+
+      final announcementsRes = await ApiClient.get(
+        '/leagues/${widget.leagueId}/announcements',
+      );
+      if (announcementsRes.statusCode == 200) {
+        setState(() => _announcements = announcementsRes.data['announcements']);
       }
     } catch (err) {
       setState(() => _error = 'Could not reach the server.');
@@ -443,6 +456,201 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     } finally {
       if (mounted) setState(() => _deleting = false);
     }
+  }
+
+  // GAP-12 — clones this tournament's configuration into a brand-new one for
+  // a new season (name + dates only; no matches/schedule/groups are copied).
+  Future<void> _showCloneDialog() async {
+    final nameController = TextEditingController(
+      text: '${_league!['name']} (New Season)',
+    );
+    DateTime? start;
+    DateTime? end;
+    bool copyRoster = false;
+    bool submitting = false;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          title: const Text('Start next season'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(labelText: 'Tournament Name'),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () async {
+                          final now = DateTime.now();
+                          final picked = await showDatePicker(
+                            context: ctx,
+                            initialDate: now.add(const Duration(days: 1)),
+                            firstDate: now,
+                            lastDate: now.add(const Duration(days: 730)),
+                          );
+                          if (picked != null) {
+                            setDialogState(() => start = picked);
+                          }
+                        },
+                        child: Text(
+                          start == null
+                              ? 'Start date'
+                              : formatDateOnly(start!.toIso8601String()),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () async {
+                          final now = DateTime.now();
+                          final picked = await showDatePicker(
+                            context: ctx,
+                            initialDate: start ?? now.add(const Duration(days: 1)),
+                            firstDate: now,
+                            lastDate: now.add(const Duration(days: 730)),
+                          );
+                          if (picked != null) {
+                            setDialogState(() => end = picked);
+                          }
+                        },
+                        child: Text(
+                          end == null
+                              ? 'End date'
+                              : formatDateOnly(end!.toIso8601String()),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: copyRoster,
+                  onChanged: (v) => setDialogState(() => copyRoster = v ?? false),
+                  title: const Text('Copy the current roster'),
+                  subtitle: const Text(
+                    'Everyone joins fresh with 0 points. Matches and schedules are never copied.',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: submitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: submitting
+                  ? null
+                  : () async {
+                      if (nameController.text.trim().isEmpty ||
+                          start == null ||
+                          end == null) {
+                        ScaffoldMessenger.of(ctx).showSnackBar(
+                          const SnackBar(
+                            content: Text('Enter a name and both dates.'),
+                          ),
+                        );
+                        return;
+                      }
+                      if (end!.isBefore(start!)) {
+                        ScaffoldMessenger.of(ctx).showSnackBar(
+                          const SnackBar(
+                            content: Text('End date must be after start date.'),
+                          ),
+                        );
+                        return;
+                      }
+                      setDialogState(() => submitting = true);
+                      final res = await ApiClient.post(
+                        '/leagues/${widget.leagueId}/clone',
+                        body: {
+                          'name': nameController.text.trim(),
+                          'seasonStart': start!.toIso8601String().split('T')[0],
+                          'seasonEnd': end!.toIso8601String().split('T')[0],
+                          'copyRoster': copyRoster,
+                        },
+                      );
+                      if (!ctx.mounted) return;
+                      if (res.statusCode == 201) {
+                        Navigator.pop(ctx);
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('New season created.'),
+                            backgroundColor: AppColors.success,
+                          ),
+                        );
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => LeagueDetailScreen(
+                              leagueId: res.data['league']['id'],
+                            ),
+                          ),
+                        );
+                      } else {
+                        setDialogState(() => submitting = false);
+                        ScaffoldMessenger.of(ctx).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              res.errorOr('Could not create the new season.'),
+                            ),
+                          ),
+                        );
+                      }
+                    },
+              child: submitting
+                  ? const SizedBox(
+                      height: 16,
+                      width: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Create'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // GAP-07 — fetches a CSV from the backend, writes it to a temp file, and
+  // hands it to the OS share sheet. The backend returns { filename, csv } as
+  // JSON (not a raw text/csv body) since ApiClient always jsonDecodes.
+  Future<void> _exportCsv(String type) async {
+    HapticFeedback.selectionClick();
+    final res = await ApiClient.get(
+      '/leagues/${widget.leagueId}/export',
+      queryParams: {'type': type},
+    );
+    if (!mounted) return;
+    if (res.statusCode != 200) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(res.errorOr('Could not export.'))),
+      );
+      return;
+    }
+
+    final filename = res.data['filename'] as String;
+    final csv = res.data['csv'] as String;
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/$filename');
+    await file.writeAsString(csv);
+
+    await SharePlus.instance.share(
+      ShareParams(files: [XFile(file.path)], text: filename),
+    );
   }
 
   Future<void> _confirmLeave() async {
@@ -910,6 +1118,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           context: context,
           builder: (ctx) => _EditFixtureDialog(
             format: _league!['format'],
+            sport: _league!['sport'],
             members: _leaderboard,
             initialPlayer1Id: f['player1_id'],
             initialPlayer1PartnerId: f['player1_partner_id'],
@@ -1364,7 +1573,9 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
   String? _ratingFor(int? playerId) {
     if (playerId == null) return null;
     for (final p in _leaderboard) {
-      if (p['id'] == playerId) return '${p['rating']}';
+      if (p['id'] == playerId) {
+        return formatRating(_league!['sport'], p['rating']);
+      }
     }
     return null;
   }
@@ -1520,6 +1731,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                       builder: (_) => AddPlayersScreen(
                         leagueId: widget.leagueId,
                         sport: _league!['sport'],
+                        genderCategory: _league!['gender_category'],
                       ),
                     ),
                   );
@@ -1543,6 +1755,43 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 tooltip: 'Delete tournament',
                 onPressed: _deleting ? null : _confirmDelete,
               ),
+            if (isHost || _isMember)
+              PopupMenuButton<String>(
+                tooltip: 'More',
+                onSelected: (value) {
+                  if (value == 'clone') _showCloneDialog();
+                  if (value == 'export_standings') _exportCsv('standings');
+                  if (value == 'export_fixtures') _exportCsv('fixtures');
+                  if (value == 'audit_log') {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => AuditLogScreen(leagueId: widget.leagueId),
+                      ),
+                    );
+                  }
+                },
+                itemBuilder: (ctx) => [
+                  if (isHost)
+                    const PopupMenuItem(
+                      value: 'clone',
+                      child: Text('Start next season'),
+                    ),
+                  const PopupMenuItem(
+                    value: 'export_standings',
+                    child: Text('Export standings (CSV)'),
+                  ),
+                  const PopupMenuItem(
+                    value: 'export_fixtures',
+                    child: Text('Export fixtures (CSV)'),
+                  ),
+                  if (isHost)
+                    const PopupMenuItem(
+                      value: 'audit_log',
+                      child: Text('Activity log'),
+                    ),
+                ],
+              ),
           ],
           bottom: const TabBar(
             indicatorColor: AppColors.accent,
@@ -1563,6 +1812,136 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           ],
         ),
         floatingActionButton: _buildActionButton(isHost),
+      ),
+    );
+  }
+
+  // GAP-15 — announcements board. A one-way board (host/co-host posts,
+  // members read), not chat — this card shows just the latest post with a
+  // "See all" expansion, plus a compose action for admins.
+  Widget _buildAnnouncementsCard(bool isHost) {
+    if (_announcements.isEmpty && !isHost) return const SizedBox.shrink();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final latest = _announcements.isNotEmpty ? _announcements.first : null;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.cardBorder(isDark)),
+        boxShadow: AppShadows.card(isDark),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.campaign_outlined, size: 18),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Announcements',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ],
+              ),
+              if (isHost)
+                IconButton(
+                  icon: const Icon(Icons.add_comment_outlined, size: 20),
+                  tooltip: 'Post announcement',
+                  onPressed: _composeAnnouncement,
+                ),
+            ],
+          ),
+          if (latest == null)
+            const Text(
+              'No announcements yet.',
+              style: TextStyle(fontSize: 12, color: AppColors.textGrey),
+            )
+          else ...[
+            Text(latest['body'], maxLines: 3, overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 4),
+            Text(
+              '${latest['author_username'] ?? 'Host'} · ${formatRelativeTime(latest['created_at'])}',
+              style: const TextStyle(fontSize: 11, color: AppColors.textGrey),
+            ),
+            if (_announcements.length > 1)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _showAllAnnouncements,
+                  child: Text('See all (${_announcements.length})'),
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _composeAnnouncement() async {
+    final controller = TextEditingController();
+    final posted = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Post announcement'),
+        content: TextField(
+          controller: controller,
+          maxLines: 5,
+          decoration: const InputDecoration(
+            hintText: 'e.g. Courts have changed to Court 3, starting at 7pm.',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              if (controller.text.trim().isEmpty) return;
+              final res = await ApiClient.post(
+                '/leagues/${widget.leagueId}/announcements',
+                body: {'body': controller.text.trim()},
+              );
+              if (!ctx.mounted) return;
+              Navigator.pop(ctx, res.statusCode == 201);
+            },
+            child: const Text('Post'),
+          ),
+        ],
+      ),
+    );
+    if (posted == true) _loadAll();
+  }
+
+  Future<void> _showAllAnnouncements() async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        expand: false,
+        builder: (ctx, scrollController) => ListView.separated(
+          controller: scrollController,
+          padding: const EdgeInsets.all(16),
+          itemCount: _announcements.length,
+          separatorBuilder: (_, _) => const Divider(),
+          itemBuilder: (context, index) {
+            final a = _announcements[index];
+            return ListTile(
+              title: Text(a['body']),
+              subtitle: Text(
+                '${a['author_username'] ?? 'Host'} · ${formatRelativeTime(a['created_at'])}',
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -1638,7 +2017,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '${formatDateOnly(_league!['season_start'])} to ${formatDateOnly(_league!['season_end'])} · ${_leaderboard.length} players · ${_league!['format']} · ${_league!['gender_category'] == 'mens' ? "Men's" : "Women's"}',
+                  '${formatDateOnly(_league!['season_start'])} to ${formatDateOnly(_league!['season_end'])} · ${_leaderboard.length} players · ${_league!['format']} · ${_league!['gender_category'] == 'mens' ? "Men's" : _league!['gender_category'] == 'mixed' ? 'Mixed' : "Women's"}',
                   style: const TextStyle(
                     fontSize: 12,
                     color: AppColors.textGrey,
@@ -1774,7 +2153,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                             SharePlus.instance.share(
                               ShareParams(
                                 text:
-                                    'Join my tournament "${_league!['name']}" on RallyX! Use join code: ${_league!['join_code']}',
+                                    'Join my tournament "${_league!['name']}" on RallyX! Use join code: ${_league!['join_code']}\nOr tap: rallyx://join/${_league!['join_code']}',
                               ),
                             );
                           },
@@ -1782,10 +2161,29 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                       ],
                     ),
                   ),
+                ] else if (_league!['is_private'] != true) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        HapticFeedback.selectionClick();
+                        SharePlus.instance.share(
+                          ShareParams(
+                            text:
+                                'Check out "${_league!['name']}" on RallyX!\nrallyx://league/${widget.leagueId}',
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.share_outlined, size: 16),
+                      label: const Text('Share'),
+                    ),
+                  ),
                 ],
               ],
             ),
           ),
+          _buildAnnouncementsCard(isHost),
           if (isHost)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
@@ -2217,7 +2615,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                             if (_isLeagueStyle && _pointsEnabled)
                               PointsBadge(points: player['points']),
                             Text(
-                              'Rating: ${player['rating']}',
+                              'Rating: ${formatRating(_league!['sport'], player['rating'])}',
                               style: TextStyle(
                                 fontSize: _isLeagueStyle ? 10 : 13,
                                 fontWeight: _isLeagueStyle
@@ -2393,7 +2791,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                 style: const TextStyle(fontSize: 11),
               ),
               trailing: Text(
-                'Avg: ${pair['avg_rating']}',
+                'Avg: ${formatRating(_league!['sport'], pair['avg_rating'])}',
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.bold,
@@ -2992,6 +3390,10 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                         style: TextStyle(fontSize: 13, color: primaryTextColor),
                       ),
               ),
+              if (f['photo_url'] != null) ...[
+                MatchPhotoThumbnail(photoUrl: f['photo_url'], size: 28),
+                const SizedBox(width: 6),
+              ],
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                 decoration: BoxDecoration(
@@ -3508,6 +3910,7 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
 
 class _EditFixtureDialog extends StatefulWidget {
   final String format;
+  final String sport;
   final List<dynamic> members;
   final int? initialPlayer1Id;
   final int? initialPlayer1PartnerId;
@@ -3518,6 +3921,7 @@ class _EditFixtureDialog extends StatefulWidget {
 
   const _EditFixtureDialog({
     required this.format,
+    required this.sport,
     required this.members,
     this.initialPlayer1Id,
     this.initialPlayer1PartnerId,
@@ -3569,7 +3973,7 @@ class _EditFixtureDialogState extends State<_EditFixtureDialog> {
           (m) => DropdownMenuItem(
             value: m['id'] as int,
             child: Text(
-              '${m['username']} (${m['rating']})${m['is_guest'] == true ? ' · Guest' : ''}',
+              '${m['username']} (${formatRating(widget.sport, m['rating'])})${m['is_guest'] == true ? ' · Guest' : ''}',
             ),
           ),
         )

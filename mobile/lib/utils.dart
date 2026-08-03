@@ -16,38 +16,69 @@ Future<void> launchPhoneCall(String phone) async {
   }
 }
 
-/// Thrown by [pickProfileImageAsDataUri] when the picked photo is too large
-/// to send even after compression — callers should catch this and show a
-/// friendly message instead of letting the upload hit the server's body-size
-/// limit (see server.js's express.json({limit}) and the PayloadTooLargeError
-/// that used to surface instead).
+/// Thrown by [pickImageAsDataUri] when the picked photo is too large to send
+/// even after compression — callers should catch this and show a friendly
+/// message instead of letting the upload hit the server's body-size limit
+/// (see server.js's express.json({limit}) and the PayloadTooLargeError that
+/// used to surface instead). Kept under its original name — it predates
+/// match photos (GAP-17) and every existing call site already catches it by
+/// this name.
 class ProfileImageTooLargeException implements Exception {}
 
-/// Picks a photo from the gallery, downsizes it for an avatar (never
-/// rendered above ~88px anywhere in the app), and returns both the raw bytes
-/// (for an immediate MemoryImage preview) and the base64 data-URI the
-/// backend expects. Returns null if the user cancels the picker.
+/// Picks a photo from the gallery and returns both the raw bytes (for an
+/// immediate MemoryImage preview) and the base64 data-URI the backend
+/// expects. Returns null if the user cancels the picker.
 ///
 /// `imageQuality`/`maxWidth`/`maxHeight` on ImagePicker are advisory and are
 /// silently ignored on some platforms (notably web and a few Android
 /// devices), so this still checks the encoded size afterward and throws
 /// [ProfileImageTooLargeException] rather than trust compression alone.
-Future<({Uint8List bytes, String dataUri})?> pickProfileImageAsDataUri() async {
+/// `maxSizeBytes` scales with the use case — an avatar (never rendered above
+/// ~88px anywhere) can stay tiny; a match scorecard photo needs more room.
+Future<({Uint8List bytes, String dataUri})?> pickImageAsDataUri({
+  int maxWidth = 256,
+  int maxHeight = 256,
+  int imageQuality = 60,
+  int maxSizeBytes = 2 * 1024 * 1024,
+}) async {
   final picker = ImagePicker();
   final picked = await picker.pickImage(
     source: ImageSource.gallery,
-    maxWidth: 256,
-    maxHeight: 256,
-    imageQuality: 60,
+    maxWidth: maxWidth.toDouble(),
+    maxHeight: maxHeight.toDouble(),
+    imageQuality: imageQuality,
   );
   if (picked == null) return null;
 
   final bytes = await picked.readAsBytes();
   final dataUri = 'data:image/jpeg;base64,${base64Encode(bytes)}';
-  if (dataUri.length > 2 * 1024 * 1024) {
+  if (dataUri.length > maxSizeBytes) {
     throw ProfileImageTooLargeException();
   }
   return (bytes: bytes, dataUri: dataUri);
+}
+
+/// Avatar-sized picker — thin wrapper over [pickImageAsDataUri] with the
+/// defaults every existing avatar call site already relied on.
+Future<({Uint8List bytes, String dataUri})?> pickProfileImageAsDataUri() {
+  return pickImageAsDataUri();
+}
+
+/// GAP-11 — every rating render site used to just interpolate the raw JSON
+/// value, so a numeric(6,2) column showed up as "6500.0" or "3.50". Badminton
+/// and table tennis ratings are always whole numbers in practice; tennis and
+/// pickleball carry one decimal of real precision.
+///
+/// `rating` is `dynamic` because Postgres numeric columns arrive over JSON
+/// as strings (only bigint gets coerced server-side — see db.js) — accepting
+/// either a String or a num means callers don't each have to parse first.
+String formatRating(String sport, dynamic rating) {
+  final value = rating is num ? rating : num.tryParse(rating.toString());
+  if (value == null) return '${rating ?? ''}';
+  if (sport == 'badminton' || sport == 'table_tennis') {
+    return value.round().toString();
+  }
+  return value.toStringAsFixed(1);
 }
 
 /// Formats an ISO date string like "2026-07-14T18:30:00.000Z" into "14 Jul 2026",

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../main.dart';
 import '../api_client.dart';
 import '../widgets/loading_skeleton.dart';
+import '../widgets/player_name.dart';
 
 class GroupManagementScreen extends StatefulWidget {
   final int leagueId;
@@ -1306,10 +1307,28 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                         child: Row(
                           children: [
                             Expanded(
-                              child: Text(
-                                '${m['displayName']} (${m['rating']})',
-                                style: const TextStyle(fontSize: 13),
-                              ),
+                              child: _isDoubles
+                                  ? Text(
+                                      '${m['displayName']} (${m['rating']})',
+                                      style: const TextStyle(fontSize: 13),
+                                    )
+                                  : Row(
+                                      children: [
+                                        Flexible(
+                                          child: PlayerName(
+                                            userId: m['id'] as int?,
+                                            name: m['displayName'] ?? '',
+                                            isGuest: m['is_guest'] == true,
+                                            style: const TextStyle(fontSize: 13),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        Text(
+                                          ' (${m['rating']})',
+                                          style: const TextStyle(fontSize: 13),
+                                        ),
+                                      ],
+                                    ),
                             ),
                             if (candidateGroups.isNotEmpty)
                               PopupMenuButton<int>(
@@ -1369,10 +1388,28 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
       child: Row(
         children: [
           Expanded(
-            child: Text(
-              '${member['displayName']} (${member['rating']})',
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-            ),
+            child: _isDoubles
+                ? Text(
+                    '${member['displayName']} (${member['rating']})',
+                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                  )
+                : Row(
+                    children: [
+                      Flexible(
+                        child: PlayerName(
+                          userId: member['id'] as int?,
+                          name: member['displayName'] ?? '',
+                          isGuest: member['is_guest'] == true,
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Text(
+                        ' (${member['rating']})',
+                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                      ),
+                    ],
+                  ),
           ),
           DropdownButton<int>(
             hint: const Text('Assign to...', style: TextStyle(fontSize: 12)),

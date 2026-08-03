@@ -18,23 +18,34 @@ const Map<String, String> _sportEmojis = {
   'table_tennis': '🏓',
 };
 
+String _sportSemanticLabel(String key) => key
+    .split('_')
+    .map((w) => w.isEmpty ? w : w[0].toUpperCase() + w.substring(1))
+    .join(' ');
+
 Widget sportIcon(String sportKey, {double size = 20, Color? color}) {
   final key = sportKey.toLowerCase().replaceAll(' ', '_');
+  final label = _sportSemanticLabel(key);
 
   if (key == 'pickleball') {
-    return PickleballIcon(size: size, color: color);
+    return Semantics(
+      label: label,
+      child: PickleballIcon(size: size, color: color),
+    );
   }
 
   if (key == 'tennis' && color != null) {
-    return Icon(Icons.sports_tennis, size: size, color: color);
+    return Icon(Icons.sports_tennis, size: size, color: color, semanticLabel: label);
   }
 
   final emoji = Text(_sportEmojis[key] ?? '🏅', style: TextStyle(fontSize: size));
-  if (color == null) return emoji;
-  return ColorFiltered(
-    colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
-    child: emoji,
-  );
+  final iconWidget = color == null
+      ? emoji
+      : ColorFiltered(
+          colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+          child: emoji,
+        );
+  return Semantics(label: label, excludeSemantics: true, child: iconWidget);
 }
 
 class PickleballIcon extends StatelessWidget {

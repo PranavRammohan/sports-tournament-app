@@ -10,11 +10,13 @@ import 'add_guest_dialog.dart';
 class AddPlayersScreen extends StatefulWidget {
   final int leagueId;
   final String sport;
+  final String? genderCategory;
 
   const AddPlayersScreen({
     super.key,
     required this.leagueId,
     required this.sport,
+    this.genderCategory,
   });
 
   @override
@@ -143,6 +145,7 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
       builder: (ctx) => AddGuestDialog(
         leagueId: widget.leagueId,
         sport: widget.sport,
+        genderCategory: widget.genderCategory,
       ),
     );
     if (added == true && mounted) {
@@ -187,6 +190,7 @@ class _AddPlayersScreenState extends State<AddPlayersScreen> {
           title: const Text('Add Players'),
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
+            tooltip: 'Back',
             onPressed: _handleBack,
           ),
           actions: [

@@ -1,13 +1,44 @@
 --
 -- PostgreSQL database dump
 --
--- NOTE: this dump predates the Groups feature and is STALE with respect to
--- it — it has no `league_groups` table and is missing the group-related
--- columns on `league_members`/`scheduled_matches`/`playoff_matches`. Those
--- were hand-applied to the live DB without ever being captured in a fresh
--- dump. See `migration_group_formats.sql` for the authoritative, up-to-date
--- shape of the Groups-related schema (including the per-group format/lock
--- columns added there) until this file is regenerated via a real pg_dump.
+-- NOTE: this dump is from 2025-08-01 (last touched alongside
+-- migration_signup_fields.sql) and is STALE — every migration_*.sql file in
+-- this directory with a later date has been applied to the live database but
+-- never captured in a fresh pg_dump. Treat every migration file as more
+-- authoritative than this dump for the tables/columns it touches. As of
+-- batch 9, that's at least:
+--   - `notifications` table — entirely missing here (migration_notifications.sql)
+--   - `league_groups`, `group_members` tables — entirely missing here
+--     (migration_group_formats.sql, migration_group_membership_history.sql,
+--     migration_nested_groups.sql)
+--   - `league_audit_log`, `league_announcements` tables — entirely missing
+--     here (migration_audit_log.sql, migration_announcements.sql, batch 9)
+--   - `users.is_guest` (migration_guest_players.sql), `users.deleted_at`
+--     (migration_account_deletion.sql) — missing from the `users` table below
+--   - `users.city` shown below no longer exists — dropped by
+--     migration_drop_dead_columns.sql (batch 9)
+--   - `league_members.is_co_host` (migration_co_hosts.sql), `.partner_id`/
+--     `.partner_status` (migration_doubles_everywhere.sql) — missing below;
+--     `league_members.group_id` shown below no longer exists — dropped by
+--     migration_drop_dead_columns.sql (batch 9), superseded by `group_members`
+--   - `leagues.partner_mode` (migration_doubles_everywhere.sql),
+--     `.points_enabled`/`.points_win`/`.points_loss`
+--     (migration_custom_points.sql), `.max_players`
+--     (migration_league_capacity.sql), `.registration_start`/
+--     `.registration_end`/`.status` (migration_registration_and_status.sql,
+--     batch 9 — hand-applied to prod earlier with no migration file until now)
+--     — none shown on the `leagues` table below
+--   - `scheduled_matches.venue`/`playoff_matches.scheduled_time`/`.venue`
+--     (migration_venue_and_playoff_time.sql), `.group_id` on both tables
+--     (migration_group_formats.sql) — missing below
+--   - `matches.photo_url`/`playoff_matches.photo_url`
+--     (migration_match_photos.sql, batch 9) — missing below
+--   - `user_sports.rating` shown below as numeric(6,1) — widened to
+--     numeric(6,2) by migration_rating_precision.sql
+--
+-- Run `npm run dump-schema` (added in batch 9 — see package.json) against a
+-- real database connection to regenerate this file from scratch instead of
+-- trusting the hand-reconciled notes above.
 
 \restrict Jsi5gZP2x6Y7okLwm5r2zFg2zp6JvqYLA35STEb6a7mSBkrRRxosLw2yAUq8IPb
 

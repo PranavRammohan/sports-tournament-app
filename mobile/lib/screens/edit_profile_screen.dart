@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
 import '../utils.dart';
+import '../validators.dart';
 import 'change_password_screen.dart';
 import '../constants/areas.dart';
 
@@ -19,6 +20,7 @@ class EditProfileScreen extends StatefulWidget {
 }
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
+  final _formKey = GlobalKey<FormState>();
   late final TextEditingController _firstNameController;
   late final TextEditingController _lastNameController;
   late final TextEditingController _emailController;
@@ -80,28 +82,16 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 
   Future<void> _handleSave() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_selectedArea == null || _selectedGender == null) {
+      _showAlert('Missing fields', 'Please fill in all fields.');
+      return;
+    }
+
     final firstName = _firstNameController.text.trim();
     final lastName = _lastNameController.text.trim();
     final email = _emailController.text.trim();
     final phoneNumber = _phoneController.text.trim();
-
-    if (firstName.isEmpty ||
-        lastName.isEmpty ||
-        email.isEmpty ||
-        phoneNumber.isEmpty ||
-        _selectedArea == null ||
-        _selectedGender == null) {
-      _showAlert('Missing fields', 'Please fill in all fields.');
-      return;
-    }
-    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
-      _showAlert('Invalid email', 'Enter a valid email address.');
-      return;
-    }
-    if (!RegExp(r'^\d{10}$').hasMatch(phoneNumber)) {
-      _showAlert('Invalid number', 'Enter a valid 10-digit mobile number.');
-      return;
-    }
 
     HapticFeedback.lightImpact();
     setState(() => _loading = true);
@@ -112,7 +102,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         'lastName': lastName,
         'email': email,
         'phoneNumber': phoneNumber,
-        'city': 'Bangalore',
         'area': _selectedArea,
         'gender': _selectedGender,
       };
@@ -165,11 +154,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     final avatarIconColor = isDark
         ? Colors.grey.shade500
         : Colors.grey.shade400;
-    final disabledFieldColor = isDark
-        ? Colors.grey.shade800
-        : Colors.grey.shade100;
-    final primaryTextColor =
-        Theme.of(context).textTheme.bodyLarge?.color ?? AppColors.textDark;
 
     final hasExistingPhoto =
         _existingPhotoUrl != null && _existingPhotoUrl!.isNotEmpty;
@@ -188,7 +172,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       appBar: AppBar(title: const Text('Edit Profile')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
-        child: Column(
+        child: Form(
+          key: _formKey,
+          child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Center(
@@ -251,8 +237,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             Row(
               children: [
                 Expanded(
-                  child: TextField(
+                  child: TextFormField(
                     controller: _firstNameController,
+                    validator: (v) => requiredField(v, label: 'First name'),
                     decoration: const InputDecoration(
                       labelText: 'First Name',
                       prefixIcon: Icon(Icons.person_outline),
@@ -261,27 +248,30 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: TextField(
+                  child: TextFormField(
                     controller: _lastNameController,
+                    validator: (v) => requiredField(v, label: 'Last name'),
                     decoration: const InputDecoration(labelText: 'Last Name'),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 14),
-            TextField(
+            TextFormField(
               controller: _emailController,
               keyboardType: TextInputType.emailAddress,
+              validator: emailValidator,
               decoration: const InputDecoration(
                 labelText: 'Email',
                 prefixIcon: Icon(Icons.email_outlined),
               ),
             ),
             const SizedBox(height: 14),
-            TextField(
+            TextFormField(
               controller: _phoneController,
               keyboardType: TextInputType.phone,
               maxLength: 10,
+              validator: phoneValidator,
               decoration: const InputDecoration(
                 labelText: 'Mobile Number',
                 prefixIcon: Icon(Icons.phone_outlined),
@@ -317,18 +307,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               ],
             ),
             const SizedBox(height: 16),
-            TextField(
-              enabled: false,
-              style: TextStyle(color: primaryTextColor),
-              decoration: InputDecoration(
-                labelText: 'City',
-                prefixIcon: const Icon(Icons.location_city_outlined),
-                filled: true,
-                fillColor: disabledFieldColor,
-              ),
-              controller: TextEditingController(text: 'Bangalore'),
-            ),
-            const SizedBox(height: 14),
             DropdownButtonFormField<String>(
               initialValue: _selectedArea,
               isExpanded: true,
@@ -376,6 +354,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   : const Text('Save Changes'),
             ),
           ],
+          ),
         ),
       ),
     );

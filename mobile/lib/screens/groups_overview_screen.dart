@@ -9,6 +9,7 @@ import '../widgets/bracket_view.dart';
 import '../widgets/match_badges.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
+import '../widgets/player_name.dart';
 import 'add_manual_match_screen.dart';
 
 class GroupsOverviewScreen extends StatefulWidget {
@@ -332,10 +333,18 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
               ),
             ),
             Expanded(
-              child: Text(
-                m['displayName'],
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
+              child: _isDoubles
+                  ? Text(
+                      m['displayName'],
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    )
+                  : PlayerName(
+                      userId: m['id'] as int?,
+                      name: m['displayName'] ?? '',
+                      isGuest: m['is_guest'] == true,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                      overflow: TextOverflow.ellipsis,
+                    ),
             ),
             Text(
               '${m['matches_played']} matches · ${m['wins']}W ${m['losses']}L',

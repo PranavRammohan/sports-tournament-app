@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const pool = require('./db');
 const authMiddleware = require('./authMiddleware');
@@ -36,7 +37,6 @@ router.post('/signup', async (req, res) => {
     phoneNumber,
     password,
     confirmPassword,
-    city,
     area,
     gender,
     profilePicUrl,
@@ -92,9 +92,9 @@ router.post('/signup', async (req, res) => {
 
     const result = await pool.query(
       `INSERT INTO users
-         (username, first_name, last_name, email, phone_number, password_hash, city, location, gender, profile_pic_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING id, username, first_name, last_name, email, phone_number, city, location, gender, profile_pic_url, created_at`,
+         (username, first_name, last_name, email, phone_number, password_hash, location, gender, profile_pic_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, username, first_name, last_name, email, phone_number, location, gender, profile_pic_url, created_at`,
       [
         username,
         firstName.trim(),
@@ -102,7 +102,6 @@ router.post('/signup', async (req, res) => {
         normalizedEmail,
         phoneNumber,
         passwordHash,
-        city || 'Bangalore',
         area,
         gender,
         profilePicUrl || null,
@@ -132,7 +131,7 @@ router.post('/login', async (req, res) => {
     // their phone number while new accounts use email.
     const identifier = email.trim();
     const result = await pool.query(
-      'SELECT * FROM users WHERE LOWER(email) = LOWER($1) OR phone_number = $1',
+      'SELECT * FROM users WHERE (LOWER(email) = LOWER($1) OR phone_number = $1) AND deleted_at IS NULL',
       [identifier]
     );
     const user = result.rows[0];
@@ -156,7 +155,6 @@ router.post('/login', async (req, res) => {
         lastName: user.last_name,
         email: user.email,
         phoneNumber: user.phone_number,
-        city: user.city,
         location: user.location,
         gender: user.gender,
         profilePicUrl: user.profile_pic_url,
@@ -171,7 +169,7 @@ router.post('/login', async (req, res) => {
 
 router.patch('/profile', authMiddleware, async (req, res) => {
   const userId = req.userId;
-  const { firstName, lastName, email, phoneNumber, city, area, gender } = req.body;
+  const { firstName, lastName, email, phoneNumber, area, gender } = req.body;
 
   if (!firstName || !lastName || !email || !phoneNumber || !area || !gender) {
     return res.status(400).json({ error: 'All fields are required.' });
@@ -211,13 +209,13 @@ router.patch('/profile', authMiddleware, async (req, res) => {
     const result = await pool.query(
       updatingPhoto
         ? `UPDATE users SET username = $1, first_name = $2, last_name = $3, email = $4,
-             phone_number = $5, city = $6, location = $7, gender = $8, profile_pic_url = $9
-           WHERE id = $10
-           RETURNING id, username, first_name, last_name, email, phone_number, city, location, gender, profile_pic_url`
-        : `UPDATE users SET username = $1, first_name = $2, last_name = $3, email = $4,
-             phone_number = $5, city = $6, location = $7, gender = $8
+             phone_number = $5, location = $6, gender = $7, profile_pic_url = $8
            WHERE id = $9
-           RETURNING id, username, first_name, last_name, email, phone_number, city, location, gender, profile_pic_url`,
+           RETURNING id, username, first_name, last_name, email, phone_number, location, gender, profile_pic_url`
+        : `UPDATE users SET username = $1, first_name = $2, last_name = $3, email = $4,
+             phone_number = $5, location = $6, gender = $7
+           WHERE id = $8
+           RETURNING id, username, first_name, last_name, email, phone_number, location, gender, profile_pic_url`,
       updatingPhoto
         ? [
             username,
@@ -225,7 +223,6 @@ router.patch('/profile', authMiddleware, async (req, res) => {
             lastName.trim(),
             normalizedEmail,
             phoneNumber,
-            city || 'Bangalore',
             area,
             gender,
             profilePicUrl || null,
@@ -237,7 +234,6 @@ router.patch('/profile', authMiddleware, async (req, res) => {
             lastName.trim(),
             normalizedEmail,
             phoneNumber,
-            city || 'Bangalore',
             area,
             gender,
             userId,
@@ -300,7 +296,8 @@ router.post('/forgot-password', async (req, res) => {
     const identifier = email.trim();
     const result = await pool.query(
       `SELECT id FROM users
-       WHERE (LOWER(email) = LOWER($1) OR LOWER(username) = LOWER($1)) AND phone_number = $2`,
+       WHERE (LOWER(email) = LOWER($1) OR LOWER(username) = LOWER($1))
+         AND phone_number = $2 AND deleted_at IS NULL`,
       [identifier, phoneNumber]
     );
 
@@ -316,6 +313,67 @@ router.post('/forgot-password', async (req, res) => {
   } catch (err) {
     console.error('Forgot password error:', err);
     res.status(500).json({ error: 'Something went wrong resetting your password.' });
+  }
+});
+
+// ---------- DELETE ACCOUNT (GAP-10) ----------
+// A hard DELETE FROM users isn't viable — see migration_account_deletion.sql
+// for why — so this anonymizes the row instead: opponents' match history,
+// standings, and ratings stay intact, the account just reads "Deleted user"
+// from then on and can never log in again.
+router.delete('/account', authMiddleware, async (req, res) => {
+  const userId = req.userId;
+  const { password } = req.body;
+
+  if (!password) {
+    return res.status(400).json({ error: 'Enter your password to confirm.' });
+  }
+
+  try {
+    const userResult = await pool.query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    // Deleting an account is exactly the kind of action that shouldn't ride
+    // on a stale JWT alone — re-verify the password like change-password does.
+    const matches = await bcrypt.compare(password, userResult.rows[0].password_hash);
+    if (!matches) {
+      return res.status(401).json({ error: 'Incorrect password.' });
+    }
+
+    // A live tournament can't be left with a tombstone host — they must
+    // complete or delete those first.
+    const activeLeagues = await pool.query(
+      `SELECT name FROM leagues WHERE created_by = $1 AND status = 'active'`,
+      [userId]
+    );
+    if (activeLeagues.rows.length > 0) {
+      const names = activeLeagues.rows.map((l) => l.name).join(', ');
+      return res.status(409).json({
+        error: `Complete or delete these tournaments you host before deleting your account: ${names}.`,
+      });
+    }
+
+    await pool.withTransaction(async (client) => {
+      // A fresh random hash nobody holds — belt-and-suspenders alongside
+      // deleted_at, in case any code path still checks a password directly.
+      const lockHash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), SALT_ROUNDS);
+      await client.query(
+        `UPDATE users
+         SET username = 'Deleted user', first_name = NULL, last_name = NULL, email = NULL,
+             profile_pic_url = NULL, location = NULL, phone_number = $1,
+             password_hash = $2, deleted_at = now()
+         WHERE id = $3`,
+        [`DELETED${userId}`, lockHash, userId]
+      );
+      await client.query('DELETE FROM notifications WHERE user_id = $1', [userId]);
+    });
+
+    res.status(200).json({ message: 'Account deleted.' });
+  } catch (err) {
+    console.error('Delete account error:', err);
+    res.status(500).json({ error: 'Something went wrong deleting your account.' });
   }
 });
 

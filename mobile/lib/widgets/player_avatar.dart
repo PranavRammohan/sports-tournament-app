@@ -43,29 +43,37 @@ class PlayerAvatar extends StatelessWidget {
     );
 
     if (!hasPic) {
-      return CircleAvatar(
-        radius: radius,
-        backgroundColor: bg,
-        child: Text(_initial, style: initialStyle),
+      return Semantics(
+        label: "$username's avatar",
+        image: true,
+        child: CircleAvatar(
+          radius: radius,
+          backgroundColor: bg,
+          child: Text(_initial, style: initialStyle),
+        ),
       );
     }
 
-    return CircleAvatar(
-      radius: radius,
-      backgroundColor: bg,
-      child: ClipOval(
-        child: CachedNetworkImage(
-          imageUrl: profilePicUrl!,
-          width: radius * 2,
-          height: radius * 2,
-          fit: BoxFit.cover,
-          placeholder: (context, url) => SizedBox(
-            width: radius,
-            height: radius,
-            child: CircularProgressIndicator(strokeWidth: 2, color: fg),
+    return Semantics(
+      label: "$username's avatar",
+      image: true,
+      child: CircleAvatar(
+        radius: radius,
+        backgroundColor: bg,
+        child: ClipOval(
+          child: CachedNetworkImage(
+            imageUrl: profilePicUrl!,
+            width: radius * 2,
+            height: radius * 2,
+            fit: BoxFit.cover,
+            placeholder: (context, url) => SizedBox(
+              width: radius,
+              height: radius,
+              child: CircularProgressIndicator(strokeWidth: 2, color: fg),
+            ),
+            errorWidget: (context, url, error) =>
+                Text(_initial, style: initialStyle),
           ),
-          errorWidget: (context, url, error) =>
-              Text(_initial, style: initialStyle),
         ),
       ),
     );

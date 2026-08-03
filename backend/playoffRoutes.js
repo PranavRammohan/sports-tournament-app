@@ -6,6 +6,7 @@ const { calculateNewRatings, reverseRatingChange } = require('./ratingEngine');
 const { createNotifications } = require('./notifications');
 const { findSchedulingConflicts } = require('./scheduling');
 const { isLeagueAdmin } = require('./authorization');
+const { recordAudit } = require('./audit');
 const { RouteError } = pool;
 
 // Generates standard tournament bracket seed order for any power-of-two size,
@@ -172,7 +173,7 @@ function zigZagPairTeams(sortedMembersDesc) {
 
 // Builds teams from confirmed league_members partnerships. Throws a
 // user-facing error if any member lacks a confirmed partner.
-function buildTeamsFromConfirmedPairs(members) {
+function buildTeamsFromConfirmedPairs(members, league) {
   const byId = new Map(members.map((m) => [m.id, m]));
   const seen = new Set();
   const teams = [];
@@ -187,6 +188,11 @@ function buildTeamsFromConfirmedPairs(members) {
     const partner = byId.get(m.partner_id);
     seen.add(m.id);
     seen.add(partner.id);
+    if (league?.gender_category === 'mixed' && m.gender != null && m.gender === partner.gender) {
+      const err = new Error(`Mixed doubles pairs must be one man and one woman — ${m.username} and ${partner.username} are not.`);
+      err.code = 'UNEVEN_GENDER_SPLIT';
+      throw err;
+    }
     teams.push({
       player1: m,
       player2: partner,
@@ -204,8 +210,42 @@ function buildTeamsFromConfirmedPairs(members) {
   return teams;
 }
 
+// GAP-13 — mixed doubles playoff pairing, same points-first/rating-tiebreak
+// balancing as the host_auto branch below, just run separately across the
+// men's and women's lists so every team stays 1M + 1F.
+function zigZagPairMixedTeams(members) {
+  const byPointsThenRating = (a, b) => {
+    const pointsDiff = (b.points || 0) - (a.points || 0);
+    if (pointsDiff !== 0) return pointsDiff;
+    return parseFloat(b.rating) - parseFloat(a.rating);
+  };
+  const men = members.filter((m) => m.gender === 'M').sort(byPointsThenRating);
+  const women = members.filter((m) => m.gender === 'F').sort((a, b) => -byPointsThenRating(a, b));
+
+  if (men.length !== women.length) {
+    const err = new Error(
+      `Mixed doubles needs equal numbers of men and women so everyone gets paired — currently ${men.length} men and ${women.length} women. Add or remove a player, or switch to self-select/host-manual partner mode.`
+    );
+    err.code = 'UNEVEN_GENDER_SPLIT';
+    throw err;
+  }
+
+  return men.map((man, i) => {
+    const woman = women[i];
+    return {
+      player1: man,
+      player2: woman,
+      avgRating: (parseFloat(man.rating) + parseFloat(woman.rating)) / 2,
+      totalPoints: (man.points || 0) + (woman.points || 0),
+    };
+  });
+}
+
 function resolveDoublesTeams(league, members) {
   if (league.partner_mode === 'host_auto') {
+    if (league.gender_category === 'mixed') {
+      return zigZagPairMixedTeams(members);
+    }
     if (members.length % 2 !== 0) {
       const err = new Error(
         `Doubles needs an even number of players so everyone gets paired — currently ${members.length}. Add or remove one player, or switch to self-select/host-manual partner mode to intentionally leave someone out.`
@@ -224,7 +264,7 @@ function resolveDoublesTeams(league, members) {
     });
     return zigZagPairTeams(sorted);
   }
-  return buildTeamsFromConfirmedPairs(members);
+  return buildTeamsFromConfirmedPairs(members, league);
 }
 
 // Applies rating changes for a confirmed playoff match, then advances the
@@ -424,12 +464,12 @@ router.post('/:leagueId/generate', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can start playoffs.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can start playoffs.' });
     }
     if (league.status === 'completed') {
       return res.status(400).json({ error: 'This tournament has been marked completed and is now read-only.' });
@@ -437,7 +477,7 @@ router.post('/:leagueId/generate', async (req, res) => {
 
     const existing = await pool.query('SELECT id FROM playoff_matches WHERE league_id = $1 LIMIT 1', [leagueId]);
     if (existing.rows.length > 0) {
-      return res.status(409).json({ error: 'A bracket has already been started for this league.' });
+      return res.status(409).json({ error: 'A bracket has already been started for this tournament.' });
     }
 
     // Warn (rather than block outright) if the regular season still has
@@ -508,7 +548,7 @@ router.post('/:leagueId/generate', async (req, res) => {
 
     // Doubles: qualifierCount = number of TEAMS.
     const membersResult = await pool.query(
-      `SELECT u.id, us.rating, lm.partner_id, lm.partner_status, lm.points
+      `SELECT u.id, u.username, u.gender, us.rating, lm.partner_id, lm.partner_status, lm.points
        FROM league_members lm
        JOIN users u ON u.id = lm.user_id
        JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
@@ -522,7 +562,7 @@ router.post('/:leagueId/generate', async (req, res) => {
     try {
       teams = resolveDoublesTeams(league, members);
     } catch (buildErr) {
-      if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT') {
+      if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT' || buildErr.code === 'UNEVEN_GENDER_SPLIT') {
         return res.status(400).json({ error: buildErr.message });
       }
       throw buildErr;
@@ -586,12 +626,12 @@ router.delete('/:leagueId', async (req, res) => {
     await pool.withTransaction(async (client) => {
       const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
       if (leagueResult.rows.length === 0) {
-        throw new RouteError(404, 'League not found.');
+        throw new RouteError(404, 'Tournament not found.');
       }
       const league = leagueResult.rows[0];
 
       if (!(await isLeagueAdmin(client, league, userId))) {
-        throw new RouteError(403, 'Only the league host can remove the playoff bracket.');
+        throw new RouteError(403, 'Only the tournament host or a co-host can remove the playoff bracket.');
       }
 
       const confirmedMatches = await client.query(
@@ -604,8 +644,15 @@ router.delete('/:leagueId', async (req, res) => {
 
       const result = await client.query('DELETE FROM playoff_matches WHERE league_id = $1', [leagueId]);
       if (result.rowCount === 0) {
-        throw new RouteError(404, 'No playoff bracket exists for this league.');
+        throw new RouteError(404, 'No playoff bracket exists for this tournament.');
       }
+
+      await recordAudit(client, {
+        leagueId,
+        actorId: userId,
+        action: 'cancel_bracket',
+        summary: 'Removed the playoff bracket.',
+      });
     });
 
     res.status(200).json({ message: 'Playoff bracket removed.' });
@@ -716,7 +763,7 @@ async function advanceWinner(db, match) {
 router.post('/match/:matchId/report', async (req, res) => {
   const userId = req.userId;
   const matchId = req.params.matchId;
-  const { myUnits, opponentUnits, iWon, setScores } = req.body;
+  const { myUnits, opponentUnits, iWon, setScores, photoUrl } = req.body;
 
   if (myUnits == null || opponentUnits == null || iWon == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
@@ -744,7 +791,7 @@ router.post('/match/:matchId/report', async (req, res) => {
       return res.status(400).json({ error: 'This tournament has been marked completed and is now read-only.' });
     }
     if (league.host_enters_scores) {
-      return res.status(403).json({ error: 'This league requires the host to enter all scores.' });
+      return res.status(403).json({ error: 'This tournament requires the host to enter all scores.' });
     }
 
     if (match.status !== 'ready') {
@@ -763,9 +810,9 @@ router.post('/match/:matchId/report', async (req, res) => {
 
     await pool.query(
       `UPDATE playoff_matches SET status = 'reported', reported_by = $1,
-        player1_units = $2, player2_units = $3, winner_id = $4, set_scores = $5
-       WHERE id = $6`,
-      [userId, player1Units, player2Units, winnerId, JSON.stringify(setScores || []), matchId]
+        player1_units = $2, player2_units = $3, winner_id = $4, set_scores = $5, photo_url = $6
+       WHERE id = $7`,
+      [userId, player1Units, player2Units, winnerId, JSON.stringify(setScores || []), photoUrl || null, matchId]
     );
 
     res.status(200).json({ message: 'Result reported, waiting for confirmation.' });
@@ -839,7 +886,7 @@ router.put('/match/:matchId/edit-report', async (req, res) => {
 router.post('/match/:matchId/report-as-host', async (req, res) => {
   const userId = req.userId;
   const matchId = req.params.matchId;
-  const { player1Units, player2Units, player1Won, setScores } = req.body;
+  const { player1Units, player2Units, player1Won, setScores, photoUrl } = req.body;
 
   if (player1Units == null || player2Units == null || player1Won == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
@@ -866,7 +913,7 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
       const league = leagueResult.rows[0];
 
       if (!league.host_enters_scores || !(await isLeagueAdmin(client, league, userId))) {
-        throw new RouteError(403, 'Only the host can enter scores directly for this league.');
+        throw new RouteError(403, 'Only the host can enter scores directly for this tournament.');
       }
       if (league.status === 'completed') {
         throw new RouteError(400, 'This tournament has been marked completed and is now read-only.');
@@ -886,9 +933,9 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
 
       await client.query(
         `UPDATE playoff_matches SET reported_by = $1,
-          player1_units = $2, player2_units = $3, winner_id = $4, set_scores = $5
-         WHERE id = $6`,
-        [userId, player1Units, player2Units, winnerId, JSON.stringify(setScores || []), matchId]
+          player1_units = $2, player2_units = $3, winner_id = $4, set_scores = $5, photo_url = $6
+         WHERE id = $7`,
+        [userId, player1Units, player2Units, winnerId, JSON.stringify(setScores || []), photoUrl || null, matchId]
       );
 
       const updatedMatchResult = await client.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
@@ -925,7 +972,7 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
 router.put('/match/:matchId/edit-score', async (req, res) => {
   const userId = req.userId;
   const matchId = req.params.matchId;
-  const { player1Units, player2Units, player1Won, setScores } = req.body;
+  const { player1Units, player2Units, player1Won, setScores, photoUrl } = req.body;
 
   if (player1Units == null || player2Units == null || player1Won == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
@@ -958,7 +1005,7 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
       const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [match.league_id]);
       const league = leagueResult.rows[0];
       if (!(await isLeagueAdmin(client, league, userId))) {
-        throw new RouteError(403, 'Only the league host can edit match scores.');
+        throw new RouteError(403, 'Only the tournament host or a co-host can edit match scores.');
       }
 
       const newWinnerId = player1Won ? match.player1_id : match.player2_id;
@@ -988,9 +1035,10 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
       await reversePlayoffEffects(client, match, league);
 
       await client.query(
-        `UPDATE playoff_matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4
-         WHERE id = $5`,
-        [player1Units, player2Units, newWinnerId, JSON.stringify(setScores || []), matchId]
+        `UPDATE playoff_matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4,
+           photo_url = COALESCE($5, photo_url)
+         WHERE id = $6`,
+        [player1Units, player2Units, newWinnerId, JSON.stringify(setScores || []), photoUrl || null, matchId]
       );
 
       if (winnerChanged) {
@@ -1118,6 +1166,13 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
           [change1a, change1b, change2a, change2b, winnerPoints, loserPoints, matchId]
         );
       }
+
+      await recordAudit(client, {
+        leagueId: match.league_id,
+        actorId: userId,
+        action: 'edit_playoff_score',
+        summary: `Edited confirmed playoff match #${matchId}.`,
+      });
     });
 
     const warnings = [];
@@ -1278,7 +1333,7 @@ router.put('/match/:matchId/schedule', async (req, res) => {
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can edit the schedule.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can edit the schedule.' });
     }
     const completedError = checkNotCompleted(league);
     if (completedError) {

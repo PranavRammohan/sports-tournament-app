@@ -77,33 +77,40 @@ class _RatingSparklineState extends State<RatingSparkline> {
     final maxY = points.reduce((a, b) => a > b ? a : b);
     final pad = (maxY - minY) * 0.1 + 0.5; // avoid a degenerate flat scale
 
-    return SizedBox(
-      width: widget.width,
-      height: widget.height,
-      child: LineChart(
-        LineChartData(
-          minY: minY - pad,
-          maxY: maxY + pad,
-          gridData: const FlGridData(show: false),
-          titlesData: const FlTitlesData(show: false),
-          borderData: FlBorderData(show: false),
-          lineTouchData: const LineTouchData(enabled: false),
-          lineBarsData: [
-            LineChartBarData(
-              spots: [
-                for (int i = 0; i < points.length; i++)
-                  FlSpot(i.toDouble(), points[i]),
+    return Semantics(
+      label: trendingUp
+          ? 'Rating trending up over recent matches'
+          : 'Rating trending down over recent matches',
+      child: ExcludeSemantics(
+        child: SizedBox(
+          width: widget.width,
+          height: widget.height,
+          child: LineChart(
+            LineChartData(
+              minY: minY - pad,
+              maxY: maxY + pad,
+              gridData: const FlGridData(show: false),
+              titlesData: const FlTitlesData(show: false),
+              borderData: FlBorderData(show: false),
+              lineTouchData: const LineTouchData(enabled: false),
+              lineBarsData: [
+                LineChartBarData(
+                  spots: [
+                    for (int i = 0; i < points.length; i++)
+                      FlSpot(i.toDouble(), points[i]),
+                  ],
+                  isCurved: true,
+                  color: color,
+                  barWidth: 2,
+                  dotData: const FlDotData(show: false),
+                  belowBarData: BarAreaData(
+                    show: true,
+                    color: color.withValues(alpha: 0.12),
+                  ),
+                ),
               ],
-              isCurved: true,
-              color: color,
-              barWidth: 2,
-              dotData: const FlDotData(show: false),
-              belowBarData: BarAreaData(
-                show: true,
-                color: color.withValues(alpha: 0.12),
-              ),
             ),
-          ],
+          ),
         ),
       ),
     );

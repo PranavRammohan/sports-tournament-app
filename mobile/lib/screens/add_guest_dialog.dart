@@ -9,22 +9,33 @@ import 'package:flutter/services.dart';
 import '../main.dart';
 import '../api_client.dart';
 import '../constants/sports.dart';
+import '../validators.dart';
 
 class AddGuestDialog extends StatefulWidget {
   final int leagueId;
   final String sport;
+  final String? genderCategory;
 
-  const AddGuestDialog({super.key, required this.leagueId, required this.sport});
+  const AddGuestDialog({
+    super.key,
+    required this.leagueId,
+    required this.sport,
+    this.genderCategory,
+  });
 
   @override
   State<AddGuestDialog> createState() => _AddGuestDialogState();
 }
 
 class _AddGuestDialogState extends State<AddGuestDialog> {
+  final _formKey = GlobalKey<FormState>();
   final TextEditingController _nameController = TextEditingController();
   String? _level;
+  String? _gender;
   String? _error;
   bool _submitting = false;
+
+  bool get _isMixed => widget.genderCategory == 'mixed';
 
   // sportLevels (constants/sports.dart) is keyed by the Title Case display
   // name ("Table Tennis"), but the league's sport is stored/sent in the
@@ -42,13 +53,14 @@ class _AddGuestDialogState extends State<AddGuestDialog> {
   }
 
   Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
     final name = _nameController.text.trim();
-    if (name.isEmpty) {
-      setState(() => _error = "Please enter the guest's name.");
-      return;
-    }
     if (_level == null) {
       setState(() => _error = "Please select the guest's skill level.");
+      return;
+    }
+    if (_isMixed && _gender == null) {
+      setState(() => _error = "Please select the guest's gender.");
       return;
     }
 
@@ -60,7 +72,11 @@ class _AddGuestDialogState extends State<AddGuestDialog> {
     try {
       final res = await ApiClient.post(
         '/leagues/${widget.leagueId}/add-guest',
-        body: {'guestName': name, 'skillLevel': _level},
+        body: {
+          'guestName': name,
+          'skillLevel': _level,
+          if (_isMixed) 'gender': _gender,
+        },
       );
       if (!mounted) return;
       if (res.statusCode == 201) {
@@ -82,7 +98,9 @@ class _AddGuestDialogState extends State<AddGuestDialog> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       title: const Text('Add Guest'),
       content: SingleChildScrollView(
-        child: Column(
+        child: Form(
+          key: _formKey,
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text(
@@ -100,8 +118,9 @@ class _AddGuestDialogState extends State<AddGuestDialog> {
                   style: const TextStyle(color: AppColors.danger, fontSize: 13),
                 ),
               ),
-            TextField(
+            TextFormField(
               controller: _nameController,
+              validator: (v) => requiredField(v, label: "Guest's name"),
               decoration: const InputDecoration(
                 labelText: 'Guest name',
                 isDense: true,
@@ -124,7 +143,23 @@ class _AddGuestDialogState extends State<AddGuestDialog> {
                   .toList(),
               onChanged: (v) => setState(() => _level = v),
             ),
+            if (_isMixed) ...[
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _gender,
+                decoration: const InputDecoration(
+                  labelText: 'Gender',
+                  isDense: true,
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'M', child: Text('Male')),
+                  DropdownMenuItem(value: 'F', child: Text('Female')),
+                ],
+                onChanged: (v) => setState(() => _gender = v),
+              ),
+            ],
           ],
+          ),
         ),
       ),
       actions: [

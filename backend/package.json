@@ -5,7 +5,8 @@
   "main": "authRoutes.js",
   "scripts": {
     "test": "jest",
-    "start": "node server.js"
+    "start": "node server.js",
+    "dump-schema": "node dump-schema.js"
   },
   "keywords": [],
   "author": "",

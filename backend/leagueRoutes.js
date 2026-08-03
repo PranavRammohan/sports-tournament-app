@@ -5,10 +5,14 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const pool = require('./db');
 const { reverseRatingChange } = require('./ratingEngine');
-const { createNotification } = require('./notifications');
+const { createNotification, createNotifications } = require('./notifications');
 const { findSchedulingConflicts } = require('./scheduling');
 const { seedStartingRating } = require('./sportsRoutes');
 const { isLeagueAdmin } = require('./authorization');
+const { redactFixturePhones } = require('./privacy');
+const { toCsv } = require('./csv');
+const { escapeLikePattern } = require('./sql');
+const { recordAudit } = require('./audit');
 const { RouteError } = pool;
 
 const GUEST_SALT_ROUNDS = 10;
@@ -77,6 +81,22 @@ async function checkRatingEligibility(league, userId) {
 function checkNotCompleted(league) {
   if (league.status === 'completed') {
     return 'This tournament has been marked completed and is now read-only.';
+  }
+  return null;
+}
+
+// GAP-12 — league capacity. `db` is duck-typed (pool or transaction client)
+// like every other shared helper, so callers that need the count-then-insert
+// to be atomic (join, join-by-code, add-player, add-guest) can pass a
+// transaction client and avoid two requests racing into the last slot.
+async function checkCapacity(db, league) {
+  if (league.max_players == null) return null;
+  const countResult = await db.query(
+    'SELECT COUNT(*) AS count FROM league_members WHERE league_id = $1',
+    [league.id]
+  );
+  if (parseInt(countResult.rows[0].count, 10) >= league.max_players) {
+    return 'This tournament is full.';
   }
   return null;
 }
@@ -153,7 +173,7 @@ router.post('/create', async (req, res) => {
     name, sport, area, seasonStart, seasonEnd, format, genderCategory,
     scheduleType, matchesPerPlayer, hostEntersScores, hostPlays, isPrivate, academyName,
     minRating, maxRating, registrationStart, registrationEnd, partnerMode,
-    pointsEnabled, pointsWin, pointsLoss,
+    pointsEnabled, pointsWin, pointsLoss, maxPlayers,
   } = req.body;
 
   if (!name || !sport || !area || !seasonStart || !seasonEnd || !format || !genderCategory) {
@@ -162,8 +182,11 @@ router.post('/create', async (req, res) => {
   if (!['singles', 'doubles'].includes(format)) {
     return res.status(400).json({ error: 'Format must be singles or doubles.' });
   }
-  if (!['mens', 'womens'].includes(genderCategory)) {
-    return res.status(400).json({ error: 'Gender category must be mens or womens.' });
+  if (!['mens', 'womens', 'mixed'].includes(genderCategory)) {
+    return res.status(400).json({ error: 'Gender category must be mens, womens, or mixed.' });
+  }
+  if (genderCategory === 'mixed' && format === 'singles') {
+    return res.status(400).json({ error: 'Mixed is a doubles-only category — singles must be mens or womens.' });
   }
 
   const finalPartnerMode = VALID_PARTNER_MODES.includes(partnerMode) ? partnerMode : 'host_auto';
@@ -210,6 +233,10 @@ router.post('/create', async (req, res) => {
     return res.status(400).json({ error: 'Points for a win/loss must be whole numbers between 0 and 100.' });
   }
 
+  if (maxPlayers != null && (!Number.isInteger(maxPlayers) || maxPlayers < 1)) {
+    return res.status(400).json({ error: 'Max players must be a whole number of at least 1.' });
+  }
+
   try {
     let joinCode = null;
     if (isPrivate === true) {
@@ -225,12 +252,12 @@ router.post('/create', async (req, res) => {
       `INSERT INTO leagues (name, sport, area, season_start, season_end, created_by, format, gender_category,
                             schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
                             min_rating, max_rating, registration_start, registration_end, partner_mode,
-                            points_enabled, points_win, points_loss)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+                            points_enabled, points_win, points_loss, max_players)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
        RETURNING id, name, sport, area, season_start, season_end, format, gender_category, created_by,
                  schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
                  min_rating, max_rating, registration_start, registration_end, partner_mode,
-                 points_enabled, points_win, points_loss`,
+                 points_enabled, points_win, points_loss, max_players`,
       [
         name, sport, area, seasonStart, seasonEnd, userId, format, genderCategory,
         finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null,
@@ -242,6 +269,7 @@ router.post('/create', async (req, res) => {
         registrationEnd || null,
         format === 'doubles' ? finalPartnerMode : 'host_auto',
         finalPointsEnabled, finalPointsEnabled ? finalPointsWin : 0, finalPointsEnabled ? finalPointsLoss : 0,
+        maxPlayers != null ? maxPlayers : null,
       ]
     );
 
@@ -257,14 +285,25 @@ router.post('/create', async (req, res) => {
     res.status(201).json({ league });
   } catch (err) {
     console.error('Create league error:', err);
-    res.status(500).json({ error: 'Something went wrong creating the league.' });
+    res.status(500).json({ error: 'Something went wrong creating the tournament.' });
   }
 });
+
+// GAP-08 — whitelist of sort options for browse, mapped to fixed ORDER BY
+// fragments (never interpolated from the raw query param) so there's no SQL
+// injection surface from the sort choice itself.
+const BROWSE_SORT_OPTIONS = {
+  starting: 'l.season_start ASC',
+  newest: 'l.created_at DESC',
+  players: 'COUNT(lm.id) DESC',
+  name: 'l.name ASC',
+};
+const BROWSE_MAX_LIMIT = 50;
 
 // ---------- BROWSE LEAGUES (public only) ----------
 router.get('/', async (req, res) => {
   const userId = req.userId;
-  const { area, format, sport } = req.query;
+  const { area, format, sport, q, sort, limit, offset } = req.query;
 
   try {
     const userResult = await pool.query('SELECT gender FROM users WHERE id = $1', [userId]);
@@ -277,6 +316,7 @@ router.get('/', async (req, res) => {
       SELECT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
              l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.academy_name,
              l.min_rating, l.max_rating, l.registration_start, l.registration_end, l.partner_mode, l.status,
+             l.max_players,
              COUNT(lm.id) AS member_count,
              EXISTS (
                SELECT 1 FROM league_members lm2 WHERE lm2.league_id = l.id AND lm2.user_id = $1
@@ -287,7 +327,7 @@ router.get('/', async (req, res) => {
         SELECT 1 FROM user_sports us
         WHERE us.user_id = $1 AND us.sport = l.sport
       )
-      AND l.gender_category = $2
+      AND (l.gender_category = $2 OR l.gender_category = 'mixed')
       AND l.is_private = false
       AND l.status = 'active'
     `;
@@ -313,14 +353,26 @@ router.get('/', async (req, res) => {
       params.push(sport);
       query += ` AND l.sport = $${params.length}`;
     }
+    if (q && q.trim().length > 0) {
+      params.push(`%${escapeLikePattern(q.trim())}%`);
+      query += ` AND l.name ILIKE $${params.length}`;
+    }
 
-    query += ` GROUP BY l.id ORDER BY l.season_start ASC`;
+    const orderBy = BROWSE_SORT_OPTIONS[sort] || BROWSE_SORT_OPTIONS.starting;
+    query += ` GROUP BY l.id ORDER BY ${orderBy}`;
+
+    const parsedLimit = Math.min(parseInt(limit, 10) || BROWSE_MAX_LIMIT, BROWSE_MAX_LIMIT);
+    const parsedOffset = Math.max(parseInt(offset, 10) || 0, 0);
+    params.push(parsedLimit);
+    query += ` LIMIT $${params.length}`;
+    params.push(parsedOffset);
+    query += ` OFFSET $${params.length}`;
 
     const result = await pool.query(query, params);
-    res.status(200).json({ leagues: result.rows });
+    res.status(200).json({ leagues: result.rows, limit: parsedLimit, offset: parsedOffset });
   } catch (err) {
     console.error('Browse leagues error:', err);
-    res.status(500).json({ error: 'Something went wrong fetching leagues.' });
+    res.status(500).json({ error: 'Something went wrong fetching tournaments.' });
   }
 });
 
@@ -333,6 +385,7 @@ router.get('/mine', async (req, res) => {
       `SELECT DISTINCT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
               l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.join_code, l.academy_name,
               l.min_rating, l.max_rating, l.registration_start, l.registration_end, l.partner_mode, l.status,
+              l.max_players,
               (SELECT COUNT(*) FROM league_members lm2 WHERE lm2.league_id = l.id) AS member_count
        FROM leagues l
        LEFT JOIN league_members lm ON lm.league_id = l.id AND lm.user_id = $1
@@ -343,7 +396,7 @@ router.get('/mine', async (req, res) => {
     res.status(200).json({ leagues: result.rows });
   } catch (err) {
     console.error('My leagues error:', err);
-    res.status(500).json({ error: 'Something went wrong fetching your leagues.' });
+    res.status(500).json({ error: 'Something went wrong fetching your tournaments.' });
   }
 });
 
@@ -355,7 +408,7 @@ router.post('/:id/join', async (req, res) => {
   try {
     const league = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (league.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const leagueData = league.rows[0];
 
@@ -371,8 +424,8 @@ router.post('/:id/join', async (req, res) => {
 
     const userResult = await pool.query('SELECT gender FROM users WHERE id = $1', [userId]);
     const userGenderCategory = userResult.rows[0].gender === 'M' ? 'mens' : 'womens';
-    if (leagueData.gender_category !== userGenderCategory) {
-      return res.status(403).json({ error: 'This league is not in your gender category.' });
+    if (leagueData.gender_category !== 'mixed' && leagueData.gender_category !== userGenderCategory) {
+      return res.status(403).json({ error: 'This tournament is not in your gender category.' });
     }
 
     const hasSport = await pool.query(
@@ -388,23 +441,35 @@ router.post('/:id/join', async (req, res) => {
       return res.status(403).json({ error: ratingError });
     }
 
-    const existing = await pool.query(
-      'SELECT id FROM league_members WHERE league_id = $1 AND user_id = $2',
-      [leagueId, userId]
-    );
-    if (existing.rows.length > 0) {
-      return res.status(409).json({ error: 'You already joined this league.' });
-    }
+    await pool.withTransaction(async (client) => {
+      const existing = await client.query(
+        'SELECT id FROM league_members WHERE league_id = $1 AND user_id = $2',
+        [leagueId, userId]
+      );
+      if (existing.rows.length > 0) {
+        throw new RouteError(409, 'You already joined this tournament.');
+      }
 
-    await pool.query(
-      'INSERT INTO league_members (league_id, user_id) VALUES ($1, $2)',
-      [leagueId, userId]
-    );
+      // Count-then-insert inside the same transaction so two players can't
+      // both slip into the last slot of a capped league.
+      const capacityError = await checkCapacity(client, leagueData);
+      if (capacityError) {
+        throw new RouteError(409, capacityError);
+      }
 
-    res.status(201).json({ message: 'Joined league successfully.' });
+      await client.query(
+        'INSERT INTO league_members (league_id, user_id) VALUES ($1, $2)',
+        [leagueId, userId]
+      );
+    });
+
+    res.status(201).json({ message: 'Joined tournament successfully.' });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Join league error:', err);
-    res.status(500).json({ error: 'Something went wrong joining the league.' });
+    res.status(500).json({ error: 'Something went wrong joining the tournament.' });
   }
 });
 
@@ -439,8 +504,8 @@ router.post('/join-by-code', async (req, res) => {
 
     const userResult = await pool.query('SELECT gender FROM users WHERE id = $1', [userId]);
     const userGenderCategory = userResult.rows[0].gender === 'M' ? 'mens' : 'womens';
-    if (leagueData.gender_category !== userGenderCategory) {
-      return res.status(403).json({ error: 'This league is not in your gender category.' });
+    if (leagueData.gender_category !== 'mixed' && leagueData.gender_category !== userGenderCategory) {
+      return res.status(403).json({ error: 'This tournament is not in your gender category.' });
     }
 
     const hasSport = await pool.query(
@@ -456,23 +521,33 @@ router.post('/join-by-code', async (req, res) => {
       return res.status(403).json({ error: ratingError });
     }
 
-    const existing = await pool.query(
-      'SELECT id FROM league_members WHERE league_id = $1 AND user_id = $2',
-      [leagueData.id, userId]
-    );
-    if (existing.rows.length > 0) {
-      return res.status(409).json({ error: 'You already joined this league.' });
-    }
+    await pool.withTransaction(async (client) => {
+      const existing = await client.query(
+        'SELECT id FROM league_members WHERE league_id = $1 AND user_id = $2',
+        [leagueData.id, userId]
+      );
+      if (existing.rows.length > 0) {
+        throw new RouteError(409, 'You already joined this tournament.');
+      }
 
-    await pool.query(
-      'INSERT INTO league_members (league_id, user_id) VALUES ($1, $2)',
-      [leagueData.id, userId]
-    );
+      const capacityError = await checkCapacity(client, leagueData);
+      if (capacityError) {
+        throw new RouteError(409, capacityError);
+      }
 
-    res.status(201).json({ message: 'Joined league successfully.', leagueId: leagueData.id });
+      await client.query(
+        'INSERT INTO league_members (league_id, user_id) VALUES ($1, $2)',
+        [leagueData.id, userId]
+      );
+    });
+
+    res.status(201).json({ message: 'Joined tournament successfully.', leagueId: leagueData.id });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Join by code error:', err);
-    res.status(500).json({ error: 'Something went wrong joining the league.' });
+    res.status(500).json({ error: 'Something went wrong joining the tournament.' });
   }
 });
 
@@ -495,7 +570,7 @@ router.post('/:id/select-partner', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
@@ -504,10 +579,10 @@ router.post('/:id/select-partner', async (req, res) => {
       return res.status(400).json({ error: completedError });
     }
     if (league.format !== 'doubles') {
-      return res.status(400).json({ error: 'Partner selection only applies to doubles leagues.' });
+      return res.status(400).json({ error: 'Partner selection only applies to doubles tournaments.' });
     }
     if (league.partner_mode !== 'self_select') {
-      return res.status(400).json({ error: 'This league does not allow players to pick their own partner.' });
+      return res.status(400).json({ error: 'This tournament does not allow players to pick their own partner.' });
     }
 
     const myMembership = await pool.query(
@@ -515,7 +590,7 @@ router.post('/:id/select-partner', async (req, res) => {
       [leagueId, userId]
     );
     if (myMembership.rows.length === 0) {
-      return res.status(403).json({ error: 'You must join the league before selecting a partner.' });
+      return res.status(403).json({ error: 'You must join the tournament before selecting a partner.' });
     }
     if (myMembership.rows[0].partner_status === 'confirmed') {
       return res.status(409).json({ error: 'You already have a confirmed partner.' });
@@ -529,10 +604,22 @@ router.post('/:id/select-partner', async (req, res) => {
       [leagueId, partnerId]
     );
     if (partnerMembership.rows.length === 0) {
-      return res.status(400).json({ error: 'That player has not joined this league yet.' });
+      return res.status(400).json({ error: 'That player has not joined this tournament yet.' });
     }
     if (partnerMembership.rows[0].partner_status === 'confirmed') {
       return res.status(409).json({ error: 'That player already has a confirmed partner.' });
+    }
+
+    if (league.gender_category === 'mixed') {
+      const genders = await pool.query(
+        'SELECT id, gender FROM users WHERE id = ANY($1::int[])',
+        [[userId, parseInt(partnerId, 10)]]
+      );
+      const myGender = genders.rows.find((u) => u.id === userId)?.gender;
+      const partnerGender = genders.rows.find((u) => u.id === parseInt(partnerId, 10))?.gender;
+      if (myGender != null && myGender === partnerGender) {
+        return res.status(400).json({ error: 'Mixed doubles pairs must be one man and one woman.' });
+      }
     }
 
     await pool.query(
@@ -638,19 +725,19 @@ router.post('/:id/assign-partner', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can assign partners.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can assign partners.' });
     }
     const completedError = checkNotCompleted(league);
     if (completedError) {
       return res.status(400).json({ error: completedError });
     }
     if (league.format !== 'doubles' || league.partner_mode !== 'host_manual') {
-      return res.status(400).json({ error: 'This league is not set up for host-manual partner assignment.' });
+      return res.status(400).json({ error: 'This tournament is not set up for host-manual partner assignment.' });
     }
 
     const membersResult = await pool.query(
@@ -658,7 +745,7 @@ router.post('/:id/assign-partner', async (req, res) => {
       [leagueId, [player1Id, player2Id]]
     );
     if (membersResult.rows.length !== 2) {
-      return res.status(400).json({ error: 'Both players must be members of this league.' });
+      return res.status(400).json({ error: 'Both players must be members of this tournament.' });
     }
     if (membersResult.rows.some((m) => m.partner_status === 'confirmed')) {
       return res.status(409).json({ error: 'One of these players already has a confirmed partner. Unpair them first.' });
@@ -694,7 +781,7 @@ router.post('/:id/unpair', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
     const isAdmin = await isLeagueAdmin(pool, league, userId);
@@ -742,7 +829,7 @@ router.get('/:id/partners', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
@@ -754,7 +841,7 @@ router.get('/:id/partners', async (req, res) => {
         [leagueId, userId]
       );
       if (memberCheck.rows.length === 0) {
-        return res.status(403).json({ error: 'Only members of this league can view this.' });
+        return res.status(403).json({ error: 'Only members of this tournament can view this.' });
       }
     }
 
@@ -905,15 +992,15 @@ router.post('/:id/groups', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can create groups.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can create groups.' });
     }
     if (league.schedule_type !== 'groups') {
-      return res.status(400).json({ error: 'This league is not set up for group play.' });
+      return res.status(400).json({ error: 'This tournament is not set up for group play.' });
     }
 
     // A group can only be nested inside a parent that has no players of its
@@ -929,7 +1016,7 @@ router.post('/:id/groups', async (req, res) => {
         [parentGroupId, leagueId]
       );
       if (parentCheck.rows.length === 0) {
-        return res.status(400).json({ error: 'Parent group not found in this league.' });
+        return res.status(400).json({ error: 'Parent group not found in this tournament.' });
       }
       const parentMembers = await pool.query(
         'SELECT 1 FROM group_members WHERE group_id = $1 LIMIT 1',
@@ -1097,7 +1184,7 @@ router.get('/:id/groups', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
@@ -1134,7 +1221,7 @@ router.get('/:id/groups/:groupId/schedule', async (req, res) => {
     // should see it, not any other authenticated account.
     const leagueResult = await pool.query('SELECT created_by FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     if (leagueResult.rows[0].created_by !== userId) {
       const memberCheck = await pool.query(
@@ -1142,7 +1229,7 @@ router.get('/:id/groups/:groupId/schedule', async (req, res) => {
         [leagueId, userId]
       );
       if (memberCheck.rows.length === 0) {
-        return res.status(403).json({ error: 'Only members of this league can view this.' });
+        return res.status(403).json({ error: 'Only members of this tournament can view this.' });
       }
     }
 
@@ -1153,7 +1240,7 @@ router.get('/:id/groups/:groupId/schedule', async (req, res) => {
               pp1.username as player1_partner_username, pp1.phone_number as player1_partner_phone,
               p2.username as player2_username, p2.phone_number as player2_phone,
               pp2.username as player2_partner_username, pp2.phone_number as player2_partner_phone,
-              m.id as match_id, m.status as match_status, m.set_scores, m.winner_id, m.reported_by,
+              m.id as match_id, m.status as match_status, m.set_scores, m.winner_id, m.reported_by, m.photo_url,
               m.player1_id as reported_player1_id, m.player2_id as reported_player2_id
        FROM scheduled_matches sm
        LEFT JOIN matches m ON m.scheduled_match_id = sm.id AND m.status != 'rejected'
@@ -1165,7 +1252,7 @@ router.get('/:id/groups/:groupId/schedule', async (req, res) => {
        ORDER BY sm.id ASC`,
       [leagueId, groupId]
     );
-    res.status(200).json({ schedule: result.rows });
+    res.status(200).json({ schedule: redactFixturePhones(result.rows, userId) });
   } catch (err) {
     console.error('Get group schedule error:', err);
     res.status(500).json({ error: "Something went wrong fetching this group's schedule." });
@@ -1180,12 +1267,12 @@ router.delete('/:id/groups/:groupId', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can delete groups.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can delete groups.' });
     }
 
     const groupCheck = await pool.query(
@@ -1239,6 +1326,13 @@ router.delete('/:id/groups/:groupId', async (req, res) => {
     await pool.query('DELETE FROM group_members WHERE group_id = $1', [groupId]);
     await pool.query('DELETE FROM league_groups WHERE id = $1', [groupId]);
 
+    await recordAudit(pool, {
+      leagueId,
+      actorId: userId,
+      action: 'delete_group',
+      summary: `Deleted group "${groupCheck.rows[0].name}".`,
+    });
+
     res.status(200).json({ message: 'Group deleted.' });
   } catch (err) {
     console.error('Delete group error:', err);
@@ -1258,12 +1352,12 @@ router.patch('/:id/groups/:groupId/parent', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can move groups.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can move groups.' });
     }
 
     const allGroupsResult = await pool.query(
@@ -1278,7 +1372,7 @@ router.patch('/:id/groups/:groupId/parent', async (req, res) => {
 
     const newParentId = parentGroupId != null ? parseInt(parentGroupId, 10) : null;
     if (newParentId != null && !allGroups.some((g) => g.id === newParentId)) {
-      return res.status(400).json({ error: 'Parent group not found in this league.' });
+      return res.status(400).json({ error: 'Parent group not found in this tournament.' });
     }
     if (wouldCreateCycle(allGroups, groupIdNum, newParentId)) {
       return res.status(400).json({ error: "Can't move a group inside itself or one of its own sub-groups." });
@@ -1323,12 +1417,12 @@ router.post('/:id/groups/:groupId/assign', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can assign players to groups.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can assign players to groups.' });
     }
 
     const groupCheck = await pool.query(
@@ -1360,7 +1454,7 @@ router.post('/:id/groups/:groupId/assign', async (req, res) => {
       [leagueId, targetUserId]
     );
     if (memberCheck.rows.length === 0) {
-      return res.status(404).json({ error: 'This player is not a member of this league.' });
+      return res.status(404).json({ error: 'This player is not a member of this tournament.' });
     }
 
     // Doubles: a group's membership unit is the pair, not the individual —
@@ -1406,12 +1500,12 @@ router.post('/:id/groups/:groupId/unassign', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can remove players from groups.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can remove players from groups.' });
     }
 
     const groupCheck = await pool.query(
@@ -1442,6 +1536,13 @@ router.post('/:id/groups/:groupId/unassign', async (req, res) => {
       [groupId, targetIds]
     );
 
+    await recordAudit(pool, {
+      leagueId,
+      actorId: userId,
+      action: 'unassign_from_group',
+      summary: `Removed player #${targetUserId} from group #${groupId}.`,
+    });
+
     res.status(200).json({ message: league.format === 'doubles' ? 'Team removed from group.' : 'Player removed from group.' });
   } catch (err) {
     console.error('Unassign from group error:', err);
@@ -1464,12 +1565,12 @@ router.post('/:id/groups/auto-assign', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can auto-assign groups.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can auto-assign groups.' });
     }
 
     const groupsResult = await pool.query(
@@ -1646,12 +1747,12 @@ router.post('/:id/groups/:groupId/lock', async (req, res) => {
     await pool.withTransaction(async (client) => {
       const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
       if (leagueResult.rows.length === 0) {
-        throw new RouteError(404, 'League not found.');
+        throw new RouteError(404, 'Tournament not found.');
       }
       const league = leagueResult.rows[0];
 
       if (!(await isLeagueAdmin(client, league, userId))) {
-        throw new RouteError(403, 'Only the league host can lock a group.');
+        throw new RouteError(403, 'Only the tournament host or a co-host can lock a group.');
       }
 
       const groupResult = await client.query(
@@ -1683,7 +1784,7 @@ router.post('/:id/groups/:groupId/lock', async (req, res) => {
       // Doubles needs partner_id/partner_status too, to resolve teams —
       // singles just ignores those extra columns.
       const membersResult = await client.query(
-        `SELECT u.id, us.rating, lm.partner_id, lm.partner_status
+        `SELECT u.id, u.username, u.gender, us.rating, lm.partner_id, lm.partner_status
          FROM group_members gm
          JOIN users u ON u.id = gm.user_id
          JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
@@ -1703,9 +1804,9 @@ router.post('/:id/groups/:groupId/lock', async (req, res) => {
       let teams = null;
       if (league.format === 'doubles') {
         try {
-          teams = buildTeamsFromConfirmedPairs(members);
+          teams = buildTeamsFromConfirmedPairs(members, league);
         } catch (buildErr) {
-          if (buildErr.code === 'UNPAIRED_MEMBERS') {
+          if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'UNEVEN_GENDER_SPLIT') {
             throw new RouteError(400, buildErr.message);
           }
           throw buildErr;
@@ -1805,12 +1906,12 @@ router.post('/:id/groups/:groupId/unlock', async (req, res) => {
     await pool.withTransaction(async (client) => {
       const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
       if (leagueResult.rows.length === 0) {
-        throw new RouteError(404, 'League not found.');
+        throw new RouteError(404, 'Tournament not found.');
       }
       const league = leagueResult.rows[0];
 
       if (!(await isLeagueAdmin(client, league, userId))) {
-        throw new RouteError(403, 'Only the league host can unlock a group.');
+        throw new RouteError(403, 'Only the tournament host or a co-host can unlock a group.');
       }
 
       const groupResult = await client.query(
@@ -1842,6 +1943,13 @@ router.post('/:id/groups/:groupId/unlock', async (req, res) => {
       await client.query('DELETE FROM playoff_matches WHERE league_id = $1 AND group_id = $2', [leagueId, groupId]);
 
       await client.query('UPDATE league_groups SET locked = false WHERE id = $1', [groupId]);
+
+      await recordAudit(client, {
+        leagueId,
+        actorId: userId,
+        action: 'unlock_group',
+        summary: `Unlocked group "${group.name}" — its match history and rating changes were reversed.`,
+      });
     });
 
     res.status(200).json({
@@ -1877,12 +1985,12 @@ router.put('/:id/groups/:groupId/config', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can edit this.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can edit this.' });
     }
 
     const groupResult = await pool.query(
@@ -1966,15 +2074,15 @@ router.post('/:id/groups/advance', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can advance players.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can advance players.' });
     }
     if (league.schedule_type !== 'groups') {
-      return res.status(400).json({ error: 'This league is not set up for group play.' });
+      return res.status(400).json({ error: 'This tournament is not set up for group play.' });
     }
 
     const { groups: allGroups } = await getGroupsWithStandings(league, leagueId);
@@ -2101,15 +2209,18 @@ router.get('/:id/search-players', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can search for players.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can search for players.' });
     }
 
-    const genderChar = league.gender_category === 'mens' ? 'M' : 'F';
+    // A mixed league accepts either gender, so there's nothing to filter on.
+    const genderChar = league.gender_category === 'mixed'
+      ? null
+      : league.gender_category === 'mens' ? 'M' : 'F';
 
     // Joins on format too (not just sport) — needed to know which rating to
     // check against the league's min/max band below, and a latent gap on
@@ -2120,14 +2231,14 @@ router.get('/:id/search-players', async (req, res) => {
        FROM users u
        JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
        WHERE u.username ILIKE $3
-         AND u.gender = $4
+         AND ($4::text IS NULL OR u.gender = $4)
          AND u.id NOT IN (
            SELECT user_id FROM league_members WHERE league_id = $5
          )
          AND ($6::numeric IS NULL OR us.rating >= $6::numeric)
          AND ($7::numeric IS NULL OR us.rating <= $7::numeric)
        LIMIT 15`,
-      [league.sport, league.format, `%${q.trim()}%`, genderChar, leagueId, league.min_rating, league.max_rating]
+      [league.sport, league.format, `%${escapeLikePattern(q.trim())}%`, genderChar, leagueId, league.min_rating, league.max_rating]
     );
 
     res.status(200).json({ users: result.rows });
@@ -2150,12 +2261,12 @@ router.post('/:id/add-player', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can add players.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can add players.' });
     }
     const completedError = checkNotCompleted(league);
     if (completedError) {
@@ -2167,8 +2278,8 @@ router.post('/:id/add-player', async (req, res) => {
     if (playerResult.rows.length === 0) {
       return res.status(404).json({ error: 'Player not found.' });
     }
-    if (playerResult.rows[0].gender !== genderChar) {
-      return res.status(400).json({ error: 'This player does not match the league\'s gender category.' });
+    if (league.gender_category !== 'mixed' && playerResult.rows[0].gender !== genderChar) {
+      return res.status(400).json({ error: 'This player does not match the tournament\'s gender category.' });
     }
 
     const hasSport = await pool.query(
@@ -2189,18 +2300,25 @@ router.post('/:id/add-player', async (req, res) => {
       return res.status(400).json({ error: ratingError });
     }
 
-    const existing = await pool.query(
-      'SELECT id FROM league_members WHERE league_id = $1 AND user_id = $2',
-      [leagueId, playerId]
-    );
-    if (existing.rows.length > 0) {
-      return res.status(409).json({ error: 'This player is already in the league.' });
-    }
+    await pool.withTransaction(async (client) => {
+      const existing = await client.query(
+        'SELECT id FROM league_members WHERE league_id = $1 AND user_id = $2',
+        [leagueId, playerId]
+      );
+      if (existing.rows.length > 0) {
+        throw new RouteError(409, 'This player is already in the tournament.');
+      }
 
-    await pool.query(
-      'INSERT INTO league_members (league_id, user_id) VALUES ($1, $2)',
-      [leagueId, playerId]
-    );
+      const capacityError = await checkCapacity(client, league);
+      if (capacityError) {
+        throw new RouteError(409, capacityError);
+      }
+
+      await client.query(
+        'INSERT INTO league_members (league_id, user_id) VALUES ($1, $2)',
+        [leagueId, playerId]
+      );
+    });
 
     await createNotification(pool, {
       userId: playerId,
@@ -2212,6 +2330,9 @@ router.post('/:id/add-player', async (req, res) => {
 
     res.status(201).json({ message: 'Player added successfully.' });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Add player error:', err);
     res.status(500).json({ error: 'Something went wrong adding the player.' });
   }
@@ -2230,7 +2351,7 @@ router.post('/:id/add-player', async (req, res) => {
 router.post('/:id/add-guest', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.id;
-  const { guestName, skillLevel } = req.body;
+  const { guestName, skillLevel, gender } = req.body;
 
   if (!guestName || !guestName.trim()) {
     return res.status(400).json({ error: "Please enter the guest's name." });
@@ -2245,22 +2366,38 @@ router.post('/:id/add-guest', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can add players.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can add players.' });
     }
     const completedError = checkNotCompleted(league);
     if (completedError) {
       return res.status(400).json({ error: completedError });
     }
 
-    const genderChar = league.gender_category === 'mens' ? 'M' : 'F';
+    // A mixed league can't infer the guest's gender from the category the
+    // way mens/womens can — the host must say so explicitly, since mixed
+    // doubles pairing needs to know each player's gender.
+    let genderChar;
+    if (league.gender_category === 'mixed') {
+      if (!['M', 'F'].includes(gender)) {
+        return res.status(400).json({ error: "Please select the guest's gender." });
+      }
+      genderChar = gender;
+    } else {
+      genderChar = league.gender_category === 'mens' ? 'M' : 'F';
+    }
 
     let newUserId;
     await pool.withTransaction(async (client) => {
+      const capacityError = await checkCapacity(client, league);
+      if (capacityError) {
+        throw new RouteError(409, capacityError);
+      }
+
       const passwordHash = await bcrypt.hash(
         crypto.randomBytes(24).toString('hex'),
         GUEST_SALT_ROUNDS
@@ -2315,12 +2452,12 @@ router.post('/:id/co-hosts', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (league.created_by !== userId) {
-      return res.status(403).json({ error: 'Only the league host can grant co-host status.' });
+      return res.status(403).json({ error: 'Only the tournament host can grant co-host status.' });
     }
 
     const result = await pool.query(
@@ -2328,8 +2465,15 @@ router.post('/:id/co-hosts', async (req, res) => {
       [leagueId, targetUserId]
     );
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'This player is not a member of this league.' });
+      return res.status(404).json({ error: 'This player is not a member of this tournament.' });
     }
+
+    await recordAudit(pool, {
+      leagueId,
+      actorId: userId,
+      action: 'grant_co_host',
+      summary: `Granted co-host status to player #${targetUserId}.`,
+    });
 
     res.status(200).json({ message: 'Co-host added.' });
   } catch (err) {
@@ -2346,18 +2490,25 @@ router.delete('/:id/co-hosts/:userId', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (league.created_by !== userId) {
-      return res.status(403).json({ error: 'Only the league host can revoke co-host status.' });
+      return res.status(403).json({ error: 'Only the tournament host can revoke co-host status.' });
     }
 
     await pool.query(
       `UPDATE league_members SET is_co_host = false WHERE league_id = $1 AND user_id = $2`,
       [leagueId, targetUserId]
     );
+
+    await recordAudit(pool, {
+      leagueId,
+      actorId: userId,
+      action: 'revoke_co_host',
+      summary: `Revoked co-host status from player #${targetUserId}.`,
+    });
 
     res.status(200).json({ message: 'Co-host removed.' });
   } catch (err) {
@@ -2374,10 +2525,10 @@ router.post('/:id/leave', async (req, res) => {
   try {
     const league = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (league.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     if (league.rows[0].created_by === userId) {
-      return res.status(400).json({ error: 'As the host, you cannot leave — you can delete the league instead.' });
+      return res.status(400).json({ error: 'As the host, you cannot leave — you can delete the tournament instead.' });
     }
 
     const memberResult = await pool.query(
@@ -2430,10 +2581,10 @@ router.post('/:id/leave', async (req, res) => {
       );
     }
 
-    res.status(200).json({ message: 'You left the league.' });
+    res.status(200).json({ message: 'You left the tournament.' });
   } catch (err) {
     console.error('Leave league error:', err);
-    res.status(500).json({ error: 'Something went wrong leaving the league.' });
+    res.status(500).json({ error: 'Something went wrong leaving the tournament.' });
   }
 });
 
@@ -2446,15 +2597,15 @@ router.delete('/:id/members/:userId', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, hostId))) {
-      return res.status(403).json({ error: 'Only the league host can remove players.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can remove players.' });
     }
     if (targetUserId === hostId) {
-      return res.status(400).json({ error: 'You cannot remove yourself. Delete the league instead if needed.' });
+      return res.status(400).json({ error: 'You cannot remove yourself. Delete the tournament instead if needed.' });
     }
 
     const memberCheck = await pool.query(
@@ -2462,13 +2613,13 @@ router.delete('/:id/members/:userId', async (req, res) => {
       [leagueId, targetUserId]
     );
     if (memberCheck.rows.length === 0) {
-      return res.status(404).json({ error: 'This player is not a member of this league.' });
+      return res.status(404).json({ error: 'This player is not a member of this tournament.' });
     }
     // A co-host can remove regular players, but not another co-host — only
     // the primary host can do that, same reasoning as why co-host status
     // itself can only be granted/revoked by the primary host.
     if (memberCheck.rows[0].is_co_host && league.created_by !== hostId) {
-      return res.status(403).json({ error: 'Only the league host can remove a co-host.' });
+      return res.status(403).json({ error: 'Only the tournament host can remove a co-host.' });
     }
     const partnerId = memberCheck.rows[0].partner_id;
 
@@ -2512,7 +2663,14 @@ router.delete('/:id/members/:userId', async (req, res) => {
       );
     }
 
-    res.status(200).json({ message: 'Player removed from league.' });
+    await recordAudit(pool, {
+      leagueId,
+      actorId: hostId,
+      action: 'remove_player',
+      summary: `Removed player #${targetUserId} from the league.`,
+    });
+
+    res.status(200).json({ message: 'Player removed from tournament.' });
   } catch (err) {
     console.error('Remove player error:', err);
     res.status(500).json({ error: 'Something went wrong removing the player.' });
@@ -2523,6 +2681,7 @@ router.delete('/:id/members/:userId', async (req, res) => {
 // For doubles leagues, also returns a `pairLeaderboard`, grouping confirmed
 // matches (round-robin/custom + knockout) by unordered partner pair.
 router.get('/:id', async (req, res) => {
+  const userId = req.userId;
   const leagueId = req.params.id;
 
   try {
@@ -2534,10 +2693,24 @@ router.get('/:id', async (req, res) => {
       [leagueId]
     );
     if (league.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
 
     const leagueData = league.rows[0];
+
+    // host_phone above is contact info, not public league metadata — this
+    // route is reachable from Browse for leagues the caller hasn't joined
+    // (see browse_leagues_screen.dart), so only show it once the caller is
+    // actually the host or a member, same gate as the schedule endpoints.
+    if (leagueData.created_by !== userId) {
+      const memberCheck = await pool.query(
+        'SELECT 1 FROM league_members WHERE league_id = $1 AND user_id = $2',
+        [leagueId, userId]
+      );
+      if (memberCheck.rows.length === 0) {
+        delete leagueData.host_phone;
+      }
+    }
 
     const leaderboard = await pool.query(
       `SELECT u.id, u.username, u.gender, u.profile_pic_url, u.is_guest, lm.is_co_host, us.rating, lm.points,
@@ -2549,24 +2722,31 @@ router.get('/:id', async (req, res) => {
        JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
        LEFT JOIN (
          SELECT player_id, COUNT(*) AS matches_played,
-                SUM(CASE WHEN player_id = winner_id THEN 1 ELSE 0 END) AS wins,
-                SUM(CASE WHEN player_id != winner_id THEN 1 ELSE 0 END) AS losses
+                SUM(CASE WHEN won THEN 1 ELSE 0 END) AS wins,
+                SUM(CASE WHEN won THEN 0 ELSE 1 END) AS losses
          FROM (
-           SELECT id, league_id, winner_id, player1_id AS player_id FROM matches WHERE status = 'confirmed'
+           -- winner_id names one representative player of the winning SIDE,
+           -- not necessarily this row's own player_id — a doubles partner
+           -- must be scored by whether their side won (winner_id equals
+           -- their side's representative, player1_id or player2_id), same
+           -- as GET /matches/head-to-head/:otherUserId already does. Using
+           -- player_id = winner_id here would wrongly record a loss for
+           -- the partner of a winning team's non-representative player.
+           SELECT id, league_id, player1_id AS player_id, (winner_id = player1_id) AS won FROM matches WHERE status = 'confirmed'
            UNION ALL
-           SELECT id, league_id, winner_id, player2_id AS player_id FROM matches WHERE status = 'confirmed'
+           SELECT id, league_id, player2_id AS player_id, (winner_id = player2_id) AS won FROM matches WHERE status = 'confirmed'
            UNION ALL
-           SELECT id, league_id, winner_id, player1_partner_id AS player_id FROM matches WHERE status = 'confirmed' AND player1_partner_id IS NOT NULL
+           SELECT id, league_id, player1_partner_id AS player_id, (winner_id = player1_id) AS won FROM matches WHERE status = 'confirmed' AND player1_partner_id IS NOT NULL
            UNION ALL
-           SELECT id, league_id, winner_id, player2_partner_id AS player_id FROM matches WHERE status = 'confirmed' AND player2_partner_id IS NOT NULL
+           SELECT id, league_id, player2_partner_id AS player_id, (winner_id = player2_id) AS won FROM matches WHERE status = 'confirmed' AND player2_partner_id IS NOT NULL
            UNION ALL
-           SELECT id, league_id, winner_id, player1_id AS player_id FROM playoff_matches WHERE status = 'confirmed'
+           SELECT id, league_id, player1_id AS player_id, (winner_id = player1_id) AS won FROM playoff_matches WHERE status = 'confirmed'
            UNION ALL
-           SELECT id, league_id, winner_id, player2_id AS player_id FROM playoff_matches WHERE status = 'confirmed'
+           SELECT id, league_id, player2_id AS player_id, (winner_id = player2_id) AS won FROM playoff_matches WHERE status = 'confirmed'
            UNION ALL
-           SELECT id, league_id, winner_id, player1_partner_id AS player_id FROM playoff_matches WHERE status = 'confirmed' AND player1_partner_id IS NOT NULL
+           SELECT id, league_id, player1_partner_id AS player_id, (winner_id = player1_id) AS won FROM playoff_matches WHERE status = 'confirmed' AND player1_partner_id IS NOT NULL
            UNION ALL
-           SELECT id, league_id, winner_id, player2_partner_id AS player_id FROM playoff_matches WHERE status = 'confirmed' AND player2_partner_id IS NOT NULL
+           SELECT id, league_id, player2_partner_id AS player_id, (winner_id = player2_id) AS won FROM playoff_matches WHERE status = 'confirmed' AND player2_partner_id IS NOT NULL
          ) all_participants
          WHERE league_id = $3
          GROUP BY player_id
@@ -2649,7 +2829,7 @@ router.get('/:id', async (req, res) => {
     res.status(200).json({ league: leagueData, leaderboard: leaderboard.rows, pairLeaderboard });
   } catch (err) {
     console.error('League detail error:', err);
-    res.status(500).json({ error: 'Something went wrong fetching league details.' });
+    res.status(500).json({ error: 'Something went wrong fetching tournament details.' });
   }
 });
 
@@ -2677,9 +2857,37 @@ function zigZagPairTeams(sortedMembersDesc) {
   return teams;
 }
 
+// GAP-13 — mixed doubles pairs one man with one woman by rule, so the usual
+// strongest-with-weakest zig-zag runs across the two gender lists instead of
+// across one combined list: men sorted strongest-first paired against women
+// sorted weakest-first, which balances team average ratings while keeping
+// every team 1M + 1F. Throws UNEVEN_GENDER_SPLIT if the counts don't match —
+// there's no sensible way to pair an uneven split.
+function zigZagPairMixedTeams(members) {
+  const men = members.filter((m) => m.gender === 'M').sort((a, b) => parseFloat(b.rating) - parseFloat(a.rating));
+  const women = members.filter((m) => m.gender === 'F').sort((a, b) => parseFloat(a.rating) - parseFloat(b.rating));
+
+  if (men.length !== women.length) {
+    const err = new Error(
+      `Mixed doubles needs equal numbers of men and women so everyone gets paired — currently ${men.length} men and ${women.length} women. Add or remove a player, or switch to self-select/host-manual partner mode.`
+    );
+    err.code = 'UNEVEN_GENDER_SPLIT';
+    throw err;
+  }
+
+  return men.map((man, i) => {
+    const woman = women[i];
+    return {
+      player1: man,
+      player2: woman,
+      avgRating: (parseFloat(man.rating) + parseFloat(woman.rating)) / 2,
+    };
+  });
+}
+
 // Builds teams from confirmed league_members partnerships. Throws a
 // user-facing error string if any member lacks a confirmed partner.
-function buildTeamsFromConfirmedPairs(members) {
+function buildTeamsFromConfirmedPairs(members, league) {
   const byId = new Map(members.map((m) => [m.id, m]));
   const seen = new Set();
   const teams = [];
@@ -2694,6 +2902,11 @@ function buildTeamsFromConfirmedPairs(members) {
     const partner = byId.get(m.partner_id);
     seen.add(m.id);
     seen.add(partner.id);
+    if (league?.gender_category === 'mixed' && m.gender != null && m.gender === partner.gender) {
+      const err = new Error(`Mixed doubles pairs must be one man and one woman — ${m.username} and ${partner.username} are not.`);
+      err.code = 'UNEVEN_GENDER_SPLIT';
+      throw err;
+    }
     teams.push({
       player1: m,
       player2: partner,
@@ -2713,6 +2926,9 @@ function buildTeamsFromConfirmedPairs(members) {
 // Resolves the doubles teams for a league, branching on partner_mode.
 function resolveDoublesTeams(league, members) {
   if (league.partner_mode === 'host_auto') {
+    if (league.gender_category === 'mixed') {
+      return zigZagPairMixedTeams(members);
+    }
     if (members.length % 2 !== 0) {
       const err = new Error(
         `Doubles needs an even number of players so everyone gets paired — currently ${members.length}. Add or remove one player, or switch to self-select/host-manual partner mode to intentionally leave someone out.`
@@ -2723,7 +2939,7 @@ function resolveDoublesTeams(league, members) {
     const sorted = [...members].sort((a, b) => parseFloat(b.rating) - parseFloat(a.rating));
     return zigZagPairTeams(sorted);
   }
-  return buildTeamsFromConfirmedPairs(members);
+  return buildTeamsFromConfirmedPairs(members, league);
 }
 
 // ---------- GENERATE SCHEDULE (host only, once, unless schedule was cleared) ----------
@@ -2735,12 +2951,12 @@ router.post('/:id/generate-schedule', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can generate the schedule.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can generate the schedule.' });
     }
     const completedError = checkNotCompleted(league);
     if (completedError) {
@@ -2748,7 +2964,7 @@ router.post('/:id/generate-schedule', async (req, res) => {
     }
 
     if (league.schedule_type === 'custom') {
-      return res.status(400).json({ error: 'Custom leagues do not use auto-generated schedules. Add matches manually instead.' });
+      return res.status(400).json({ error: 'Custom tournaments do not use auto-generated schedules. Add matches manually instead.' });
     }
     if (league.schedule_type === 'groups') {
       return res.status(400).json({ error: 'Groups tournaments use group management to set up matches — see the Groups tab instead.' });
@@ -2763,11 +2979,11 @@ router.post('/:id/generate-schedule', async (req, res) => {
       [leagueId]
     );
     if (existing.rows.length > 0) {
-      return res.status(409).json({ error: 'Schedule has already been generated for this league. Use Regenerate to make a new one.' });
+      return res.status(409).json({ error: 'Schedule has already been generated for this tournament. Use Regenerate to make a new one.' });
     }
 
     const membersResult = await pool.query(
-      `SELECT u.id, us.rating, lm.partner_id, lm.partner_status
+      `SELECT u.id, u.username, u.gender, us.rating, lm.partner_id, lm.partner_status
        FROM league_members lm
        JOIN users u ON u.id = lm.user_id
        JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
@@ -2810,7 +3026,7 @@ router.post('/:id/generate-schedule', async (req, res) => {
         scheduledMatches = generateRoundRobinSchedule(league, members);
       }
     } catch (buildErr) {
-      if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT') {
+      if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT' || buildErr.code === 'UNEVEN_GENDER_SPLIT') {
         return res.status(400).json({ error: buildErr.message });
       }
       throw buildErr;
@@ -2837,11 +3053,11 @@ async function generateKnockoutBracket(req, res, league) {
 
   const existing = await pool.query('SELECT id FROM playoff_matches WHERE league_id = $1 LIMIT 1', [leagueId]);
   if (existing.rows.length > 0) {
-    return res.status(409).json({ error: 'A bracket has already been generated for this league.' });
+    return res.status(409).json({ error: 'A bracket has already been generated for this tournament.' });
   }
 
   const membersResult = await pool.query(
-    `SELECT u.id, us.rating, lm.partner_id, lm.partner_status
+    `SELECT u.id, u.username, u.gender, us.rating, lm.partner_id, lm.partner_status
      FROM league_members lm
      JOIN users u ON u.id = lm.user_id
      JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
@@ -2892,7 +3108,7 @@ async function generateKnockoutBracket(req, res, league) {
   try {
     teams = resolveDoublesTeams(league, members);
   } catch (buildErr) {
-    if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT') {
+    if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT' || buildErr.code === 'UNEVEN_GENDER_SPLIT') {
       return res.status(400).json({ error: buildErr.message });
     }
     throw buildErr;
@@ -2950,12 +3166,12 @@ router.post('/:id/add-manual-match', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can add matches.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can add matches.' });
     }
     const completedError = checkNotCompleted(league);
     if (completedError) {
@@ -2982,7 +3198,7 @@ router.post('/:id/add-manual-match', async (req, res) => {
       }
       targetGroupId = group.id;
     } else if (league.schedule_type !== 'custom') {
-      return res.status(400).json({ error: 'This league does not use manual match building.' });
+      return res.status(400).json({ error: 'This tournament does not use manual match building.' });
     }
 
     if (league.format === 'doubles' && (!player1PartnerId || !player2PartnerId)) {
@@ -2998,7 +3214,7 @@ router.post('/:id/add-manual-match', async (req, res) => {
       [leagueId, allIds]
     );
     if (memberCheck.rows.length !== allIds.length) {
-      return res.status(400).json({ error: 'All selected players must be members of this league.' });
+      return res.status(400).json({ error: 'All selected players must be members of this tournament.' });
     }
 
     await pool.query(
@@ -3155,12 +3371,12 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
     await pool.withTransaction(async (client) => {
       const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
       if (leagueResult.rows.length === 0) {
-        throw new RouteError(404, 'League not found.');
+        throw new RouteError(404, 'Tournament not found.');
       }
       const league = leagueResult.rows[0];
 
       if (!(await isLeagueAdmin(client, league, userId))) {
-        throw new RouteError(403, 'Only the league host can regenerate the schedule.');
+        throw new RouteError(403, 'Only the tournament host or a co-host can regenerate the schedule.');
       }
       const completedError = checkNotCompleted(league);
       if (completedError) {
@@ -3213,6 +3429,13 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
       await client.query('DELETE FROM scheduled_matches WHERE league_id = $1', [leagueId]);
       await client.query('DELETE FROM playoff_matches WHERE league_id = $1', [leagueId]);
 
+      await recordAudit(client, {
+        leagueId,
+        actorId: userId,
+        action: 'regenerate_schedule',
+        summary: 'Regenerated the schedule — all previous match history and rating changes were reversed.',
+      });
+
       // Switching away from Groups tears down the groups themselves — there's
       // no "old groups, new format" hybrid state. Membership history inside
       // those groups goes with them, same as every other format switch wiping
@@ -3248,7 +3471,7 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
       }
 
       const membersResult = await client.query(
-        `SELECT u.id, us.rating, lm.partner_id, lm.partner_status
+        `SELECT u.id, u.username, u.gender, us.rating, lm.partner_id, lm.partner_status
          FROM league_members lm
          JOIN users u ON u.id = lm.user_id
          JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
@@ -3277,7 +3500,7 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
           scheduledMatches = generateRoundRobinSchedule(refreshedLeague, members);
         }
       } catch (buildErr) {
-        if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT') {
+        if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT' || buildErr.code === 'UNEVEN_GENDER_SPLIT') {
           throw new RouteError(400, buildErr.message);
         }
         throw buildErr;
@@ -3330,16 +3553,21 @@ function generateRoundRobinSchedule(league, members) {
   // every other team — no rating-tier grouping.
   let teams;
   if (league.partner_mode === 'host_auto') {
-    if (members.length % 2 !== 0) {
-      const err = new Error(
-        `Doubles needs an even number of players so everyone gets paired — currently ${members.length}. Add or remove one player, or switch to self-select/host-manual partner mode to intentionally leave someone out.`
-      );
-      err.code = 'ODD_MEMBER_COUNT';
-      throw err;
+    if (league.gender_category === 'mixed') {
+      teams = zigZagPairMixedTeams(members);
+    } else {
+      if (members.length % 2 !== 0) {
+        const err = new Error(
+          `Doubles needs an even number of players so everyone gets paired — currently ${members.length}. Add or remove one player, or switch to self-select/host-manual partner mode to intentionally leave someone out.`
+        );
+        err.code = 'ODD_MEMBER_COUNT';
+        throw err;
+      }
+      return generateHostAutoDoublesRoundRobin(members);
     }
-    return generateHostAutoDoublesRoundRobin(members);
+  } else {
+    teams = buildTeamsFromConfirmedPairs(members, league);
   }
-  teams = buildTeamsFromConfirmedPairs(members);
   teams.sort((a, b) => b.avgRating - a.avgRating);
 
   const scheduledMatches = [];
@@ -3549,7 +3777,7 @@ router.get('/:id/schedule', async (req, res) => {
     // should see it, not any other authenticated account.
     const leagueResult = await pool.query('SELECT created_by FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     if (leagueResult.rows[0].created_by !== userId) {
       const memberCheck = await pool.query(
@@ -3557,7 +3785,7 @@ router.get('/:id/schedule', async (req, res) => {
         [leagueId, userId]
       );
       if (memberCheck.rows.length === 0) {
-        return res.status(403).json({ error: 'Only members of this league can view this.' });
+        return res.status(403).json({ error: 'Only members of this tournament can view this.' });
       }
     }
 
@@ -3568,7 +3796,7 @@ router.get('/:id/schedule', async (req, res) => {
               pp1.username as player1_partner_username, pp1.phone_number as player1_partner_phone,
               p2.username as player2_username, p2.phone_number as player2_phone,
               pp2.username as player2_partner_username, pp2.phone_number as player2_partner_phone,
-              m.id as match_id, m.status as match_status, m.set_scores, m.winner_id, m.reported_by,
+              m.id as match_id, m.status as match_status, m.set_scores, m.winner_id, m.reported_by, m.photo_url,
               m.player1_id as reported_player1_id, m.player2_id as reported_player2_id
        FROM scheduled_matches sm
        LEFT JOIN matches m ON m.scheduled_match_id = sm.id AND m.status != 'rejected'
@@ -3580,10 +3808,286 @@ router.get('/:id/schedule', async (req, res) => {
        ORDER BY sm.tier_number ASC, sm.id ASC`,
       [leagueId]
     );
-    res.status(200).json({ schedule: result.rows });
+    res.status(200).json({ schedule: redactFixturePhones(result.rows, userId) });
   } catch (err) {
     console.error('Get schedule error:', err);
     res.status(500).json({ error: 'Something went wrong fetching the schedule.' });
+  }
+});
+
+// ---------- EXPORT STANDINGS/FIXTURES AS CSV (GAP-07, host or member) ----------
+// Returns { filename, csv } as JSON rather than a raw text/csv body — the
+// mobile ApiClient unconditionally jsonDecodes every response, so a raw CSV
+// body would arrive as null. The mobile side writes the csv string to a
+// temp file and shares it.
+router.get('/:id/export', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { type } = req.query;
+
+  if (!['standings', 'fixtures'].includes(type)) {
+    return res.status(400).json({ error: 'type must be standings or fixtures.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Tournament not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (league.created_by !== userId) {
+      const memberCheck = await pool.query(
+        'SELECT 1 FROM league_members WHERE league_id = $1 AND user_id = $2',
+        [leagueId, userId]
+      );
+      if (memberCheck.rows.length === 0) {
+        return res.status(403).json({ error: 'Only members of this tournament can export this.' });
+      }
+    }
+
+    const safeName = league.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+
+    if (type === 'standings') {
+      // Same win/loss logic as the GET /:id leaderboard (see the comment
+      // there) — a doubles partner is scored by whether their side won, not
+      // by literal equality with winner_id.
+      const result = await pool.query(
+        `SELECT u.username, us.rating, lm.points,
+                COALESCE(match_stats.matches_played, 0) AS matches_played,
+                COALESCE(match_stats.wins, 0) AS wins,
+                COALESCE(match_stats.losses, 0) AS losses
+         FROM league_members lm
+         JOIN users u ON u.id = lm.user_id
+         JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+         LEFT JOIN (
+           SELECT player_id, COUNT(*) AS matches_played,
+                  SUM(CASE WHEN won THEN 1 ELSE 0 END) AS wins,
+                  SUM(CASE WHEN won THEN 0 ELSE 1 END) AS losses
+           FROM (
+             SELECT id, league_id, player1_id AS player_id, (winner_id = player1_id) AS won FROM matches WHERE status = 'confirmed'
+             UNION ALL
+             SELECT id, league_id, player2_id AS player_id, (winner_id = player2_id) AS won FROM matches WHERE status = 'confirmed'
+             UNION ALL
+             SELECT id, league_id, player1_partner_id AS player_id, (winner_id = player1_id) AS won FROM matches WHERE status = 'confirmed' AND player1_partner_id IS NOT NULL
+             UNION ALL
+             SELECT id, league_id, player2_partner_id AS player_id, (winner_id = player2_id) AS won FROM matches WHERE status = 'confirmed' AND player2_partner_id IS NOT NULL
+             UNION ALL
+             SELECT id, league_id, player1_id AS player_id, (winner_id = player1_id) AS won FROM playoff_matches WHERE status = 'confirmed'
+             UNION ALL
+             SELECT id, league_id, player2_id AS player_id, (winner_id = player2_id) AS won FROM playoff_matches WHERE status = 'confirmed'
+             UNION ALL
+             SELECT id, league_id, player1_partner_id AS player_id, (winner_id = player1_id) AS won FROM playoff_matches WHERE status = 'confirmed' AND player1_partner_id IS NOT NULL
+             UNION ALL
+             SELECT id, league_id, player2_partner_id AS player_id, (winner_id = player2_id) AS won FROM playoff_matches WHERE status = 'confirmed' AND player2_partner_id IS NOT NULL
+           ) all_participants
+           WHERE league_id = $3
+           GROUP BY player_id
+         ) match_stats ON match_stats.player_id = u.id
+         WHERE lm.league_id = $3
+         ORDER BY lm.points DESC, COALESCE(match_stats.wins, 0) DESC, us.rating DESC`,
+        [league.sport, league.format, leagueId]
+      );
+
+      const rows = result.rows.map((r, i) => [
+        i + 1, r.username, r.rating, r.points, r.matches_played, r.wins, r.losses,
+      ]);
+      const csv = toCsv(['Rank', 'Player', 'Rating', 'Points', 'Played', 'Won', 'Lost'], rows);
+      return res.status(200).json({ filename: `${safeName}_standings.csv`, csv });
+    }
+
+    // type === 'fixtures'
+    const result = await pool.query(
+      `SELECT sm.tier_number, lg.name AS group_name,
+              p1.username AS player1_username, pp1.username AS player1_partner_username,
+              p2.username AS player2_username, pp2.username AS player2_partner_username,
+              sm.scheduled_time, sm.venue,
+              m.status AS match_status, m.set_scores, m.winner_id,
+              sm.player1_id, sm.player2_id
+       FROM scheduled_matches sm
+       LEFT JOIN league_groups lg ON lg.id = sm.group_id
+       LEFT JOIN matches m ON m.scheduled_match_id = sm.id AND m.status != 'rejected'
+       JOIN users p1 ON p1.id = sm.player1_id
+       JOIN users p2 ON p2.id = sm.player2_id
+       LEFT JOIN users pp1 ON pp1.id = sm.player1_partner_id
+       LEFT JOIN users pp2 ON pp2.id = sm.player2_partner_id
+       WHERE sm.league_id = $1
+       ORDER BY sm.tier_number ASC, sm.id ASC`,
+      [leagueId]
+    );
+
+    const rows = result.rows.map((r) => {
+      const winnerName = r.winner_id == null
+        ? ''
+        : r.winner_id === r.player1_id
+        ? r.player1_username
+        : r.winner_id === r.player2_id
+        ? r.player2_username
+        : '';
+      return [
+        r.tier_number, r.group_name || '',
+        r.player1_username, r.player1_partner_username || '',
+        r.player2_username, r.player2_partner_username || '',
+        r.scheduled_time || '', r.venue || '',
+        r.match_status || 'not played',
+        r.set_scores ? JSON.stringify(r.set_scores) : '',
+        winnerName,
+      ];
+    });
+    const csv = toCsv(
+      ['Round', 'Group', 'Player 1', 'Partner 1', 'Player 2', 'Partner 2', 'Scheduled Time', 'Venue', 'Status', 'Set Scores', 'Winner'],
+      rows
+    );
+    res.status(200).json({ filename: `${safeName}_fixtures.csv`, csv });
+  } catch (err) {
+    console.error('Export league error:', err);
+    res.status(500).json({ error: 'Something went wrong exporting.' });
+  }
+});
+
+// ---------- ACTIVITY LOG (GAP-14, admin only) ----------
+router.get('/:id/audit', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Tournament not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (!(await isLeagueAdmin(pool, league, userId))) {
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can view the activity log.' });
+    }
+
+    const result = await pool.query(
+      `SELECT al.id, al.action, al.summary, al.created_at, u.username AS actor_username
+       FROM league_audit_log al
+       LEFT JOIN users u ON u.id = al.actor_id
+       WHERE al.league_id = $1
+       ORDER BY al.created_at DESC
+       LIMIT 200`,
+      [leagueId]
+    );
+
+    res.status(200).json({ entries: result.rows });
+  } catch (err) {
+    console.error('Get audit log error:', err);
+    res.status(500).json({ error: 'Something went wrong fetching the activity log.' });
+  }
+});
+
+// ---------- ANNOUNCEMENTS (GAP-15) ----------
+// A one-way board, not chat: admin posts, every member gets notified and can
+// read the thread. Fans out over the existing notifications infra rather
+// than inventing a second delivery mechanism.
+router.post('/:id/announcements', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { body } = req.body;
+
+  if (!body || !body.trim()) {
+    return res.status(400).json({ error: 'Please enter an announcement.' });
+  }
+  if (body.trim().length > 2000) {
+    return res.status(400).json({ error: 'Announcement must be 2000 characters or fewer.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Tournament not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (!(await isLeagueAdmin(pool, league, userId))) {
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can post announcements.' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO league_announcements (league_id, author_id, body) VALUES ($1, $2, $3) RETURNING *`,
+      [leagueId, userId, body.trim()]
+    );
+
+    const members = await pool.query('SELECT user_id FROM league_members WHERE league_id = $1', [leagueId]);
+    await createNotifications(
+      pool,
+      members.rows.map((m) => m.user_id),
+      {
+        type: 'league_announcement',
+        title: `Announcement in ${league.name}`,
+        body: body.trim(),
+        leagueId,
+      }
+    );
+
+    res.status(201).json({ announcement: result.rows[0] });
+  } catch (err) {
+    console.error('Post announcement error:', err);
+    res.status(500).json({ error: 'Something went wrong posting the announcement.' });
+  }
+});
+
+router.get('/:id/announcements', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+
+  try {
+    const leagueResult = await pool.query('SELECT created_by FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Tournament not found.' });
+    }
+    if (leagueResult.rows[0].created_by !== userId) {
+      const memberCheck = await pool.query(
+        'SELECT 1 FROM league_members WHERE league_id = $1 AND user_id = $2',
+        [leagueId, userId]
+      );
+      if (memberCheck.rows.length === 0) {
+        return res.status(403).json({ error: 'Only members of this tournament can view this.' });
+      }
+    }
+
+    const result = await pool.query(
+      `SELECT la.id, la.body, la.created_at, u.username AS author_username
+       FROM league_announcements la
+       LEFT JOIN users u ON u.id = la.author_id
+       WHERE la.league_id = $1
+       ORDER BY la.created_at DESC`,
+      [leagueId]
+    );
+
+    res.status(200).json({ announcements: result.rows });
+  } catch (err) {
+    console.error('Get announcements error:', err);
+    res.status(500).json({ error: 'Something went wrong fetching announcements.' });
+  }
+});
+
+router.delete('/:id/announcements/:announcementId', async (req, res) => {
+  const userId = req.userId;
+  const { id: leagueId, announcementId } = req.params;
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Tournament not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (!(await isLeagueAdmin(pool, league, userId))) {
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can delete announcements.' });
+    }
+
+    await pool.query(
+      'DELETE FROM league_announcements WHERE id = $1 AND league_id = $2',
+      [announcementId, leagueId]
+    );
+
+    res.status(200).json({ message: 'Announcement deleted.' });
+  } catch (err) {
+    console.error('Delete announcement error:', err);
+    res.status(500).json({ error: 'Something went wrong deleting the announcement.' });
   }
 });
 
@@ -3595,20 +4099,20 @@ router.delete('/:id', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (league.created_by !== userId) {
-      return res.status(403).json({ error: 'Only the league host can delete this league.' });
+      return res.status(403).json({ error: 'Only the tournament host can delete this league.' });
     }
 
     await pool.query('DELETE FROM leagues WHERE id = $1', [leagueId]);
 
-    res.status(200).json({ message: 'League deleted.' });
+    res.status(200).json({ message: 'Tournament deleted.' });
   } catch (err) {
     console.error('Delete league error:', err);
-    res.status(500).json({ error: 'Something went wrong deleting the league.' });
+    res.status(500).json({ error: 'Something went wrong deleting the tournament.' });
   }
 });
 
@@ -3625,12 +4129,12 @@ router.post('/:id/complete', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can mark this tournament completed.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can mark this tournament completed.' });
     }
     if (league.status === 'completed') {
       return res.status(409).json({ error: 'This tournament is already marked completed.' });
@@ -3656,12 +4160,12 @@ router.post('/:id/reactivate', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can reactivate this tournament.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can reactivate this tournament.' });
     }
     if (league.status !== 'completed') {
       return res.status(409).json({ error: 'This tournament is not marked completed.' });
@@ -3686,18 +4190,18 @@ router.put('/:id', async (req, res) => {
   const {
     name, area, seasonStart, seasonEnd, academyName, isPrivate, hostEntersScores,
     registrationStart, registrationEnd, partnerMode,
-    pointsEnabled, pointsWin, pointsLoss,
+    pointsEnabled, pointsWin, pointsLoss, maxPlayers,
   } = req.body;
 
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can edit this league.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can edit this tournament.' });
     }
 
     const updates = [];
@@ -3728,7 +4232,7 @@ router.put('/:id', async (req, res) => {
 
     if (partnerMode !== undefined) {
       if (league.format !== 'doubles') {
-        return res.status(400).json({ error: 'Partner mode only applies to doubles leagues.' });
+        return res.status(400).json({ error: 'Partner mode only applies to doubles tournaments.' });
       }
       if (!VALID_PARTNER_MODES.includes(partnerMode)) {
         return res.status(400).json({ error: 'Invalid partner mode.' });
@@ -3790,6 +4294,25 @@ router.put('/:id', async (req, res) => {
       updates.push(`points_loss = $${idx++}`); params.push(finalPointsEnabled ? finalPointsLoss : 0);
     }
 
+    if (maxPlayers !== undefined) {
+      if (maxPlayers !== null && (!Number.isInteger(maxPlayers) || maxPlayers < 1)) {
+        return res.status(400).json({ error: 'Max players must be a whole number of at least 1.' });
+      }
+      if (maxPlayers !== null) {
+        // Can't cap below the current roster — that would leave the league
+        // over capacity with no way for anyone new to join, and no defined
+        // behavior for who'd need to be removed.
+        const memberCount = await pool.query(
+          'SELECT COUNT(*) FROM league_members WHERE league_id = $1',
+          [leagueId]
+        );
+        if (maxPlayers < parseInt(memberCount.rows[0].count, 10)) {
+          return res.status(400).json({ error: `Max players can't be set below the current roster size (${memberCount.rows[0].count}).` });
+        }
+      }
+      updates.push(`max_players = $${idx++}`); params.push(maxPlayers);
+    }
+
     if (updates.length === 0) {
       return res.status(400).json({ error: 'No editable fields provided.' });
     }
@@ -3803,7 +4326,87 @@ router.put('/:id', async (req, res) => {
     res.status(200).json({ league: result.rows[0] });
   } catch (err) {
     console.error('Edit league error:', err);
-    res.status(500).json({ error: 'Something went wrong updating the league.' });
+    res.status(500).json({ error: 'Something went wrong updating the tournament.' });
+  }
+});
+
+// ---------- CLONE LEAGUE FOR A NEW SEASON (GAP-12, admin only) ----------
+// Copies every config column but never matches/schedules/groups — "start
+// next season" should give a clean slate, not last season's results.
+router.post('/:id/clone', async (req, res) => {
+  const userId = req.userId;
+  const leagueId = req.params.id;
+  const { name, seasonStart, seasonEnd, copyRoster } = req.body;
+
+  if (!name || !seasonStart || !seasonEnd) {
+    return res.status(400).json({ error: 'Name, season start, and season end are required.' });
+  }
+  if (new Date(seasonStart) > new Date(seasonEnd)) {
+    return res.status(400).json({ error: 'Season start must be before season end.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Tournament not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (!(await isLeagueAdmin(pool, league, userId))) {
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can start a new season.' });
+    }
+
+    const newLeague = await pool.withTransaction(async (client) => {
+      let joinCode = null;
+      if (league.is_private) {
+        let unique = false;
+        while (!unique) {
+          joinCode = generateJoinCode();
+          const existing = await client.query('SELECT id FROM leagues WHERE join_code = $1', [joinCode]);
+          if (existing.rows.length === 0) unique = true;
+        }
+      }
+
+      const insertResult = await client.query(
+        `INSERT INTO leagues (name, sport, area, season_start, season_end, created_by, format, gender_category,
+                              schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
+                              min_rating, max_rating, registration_start, registration_end, partner_mode,
+                              points_enabled, points_win, points_loss, max_players)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULL, NULL, $17, $18, $19, $20, $21)
+         RETURNING *`,
+        [
+          name, league.sport, league.area, seasonStart, seasonEnd, userId, league.format, league.gender_category,
+          league.schedule_type, league.matches_per_player, league.host_enters_scores, league.is_private, joinCode,
+          league.academy_name, league.min_rating, league.max_rating, league.partner_mode,
+          league.points_enabled, league.points_win, league.points_loss, league.max_players,
+        ]
+      );
+      const cloned = insertResult.rows[0];
+
+      // Roster copy is opt-in — points/wins/losses live on league_members and
+      // are correctly left behind (a fresh row has no points), but pairing
+      // state (partner_id/partner_status) belongs to last season and is
+      // deliberately not copied either, same reasoning as matches/schedules.
+      if (copyRoster === true) {
+        const members = await client.query(
+          'SELECT user_id FROM league_members WHERE league_id = $1',
+          [leagueId]
+        );
+        for (const member of members.rows) {
+          await client.query(
+            'INSERT INTO league_members (league_id, user_id) VALUES ($1, $2)',
+            [cloned.id, member.user_id]
+          );
+        }
+      }
+
+      return cloned;
+    });
+
+    res.status(201).json({ league: newLeague });
+  } catch (err) {
+    console.error('Clone league error:', err);
+    res.status(500).json({ error: 'Something went wrong starting the new season.' });
   }
 });
 
@@ -3823,12 +4426,12 @@ router.put('/:id/schedule/:scheduledMatchId', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can edit the schedule.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can edit the schedule.' });
     }
     const completedError = checkNotCompleted(league);
     if (completedError) {
@@ -3864,7 +4467,7 @@ router.put('/:id/schedule/:scheduledMatchId', async (req, res) => {
       [leagueId, allIds]
     );
     if (memberCheck.rows.length !== allIds.length) {
-      return res.status(400).json({ error: 'All selected players must be members of this league.' });
+      return res.status(400).json({ error: 'All selected players must be members of this tournament.' });
     }
 
     if (scheduledTime && !force) {
@@ -3893,6 +4496,13 @@ router.put('/:id/schedule/:scheduledMatchId', async (req, res) => {
       [player1Id, player1PartnerId || null, player2Id, player2PartnerId || null, scheduledTime || null, venue || null, scheduledMatchId]
     );
 
+    await recordAudit(pool, {
+      leagueId,
+      actorId: userId,
+      action: 'edit_fixture',
+      summary: `Edited scheduled match #${scheduledMatchId}.`,
+    });
+
     res.status(200).json({ message: 'Match updated.' });
   } catch (err) {
     console.error('Edit scheduled match error:', err);
@@ -3908,12 +4518,12 @@ router.delete('/:id/schedule/:scheduledMatchId', async (req, res) => {
   try {
     const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
     if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'League not found.' });
+      return res.status(404).json({ error: 'Tournament not found.' });
     }
     const league = leagueResult.rows[0];
 
     if (!(await isLeagueAdmin(pool, league, userId))) {
-      return res.status(403).json({ error: 'Only the league host can delete a scheduled match.' });
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can delete a scheduled match.' });
     }
 
     const confirmedCheck = await pool.query(
@@ -3930,6 +4540,13 @@ router.delete('/:id/schedule/:scheduledMatchId', async (req, res) => {
     );
     await pool.query('DELETE FROM scheduled_matches WHERE id = $1 AND league_id = $2', [scheduledMatchId, leagueId]);
 
+    await recordAudit(pool, {
+      leagueId,
+      actorId: userId,
+      action: 'delete_fixture',
+      summary: `Deleted scheduled match #${scheduledMatchId}.`,
+    });
+
     res.status(200).json({ message: 'Match removed from schedule.' });
   } catch (err) {
     console.error('Delete scheduled match error:', err);
@@ -3941,6 +4558,7 @@ router.delete('/:id/schedule/:scheduledMatchId', async (req, res) => {
 // module-private helpers, and db.js attaches withTransaction/RouteError —
 // the test suite can reach this pure function without changing how
 // server.js consumes this file.
+router.zigZagPairMixedTeams = zigZagPairMixedTeams;
 router.dedupeTeams = dedupeTeams;
 router.buildGroupTree = buildGroupTree;
 router.collectDescendantIds = collectDescendantIds;

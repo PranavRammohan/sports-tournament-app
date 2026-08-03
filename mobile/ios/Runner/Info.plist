@@ -24,6 +24,20 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<!-- GAP-16 — custom-scheme deep links (rallyx://league/<id>,
+	     rallyx://join/<code>). See the matching Android intent-filter comment
+	     for why this is a custom scheme, not a universal link. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.rallyx.deeplink</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>rallyx</string>
+			</array>
+		</dict>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

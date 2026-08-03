@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
+import '../utils.dart';
+import '../validators.dart';
 import '../widgets/loading_skeleton.dart';
 
 class ReportMatchScreen extends StatefulWidget {
@@ -38,6 +40,7 @@ class _SetScore {
 }
 
 class _ReportMatchScreenState extends State<ReportMatchScreen> {
+  final _formKey = GlobalKey<FormState>();
   bool _loadingFixtures = true;
   bool _scheduleExists = false;
   String? _loadError;
@@ -51,6 +54,32 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
 
   final List<_SetScore> _sets = [_SetScore()];
   bool _submitting = false;
+
+  // GAP-17 — an optional scorecard photo, attached the same base64
+  // data-URI way as a profile picture (see utils.dart's pickImageAsDataUri).
+  Uint8List? _photoBytes;
+  String? _photoDataUri;
+
+  Future<void> _pickPhoto() async {
+    try {
+      // Scorecard photos need more detail than a tiny avatar — 1024px keeps
+      // it legible without ballooning past the server's request-body limit.
+      final picked = await pickImageAsDataUri(
+        maxWidth: 1024,
+        maxHeight: 1024,
+        imageQuality: 70,
+        maxSizeBytes: 4 * 1024 * 1024,
+      );
+      if (picked == null) return;
+      setState(() {
+        _photoBytes = picked.bytes;
+        _photoDataUri = picked.dataUri;
+      });
+    } on ProfileImageTooLargeException {
+      if (!mounted) return;
+      _showAlert('Photo too large', 'Please choose a smaller photo.');
+    }
+  }
 
   String get _unitLabel => widget.sport == 'tennis' ? 'Set' : 'Game';
 
@@ -181,6 +210,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
   }
 
   Future<void> _handleSubmit() async {
+    if (!_formKey.currentState!.validate()) return;
     if (_opponentId == null) {
       _showAlert('Missing info', 'Please select an opponent.');
       return;
@@ -254,6 +284,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
           'opponentUnits': totalOpponentUnits,
           'iWon': iWon,
           'setScores': setScores,
+          if (_photoDataUri != null) 'photoUrl': _photoDataUri,
         },
       );
 
@@ -363,7 +394,9 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
       appBar: AppBar(title: const Text('Report Match')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20.0),
-        child: Column(
+        child: Form(
+          key: _formKey,
+          child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (_scheduleExists) ...[
@@ -488,13 +521,15 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                 child: Row(
                   children: [
                     Expanded(
-                      child: TextField(
+                      child: TextFormField(
                         controller: set.myScore,
                         keyboardType: TextInputType.number,
                         inputFormatters: [
                           FilteringTextInputFormatter.digitsOnly,
                           LengthLimitingTextInputFormatter(3),
                         ],
+                        validator: (v) =>
+                            nonNegativeIntValidator(v, label: '$_unitLabel score'),
                         decoration: InputDecoration(
                           labelText: '$_unitLabel ${index + 1} — You',
                           isDense: true,
@@ -506,13 +541,15 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                       child: Text('-'),
                     ),
                     Expanded(
-                      child: TextField(
+                      child: TextFormField(
                         controller: set.opponentScore,
                         keyboardType: TextInputType.number,
                         inputFormatters: [
                           FilteringTextInputFormatter.digitsOnly,
                           LengthLimitingTextInputFormatter(3),
                         ],
+                        validator: (v) =>
+                            nonNegativeIntValidator(v, label: '$_unitLabel score'),
                         decoration: const InputDecoration(
                           labelText: 'Opponent',
                           isDense: true,
@@ -525,6 +562,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                           Icons.remove_circle_outline,
                           color: AppColors.danger,
                         ),
+                        tooltip: 'Remove $_unitLabel ${index + 1}',
                         onPressed: () => _removeSet(index),
                       ),
                   ],
@@ -536,6 +574,47 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                 onPressed: _addSet,
                 icon: const Icon(Icons.add),
                 label: Text('Add $_unitLabel'),
+              ),
+            const SizedBox(height: 20),
+            Text(
+              'Scorecard Photo (optional)',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            if (_photoBytes != null)
+              Stack(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.memory(
+                      _photoBytes!,
+                      height: 160,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      tooltip: 'Remove photo',
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.black45,
+                      ),
+                      onPressed: () => setState(() {
+                        _photoBytes = null;
+                        _photoDataUri = null;
+                      }),
+                    ),
+                  ),
+                ],
+              )
+            else
+              OutlinedButton.icon(
+                onPressed: _pickPhoto,
+                icon: const Icon(Icons.add_a_photo_outlined),
+                label: const Text('Attach a photo'),
               ),
             const SizedBox(height: 24),
             ElevatedButton(
@@ -552,6 +631,7 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
                   : const Text('Submit Result'),
             ),
           ],
+          ),
         ),
       ),
     );

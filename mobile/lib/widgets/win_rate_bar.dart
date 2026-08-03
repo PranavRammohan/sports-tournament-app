@@ -35,23 +35,31 @@ class WinRateBar extends StatelessWidget {
     final lossesInt = _asInt(losses);
     final total = winsInt + lossesInt;
     final ratio = total == 0 ? 0.0 : winsInt / total;
+    final percent = (ratio * 100).round();
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(height / 2),
-      child: SizedBox(
-        height: height,
-        child: Stack(
-          children: [
-            Container(
-              color: total == 0
-                  ? Colors.grey.withValues(alpha: 0.2)
-                  : AppColors.danger.withValues(alpha: 0.35),
+    return Semantics(
+      label: total == 0
+          ? 'No matches played yet'
+          : '$winsInt wins, $lossesInt losses, $percent% win rate',
+      child: ExcludeSemantics(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(height / 2),
+          child: SizedBox(
+            height: height,
+            child: Stack(
+              children: [
+                Container(
+                  color: total == 0
+                      ? Colors.grey.withValues(alpha: 0.2)
+                      : AppColors.danger.withValues(alpha: 0.35),
+                ),
+                FractionallySizedBox(
+                  widthFactor: ratio,
+                  child: Container(color: AppColors.success),
+                ),
+              ],
             ),
-            FractionallySizedBox(
-              widthFactor: ratio,
-              child: Container(color: AppColors.success),
-            ),
-          ],
+          ),
         ),
       ),
     );

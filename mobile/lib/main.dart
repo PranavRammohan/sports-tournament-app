@@ -6,6 +6,7 @@ import 'screens/signup_screen.dart';
 import 'screens/select_sports_screen.dart';
 import 'screens/main_shell.dart';
 import 'screens/onboarding_screen.dart';
+import 'deep_links.dart';
 
 class AppColors {
   static const Color primary = Color(0xFF1E293B);
@@ -83,6 +84,10 @@ void main() async {
   await _loadSavedThemeMode();
   final seenOnboarding = await _hasSeenOnboarding();
   runApp(RallyXApp(initialRoute: seenOnboarding ? '/login' : '/onboarding'));
+  // Fire-and-forget: not awaited in main() so app startup isn't blocked on
+  // it, and it needs navigatorKey.currentState to exist (i.e. runApp to
+  // have run) before it can navigate anywhere anyway.
+  DeepLinkService.init();
 }
 
 class RallyXApp extends StatelessWidget {

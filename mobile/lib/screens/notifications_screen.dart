@@ -171,7 +171,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           ),
                           builder: (context, value, child) =>
                               Opacity(opacity: value, child: child),
-                          child: InkWell(
+                          child: MergeSemantics(
+                            child: InkWell(
                             borderRadius: BorderRadius.circular(8),
                             onTap: () => _onTapNotification(n),
                             child: Container(
@@ -195,12 +196,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                         top: 5,
                                         right: 8,
                                       ),
-                                      child: Container(
-                                        width: 8,
-                                        height: 8,
-                                        decoration: const BoxDecoration(
-                                          color: AppColors.accent,
-                                          shape: BoxShape.circle,
+                                      child: Semantics(
+                                        label: 'Unread',
+                                        child: Container(
+                                          width: 8,
+                                          height: 8,
+                                          decoration: const BoxDecoration(
+                                            color: AppColors.accent,
+                                            shape: BoxShape.circle,
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -248,6 +252,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                     ),
                                 ],
                               ),
+                            ),
                             ),
                           ),
                         );

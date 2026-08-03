@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../api_client.dart';
+import '../validators.dart';
 
 class ChangePasswordScreen extends StatefulWidget {
   const ChangePasswordScreen({super.key});
@@ -11,6 +12,7 @@ class ChangePasswordScreen extends StatefulWidget {
 }
 
 class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
+  final _formKey = GlobalKey<FormState>();
   final TextEditingController _currentController = TextEditingController();
   final TextEditingController _newController = TextEditingController();
   final TextEditingController _confirmController = TextEditingController();
@@ -20,25 +22,10 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
   bool _obscureConfirm = true;
 
   Future<void> _handleChange() async {
+    if (!_formKey.currentState!.validate()) return;
+
     final current = _currentController.text;
     final newPass = _newController.text;
-    final confirm = _confirmController.text;
-
-    if (current.isEmpty || newPass.isEmpty || confirm.isEmpty) {
-      _showAlert('Missing fields', 'Please fill in all fields.');
-      return;
-    }
-    if (newPass.length < 6) {
-      _showAlert(
-        'Weak password',
-        'New password must be at least 6 characters.',
-      );
-      return;
-    }
-    if (newPass != confirm) {
-      _showAlert('Mismatch', 'New password and confirmation do not match.');
-      return;
-    }
 
     HapticFeedback.lightImpact();
     setState(() => _loading = true);
@@ -89,12 +76,15 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
       appBar: AppBar(title: const Text('Change Password')),
       body: Padding(
         padding: const EdgeInsets.all(20),
-        child: Column(
+        child: Form(
+          key: _formKey,
+          child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextField(
+            TextFormField(
               controller: _currentController,
               obscureText: _obscureCurrent,
+              validator: (v) => requiredField(v, label: 'Current password'),
               decoration: InputDecoration(
                 labelText: 'Current Password',
                 prefixIcon: const Icon(Icons.lock_outline),
@@ -102,15 +92,17 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
                   icon: Icon(
                     _obscureCurrent ? Icons.visibility_off : Icons.visibility,
                   ),
+                  tooltip: _obscureCurrent ? 'Show password' : 'Hide password',
                   onPressed: () =>
                       setState(() => _obscureCurrent = !_obscureCurrent),
                 ),
               ),
             ),
             const SizedBox(height: 14),
-            TextField(
+            TextFormField(
               controller: _newController,
               obscureText: _obscureNew,
+              validator: passwordValidator,
               decoration: InputDecoration(
                 labelText: 'New Password',
                 prefixIcon: const Icon(Icons.lock_reset),
@@ -118,14 +110,17 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
                   icon: Icon(
                     _obscureNew ? Icons.visibility_off : Icons.visibility,
                   ),
+                  tooltip: _obscureNew ? 'Show password' : 'Hide password',
                   onPressed: () => setState(() => _obscureNew = !_obscureNew),
                 ),
               ),
             ),
             const SizedBox(height: 14),
-            TextField(
+            TextFormField(
               controller: _confirmController,
               obscureText: _obscureConfirm,
+              validator: (v) =>
+                  confirmPasswordValidator(v, _newController.text),
               decoration: InputDecoration(
                 labelText: 'Confirm New Password',
                 prefixIcon: const Icon(Icons.lock_reset),
@@ -133,6 +128,7 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
                   icon: Icon(
                     _obscureConfirm ? Icons.visibility_off : Icons.visibility,
                   ),
+                  tooltip: _obscureConfirm ? 'Show password' : 'Hide password',
                   onPressed: () =>
                       setState(() => _obscureConfirm = !_obscureConfirm),
                 ),
@@ -153,6 +149,7 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
                   : const Text('Update Password'),
             ),
           ],
+          ),
         ),
       ),
     );

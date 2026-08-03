@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
+import '../deep_links.dart';
 import '../widgets/sport_icon.dart';
 import '../constants/sports.dart';
 
@@ -81,6 +82,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
 
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/home');
+      DeepLinkService.consumePendingIfAny();
     } catch (err) {
       _showAlert(
         'Network error',
