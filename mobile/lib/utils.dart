@@ -64,6 +64,29 @@ Future<({Uint8List bytes, String dataUri})?> pickProfileImageAsDataUri() {
   return pickImageAsDataUri();
 }
 
+/// Decodes a `data:image/...;base64,<payload>` URI (the only shape a stored
+/// profile picture or match photo ever has — see server.js's comment on why:
+/// there's no separate image-hosting/CDN step, the base64 payload rides
+/// directly in the JSON body and is stored as-is) into raw bytes for
+/// [Image.memory]/[MemoryImage].
+///
+/// Deliberately NOT a real network fetch: `NetworkImage`/`CachedNetworkImage`
+/// only "work" on a data: URI on Flutter Web, because web delegates image
+/// decoding to the browser, which natively understands `data:` URLs. On
+/// Android/iOS, those widgets fetch through a real HTTP client, which has no
+/// `data:` scheme support — the request just fails and silently falls back
+/// to the error/placeholder widget, which is why a profile picture used to
+/// show up in a Chrome build but never on a phone.
+Uint8List? decodeDataUriImage(String dataUri) {
+  final comma = dataUri.indexOf(',');
+  if (comma == -1) return null;
+  try {
+    return base64Decode(dataUri.substring(comma + 1));
+  } catch (_) {
+    return null;
+  }
+}
+
 /// GAP-11 — every rating render site used to just interpolate the raw JSON
 /// value, so a numeric(6,2) column showed up as "6500.0" or "3.50". Badminton
 /// and table tennis ratings are always whole numbers in practice; tennis and

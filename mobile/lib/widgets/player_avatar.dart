@@ -3,15 +3,22 @@
 // fallback when they don't have one. Replaces five near-identical ad hoc
 // CircleAvatar implementations that used to be scattered across
 // home_screen.dart, profile_screen.dart, player_profile_screen.dart, and
-// league_detail_screen.dart — none of which cached images or handled a
-// broken/slow URL gracefully. Uses cached_network_image for both.
+// league_detail_screen.dart.
+//
+// profilePicUrl is always a base64 data: URI, never a real hosted URL (see
+// utils.dart's decodeDataUriImage) — this renders it via Image.memory, not
+// a network image widget. NetworkImage/CachedNetworkImage only appeared to
+// work here on Flutter Web (which delegates image decoding to the browser,
+// and browsers understand data: URLs); on Android/iOS they fetch through a
+// real HTTP client, which has no data: scheme support, so the photo silently
+// fell back to the initials avatar on every phone build.
 //
 // Not used by edit_profile_screen.dart, which has its own editable avatar
 // (local file preview + camera-icon overlay for changing the photo) — a
 // meaningfully different widget, not a plain display avatar.
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import '../main.dart';
+import '../utils.dart';
 
 class PlayerAvatar extends StatelessWidget {
   final String username;
@@ -33,7 +40,6 @@ class PlayerAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasPic = profilePicUrl != null && profilePicUrl!.isNotEmpty;
     final bg = backgroundColor ?? AppColors.primary.withValues(alpha: 0.15);
     final fg = foregroundColor ?? AppColors.primary;
     final initialStyle = TextStyle(
@@ -42,7 +48,11 @@ class PlayerAvatar extends StatelessWidget {
       color: fg,
     );
 
-    if (!hasPic) {
+    final bytes = (profilePicUrl != null && profilePicUrl!.isNotEmpty)
+        ? decodeDataUriImage(profilePicUrl!)
+        : null;
+
+    if (bytes == null) {
       return Semantics(
         label: "$username's avatar",
         image: true,
@@ -61,17 +71,12 @@ class PlayerAvatar extends StatelessWidget {
         radius: radius,
         backgroundColor: bg,
         child: ClipOval(
-          child: CachedNetworkImage(
-            imageUrl: profilePicUrl!,
+          child: Image.memory(
+            bytes,
             width: radius * 2,
             height: radius * 2,
             fit: BoxFit.cover,
-            placeholder: (context, url) => SizedBox(
-              width: radius,
-              height: radius,
-              child: CircularProgressIndicator(strokeWidth: 2, color: fg),
-            ),
-            errorWidget: (context, url, error) =>
+            errorBuilder: (context, error, stackTrace) =>
                 Text(_initial, style: initialStyle),
           ),
         ),

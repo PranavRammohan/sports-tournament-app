@@ -165,7 +165,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     if (_newProfileImageBytes != null) {
       avatarImage = MemoryImage(_newProfileImageBytes!);
     } else if (!_removeExistingPhoto && hasExistingPhoto) {
-      avatarImage = NetworkImage(_existingPhotoUrl!);
+      // _existingPhotoUrl is a base64 data: URI, never a real hosted URL —
+      // NetworkImage silently failed to decode it on Android/iOS (only
+      // "worked" on Flutter Web, which delegates to the browser's native
+      // data: URL support). See utils.dart's decodeDataUriImage.
+      final bytes = decodeDataUriImage(_existingPhotoUrl!);
+      if (bytes != null) avatarImage = MemoryImage(bytes);
     }
 
     return Scaffold(
