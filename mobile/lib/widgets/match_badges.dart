@@ -20,21 +20,26 @@ class WinLossPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = won ? AppColors.success : AppColors.danger;
-    return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: dense ? 6 : 8,
-        vertical: dense ? 2 : 4,
-      ),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(dense ? 4 : 6),
-      ),
-      child: Text(
-        won ? 'WIN' : 'LOSS',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: dense ? 9 : 11,
-          fontWeight: FontWeight.bold,
+    return Semantics(
+      label: won ? 'Win' : 'Loss',
+      child: ExcludeSemantics(
+        child: Container(
+          padding: EdgeInsets.symmetric(
+            horizontal: dense ? 6 : 8,
+            vertical: dense ? 2 : 4,
+          ),
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(dense ? 4 : 6),
+          ),
+          child: Text(
+            won ? 'WIN' : 'LOSS',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: dense ? 9 : 11,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
         ),
       ),
     );
@@ -60,12 +65,18 @@ class RatingDeltaText extends StatelessWidget {
     final d = delta;
     if (d == null) return const SizedBox.shrink();
     final positive = d >= 0;
-    return Text(
-      '${positive ? '+' : ''}${d.toStringAsFixed(decimalDigits)}',
-      style: TextStyle(
-        fontSize: fontSize,
-        fontWeight: FontWeight.bold,
-        color: positive ? AppColors.success : AppColors.danger,
+    final text = '${positive ? '+' : ''}${d.toStringAsFixed(decimalDigits)}';
+    return Semantics(
+      label: 'Rating change: $text',
+      child: ExcludeSemantics(
+        child: Text(
+          text,
+          style: TextStyle(
+            fontSize: fontSize,
+            fontWeight: FontWeight.bold,
+            color: positive ? AppColors.success : AppColors.danger,
+          ),
+        ),
       ),
     );
   }
@@ -84,12 +95,17 @@ class PointsBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      '$points pts',
-      style: TextStyle(
-        fontSize: fontSize,
-        fontWeight: FontWeight.bold,
-        color: AppColors.accent,
+    return Semantics(
+      label: '$points points',
+      child: ExcludeSemantics(
+        child: Text(
+          '$points pts',
+          style: TextStyle(
+            fontSize: fontSize,
+            fontWeight: FontWeight.bold,
+            color: AppColors.accent,
+          ),
+        ),
       ),
     );
   }

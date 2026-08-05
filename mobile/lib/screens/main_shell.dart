@@ -146,17 +146,23 @@ class _MainShellState extends State<MainShell> {
             ),
             NavigationDestination(
               icon: _pendingCount > 0
-                  ? Badge(
-                      label: Text('$_pendingCount'),
-                      backgroundColor: AppColors.danger,
-                      child: const Icon(Icons.pending_actions_outlined),
+                  ? Semantics(
+                      label: '$_pendingCount pending confirmations',
+                      child: Badge(
+                        label: Text('$_pendingCount'),
+                        backgroundColor: AppColors.danger,
+                        child: const Icon(Icons.pending_actions_outlined),
+                      ),
                     )
                   : const Icon(Icons.pending_actions_outlined),
               selectedIcon: _pendingCount > 0
-                  ? Badge(
-                      label: Text('$_pendingCount'),
-                      backgroundColor: AppColors.danger,
-                      child: const Icon(Icons.pending_actions),
+                  ? Semantics(
+                      label: '$_pendingCount pending confirmations',
+                      child: Badge(
+                        label: Text('$_pendingCount'),
+                        backgroundColor: AppColors.danger,
+                        child: const Icon(Icons.pending_actions),
+                      ),
                     )
                   : const Icon(Icons.pending_actions),
               label: 'Pending',

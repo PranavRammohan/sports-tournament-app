@@ -10,6 +10,7 @@ import '../widgets/sport_icon.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
 import '../widgets/match_badges.dart';
+import '../widgets/match_photo_thumbnail.dart';
 import 'league_detail_screen.dart';
 
 class MatchHistoryScreen extends StatefulWidget {
@@ -213,7 +214,8 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                                 ),
                                 builder: (context, value, child) =>
                                     Opacity(opacity: value, child: child),
-                                child: Material(
+                                child: MergeSemantics(
+                                  child: Material(
                                   color: Colors.transparent,
                                   child: InkWell(
                                     borderRadius: BorderRadius.circular(8),
@@ -299,6 +301,16 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                                               ],
                                             ),
                                           ),
+                                          if (m['photo_url'] != null)
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                left: 6,
+                                              ),
+                                              child: MatchPhotoThumbnail(
+                                                photoUrl: m['photo_url'],
+                                                size: 28,
+                                              ),
+                                            ),
                                           RatingDeltaText(delta: ratingChange),
                                           if (m['league_id'] != null)
                                             Padding(
@@ -314,6 +326,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                                         ],
                                       ),
                                     ),
+                                  ),
                                   ),
                                 ),
                               );

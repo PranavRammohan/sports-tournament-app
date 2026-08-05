@@ -16,6 +16,8 @@ import '../widgets/match_badges.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
 import '../widgets/match_photo_thumbnail.dart';
+import '../widgets/match_photo_picker.dart';
+import '../widgets/team_name_row.dart';
 import 'report_match_screen.dart';
 import 'playoffs_screen.dart';
 import 'regenerate_schedule_dialog.dart';
@@ -1203,6 +1205,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         title: 'Edit Score',
         unitLabel: _unitLabel,
         initialSets: initialSets,
+        initialPhotoUrl: f['photo_url'],
       ),
     );
     if (result == null) return;
@@ -1279,6 +1282,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           'player2Units': result['player2Units'],
           'player1Won': result['player1Won'],
           'setScores': result['setScores'],
+          if (result['photoUrl'] != null) 'photoUrl': result['photoUrl'],
         },
       );
       if (!mounted) return;
@@ -1342,6 +1346,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         opponentName: opponentName,
         unitLabel: _unitLabel,
         initialSets: initialSets,
+        initialPhotoUrl: f['photo_url'],
       ),
     );
     if (result == null) return;
@@ -3189,13 +3194,6 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: myMatches.map((m) {
-            final isDoublesMatch = m['player1_partner_username'] != null;
-            final p1 = isDoublesMatch
-                ? '${m['player1_username'] ?? 'TBD'}${m['player1_partner_username'] != null ? ' & ${m['player1_partner_username']}' : ''}'
-                : (m['player1_username'] ?? 'TBD');
-            final p2 = isDoublesMatch
-                ? '${m['player2_username'] ?? 'TBD'}${m['player2_partner_username'] != null ? ' & ${m['player2_partner_username']}' : ''}'
-                : (m['player2_username'] ?? 'TBD');
             return Container(
               margin: const EdgeInsets.only(bottom: 8),
               padding: const EdgeInsets.symmetric(
@@ -3211,9 +3209,28 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               child: Row(
                 children: [
                   Expanded(
-                    child: Text(
-                      '$p1 vs $p2',
-                      style: const TextStyle(fontSize: 13),
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: TeamNameRow(
+                            playerId: m['player1_id'],
+                            playerName: m['player1_username'] ?? 'TBD',
+                            partnerId: m['player1_partner_id'],
+                            partnerName: m['player1_partner_username'],
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                        const Text(' vs ', style: TextStyle(fontSize: 13)),
+                        Flexible(
+                          child: TeamNameRow(
+                            playerId: m['player2_id'],
+                            playerName: m['player2_username'] ?? 'TBD',
+                            partnerId: m['player2_partner_id'],
+                            partnerName: m['player2_partner_username'],
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   Text(
@@ -3268,16 +3285,6 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     final isDoubles = f['player1_partner_username'] != null;
     final p1Rating = _ratingFor(f['player1_id']);
     final p2Rating = _ratingFor(f['player2_id']);
-    final team1 = isDoubles
-        ? '${f['player1_username']} & ${f['player1_partner_username']}'
-        : (p1Rating != null
-              ? '${f['player1_username']} ($p1Rating)'
-              : f['player1_username']);
-    final team2 = isDoubles
-        ? '${f['player2_username']} & ${f['player2_partner_username']}'
-        : (p2Rating != null
-              ? '${f['player2_username']} ($p2Rating)'
-              : f['player2_username']);
     final isCompleted = f['match_status'] == 'confirmed';
     final team1Won = isCompleted && f['winner_id'] == f['reported_player1_id'];
     final team2Won = isCompleted && f['winner_id'] == f['reported_player2_id'];
@@ -3347,48 +3354,51 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           Row(
             children: [
               Expanded(
-                child: isCompleted
-                    ? Text.rich(
-                        TextSpan(
-                          children: [
-                            TextSpan(
-                              text: team1,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: team1Won
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                                color: team1Won
-                                    ? AppColors.success
-                                    : primaryTextColor,
-                              ),
-                            ),
-                            TextSpan(
-                              text: '  vs  ',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: subtleVsColor,
-                              ),
-                            ),
-                            TextSpan(
-                              text: team2,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: team2Won
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                                color: team2Won
-                                    ? AppColors.success
-                                    : primaryTextColor,
-                              ),
-                            ),
-                          ],
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: TeamNameRow(
+                        playerId: f['player1_id'],
+                        playerName: f['player1_username'] ?? '',
+                        partnerId: f['player1_partner_id'],
+                        partnerName: f['player1_partner_username'],
+                        suffix: !isDoubles && p1Rating != null
+                            ? ' ($p1Rating)'
+                            : null,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: team1Won
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                          color: team1Won
+                              ? AppColors.success
+                              : primaryTextColor,
                         ),
-                      )
-                    : Text(
-                        '$team1 vs $team2',
-                        style: TextStyle(fontSize: 13, color: primaryTextColor),
                       ),
+                    ),
+                    Text('  vs  ', style: TextStyle(fontSize: 13, color: subtleVsColor)),
+                    Flexible(
+                      child: TeamNameRow(
+                        playerId: f['player2_id'],
+                        playerName: f['player2_username'] ?? '',
+                        partnerId: f['player2_partner_id'],
+                        partnerName: f['player2_partner_username'],
+                        suffix: !isDoubles && p2Rating != null
+                            ? ' ($p2Rating)'
+                            : null,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: team2Won
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                          color: team2Won
+                              ? AppColors.success
+                              : primaryTextColor,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
               if (f['photo_url'] != null) ...[
                 MatchPhotoThumbnail(photoUrl: f['photo_url'], size: 28),
@@ -3588,12 +3598,16 @@ class _SelfReportSetsDialog extends StatefulWidget {
   final String opponentName;
   final String unitLabel;
   final List<Map<String, int>>? initialSets;
+  // GAP-17 — seeds the photo preview on an edit path; null on a fresh
+  // report. See MatchPhotoPicker for why there's no "remove" affordance.
+  final String? initialPhotoUrl;
 
   const _SelfReportSetsDialog({
     this.title = 'Report Result',
     this.opponentName = 'Opponent',
     this.unitLabel = 'Set',
     this.initialSets,
+    this.initialPhotoUrl,
   });
 
   @override
@@ -3604,6 +3618,7 @@ class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
   static const int _maxSets = 7;
   late List<_SetScore> _sets;
   String? _error;
+  String? _photoUrl;
 
   @override
   void initState() {
@@ -3682,6 +3697,7 @@ class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
                           Icons.remove_circle_outline,
                           color: AppColors.danger,
                         ),
+                        tooltip: 'Remove ${widget.unitLabel} ${index + 1}',
                         onPressed: () => setState(() => _sets.removeAt(index)),
                       ),
                   ],
@@ -3694,6 +3710,11 @@ class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
                 icon: const Icon(Icons.add),
                 label: Text('Add ${widget.unitLabel}'),
               ),
+            const SizedBox(height: 12),
+            MatchPhotoPicker(
+              initialPhotoUrl: widget.initialPhotoUrl,
+              onChanged: (dataUri) => _photoUrl = dataUri,
+            ),
           ],
         ),
       ),
@@ -3735,6 +3756,7 @@ class _SelfReportSetsDialogState extends State<_SelfReportSetsDialog> {
               'opponentUnits': totalOpp,
               'iWon': setsWonByMe > setsWonByOpp,
               'setScores': setScores,
+              if (_photoUrl != null) 'photoUrl': _photoUrl,
             });
           },
           child: const Text('Submit'),
@@ -3750,6 +3772,9 @@ class _HostReportSetsDialog extends StatefulWidget {
   final String title;
   final String unitLabel;
   final List<Map<String, int>>? initialSets;
+  // GAP-17 — seeds the photo preview on an edit path; null on a fresh
+  // report. See MatchPhotoPicker for why there's no "remove" affordance.
+  final String? initialPhotoUrl;
 
   const _HostReportSetsDialog({
     required this.player1Name,
@@ -3757,6 +3782,7 @@ class _HostReportSetsDialog extends StatefulWidget {
     this.title = 'Enter Score',
     this.unitLabel = 'Set',
     this.initialSets,
+    this.initialPhotoUrl,
   });
 
   @override
@@ -3767,6 +3793,7 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
   static const int _maxSets = 7;
   late List<_SetScore> _sets;
   String? _error;
+  String? _photoUrl;
 
   @override
   void initState() {
@@ -3846,6 +3873,7 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
                           Icons.remove_circle_outline,
                           color: AppColors.danger,
                         ),
+                        tooltip: 'Remove ${widget.unitLabel} ${index + 1}',
                         onPressed: () => setState(() => _sets.removeAt(index)),
                       ),
                   ],
@@ -3858,6 +3886,11 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
                 icon: const Icon(Icons.add),
                 label: Text('Add ${widget.unitLabel}'),
               ),
+            const SizedBox(height: 12),
+            MatchPhotoPicker(
+              initialPhotoUrl: widget.initialPhotoUrl,
+              onChanged: (dataUri) => _photoUrl = dataUri,
+            ),
           ],
         ),
       ),
@@ -3899,6 +3932,7 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
               'player2Units': totalP2,
               'player1Won': setsWonByP1 > setsWonByP2,
               'setScores': setScores,
+              if (_photoUrl != null) 'photoUrl': _photoUrl,
             });
           },
           child: const Text('Submit'),

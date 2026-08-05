@@ -10,6 +10,7 @@ import '../widgets/sport_icon.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
 import '../widgets/match_photo_thumbnail.dart';
+import '../widgets/team_name_row.dart';
 import '../utils.dart';
 
 class PendingMatchesScreen extends StatefulWidget {
@@ -291,14 +292,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                       itemBuilder: (context, index) {
                         final m = _matches[index];
                         final isActing = _actingIds.contains(m['id']);
-                        final isDoubles = m['league_format'] == 'doubles';
                         final isPlayoff = _isPlayoff(m);
-                        final team1 = isDoubles
-                            ? '${m['player1_username']} & ${m['player1_partner_username'] ?? '?'}'
-                            : m['player1_username'];
-                        final team2 = isDoubles
-                            ? '${m['player2_username']} & ${m['player2_partner_username'] ?? '?'}'
-                            : m['player2_username'];
                         final reportedByPlayer1 =
                             m['reported_by'] == m['player1_id'];
                         final sportLabel = isPlayoff
@@ -341,13 +335,53 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                                               color: subtleTextColor,
                                             ),
                                           ),
-                                          Text(
-                                            '$team1 vs $team2',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 13,
-                                              color: primaryTextColor,
-                                            ),
+                                          Row(
+                                            children: [
+                                              Flexible(
+                                                child: TeamNameRow(
+                                                  playerId: m['player1_id'],
+                                                  playerName:
+                                                      m['player1_username'] ??
+                                                      '',
+                                                  partnerId:
+                                                      m['player1_partner_id'],
+                                                  partnerName:
+                                                      m['player1_partner_username'],
+                                                  style: TextStyle(
+                                                    fontWeight:
+                                                        FontWeight.w600,
+                                                    fontSize: 13,
+                                                    color: primaryTextColor,
+                                                  ),
+                                                ),
+                                              ),
+                                              Text(
+                                                ' vs ',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 13,
+                                                  color: primaryTextColor,
+                                                ),
+                                              ),
+                                              Flexible(
+                                                child: TeamNameRow(
+                                                  playerId: m['player2_id'],
+                                                  playerName:
+                                                      m['player2_username'] ??
+                                                      '',
+                                                  partnerId:
+                                                      m['player2_partner_id'],
+                                                  partnerName:
+                                                      m['player2_partner_username'],
+                                                  style: TextStyle(
+                                                    fontWeight:
+                                                        FontWeight.w600,
+                                                    fontSize: 13,
+                                                    color: primaryTextColor,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
                                           ),
                                           Text(
                                             _formatSetScores(

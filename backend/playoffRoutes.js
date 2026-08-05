@@ -826,7 +826,7 @@ router.post('/match/:matchId/report', async (req, res) => {
 router.put('/match/:matchId/edit-report', async (req, res) => {
   const userId = req.userId;
   const matchId = req.params.matchId;
-  const { myUnits, opponentUnits, iWon, setScores } = req.body;
+  const { myUnits, opponentUnits, iWon, setScores, photoUrl } = req.body;
 
   if (myUnits == null || opponentUnits == null || iWon == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
@@ -869,10 +869,14 @@ router.put('/match/:matchId/edit-report', async (req, res) => {
     const player1Units = onSideOne ? myUnits : opponentUnits;
     const player2Units = onSideOne ? opponentUnits : myUnits;
 
+    // photoUrl is optional-on-edit, same as PUT /match/:matchId/edit-score
+    // below: only overwrite it when the caller actually sent one, so
+    // re-editing scores without touching the photo doesn't silently wipe it.
     await pool.query(
-      `UPDATE playoff_matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4
-       WHERE id = $5`,
-      [player1Units, player2Units, winnerId, JSON.stringify(setScores || []), matchId]
+      `UPDATE playoff_matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4,
+       photo_url = COALESCE($5, photo_url)
+       WHERE id = $6`,
+      [player1Units, player2Units, winnerId, JSON.stringify(setScores || []), photoUrl || null, matchId]
     );
 
     res.status(200).json({ message: 'Report updated, still waiting for confirmation.' });

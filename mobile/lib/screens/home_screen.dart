@@ -12,6 +12,7 @@ import '../widgets/match_badges.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
 import '../widgets/win_rate_bar.dart';
+import '../widgets/team_name_row.dart';
 import 'add_sport_screen.dart';
 import 'my_leagues_screen.dart';
 import 'match_history_screen.dart';
@@ -159,20 +160,27 @@ class _HomeScreenState extends State<HomeScreen> {
         .join(' ');
   }
 
-  String _opponentLabel(dynamic m, int? currentUserId) {
+  // The opposing side's name(s), as a tappable TeamNameRow rather than a
+  // plain string — each of these cards is itself wrapped in its own InkWell
+  // (to open match history / the tournament), but Flutter resolves the
+  // nested tap correctly: tapping the name opens that player's profile,
+  // tapping anywhere else on the card falls through to the outer action.
+  Widget _opponentTeamNameRow(dynamic m, int? currentUserId, TextStyle style) {
     final isTeam1 =
         m['player1_id'] == currentUserId ||
         m['player1_partner_id'] == currentUserId;
-    final isDoubles = m['player1_partner_username'] != null;
-    if (isTeam1) {
-      return isDoubles
-          ? '${m['player2_username']} & ${m['player2_partner_username']}'
-          : m['player2_username'];
-    } else {
-      return isDoubles
-          ? '${m['player1_username']} & ${m['player1_partner_username']}'
-          : m['player1_username'];
-    }
+    return TeamNameRow(
+      playerId: isTeam1 ? m['player2_id'] : m['player1_id'],
+      playerName:
+          (isTeam1 ? m['player2_username'] : m['player1_username']) ?? '',
+      partnerId: isTeam1
+          ? m['player2_partner_id']
+          : m['player1_partner_id'],
+      partnerName: isTeam1
+          ? m['player2_partner_username']
+          : m['player1_partner_username'],
+      style: style,
+    );
   }
 
   double? _toDouble(dynamic value) {
@@ -211,7 +219,9 @@ class _HomeScreenState extends State<HomeScreen> {
             },
           ),
           IconButton(
-            tooltip: 'Notifications',
+            tooltip: widget.unreadNotifCount > 0
+                ? '${widget.unreadNotifCount} unread notifications'
+                : 'Notifications',
             icon: widget.unreadNotifCount > 0
                 ? Badge(
                     label: Text('${widget.unreadNotifCount}'),
@@ -568,7 +578,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final iWon = isTeam1
         ? m['winner_id'] == m['player1_id']
         : m['winner_id'] == m['player2_id'];
-    final opponent = _opponentLabel(m, _currentUserId);
 
     double? ratingChange;
     if (m['player1_id'] == _currentUserId) {
@@ -629,16 +638,32 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(width: 8),
             ],
             Expanded(
-              child: Text(
-                'vs $opponent',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                  color:
-                      Theme.of(context).textTheme.bodyLarge?.color ??
-                      AppColors.textDark,
-                ),
-                overflow: TextOverflow.ellipsis,
+              child: Row(
+                children: [
+                  Text(
+                    'vs ',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color:
+                          Theme.of(context).textTheme.bodyLarge?.color ??
+                          AppColors.textDark,
+                    ),
+                  ),
+                  Flexible(
+                    child: _opponentTeamNameRow(
+                      m,
+                      _currentUserId,
+                      TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color:
+                            Theme.of(context).textTheme.bodyLarge?.color ??
+                            AppColors.textDark,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
             RatingDeltaText(delta: ratingChange),
@@ -727,18 +752,6 @@ class _HomeScreenState extends State<HomeScreen> {
     Color subtleTextColor,
     bool isDark,
   ) {
-    final isTeam1 =
-        m['player1_id'] == _currentUserId ||
-        m['player1_partner_id'] == _currentUserId;
-    final isDoubles = m['player1_partner_username'] != null;
-    final opponent = isTeam1
-        ? (isDoubles
-              ? '${m['player2_username']} & ${m['player2_partner_username']}'
-              : m['player2_username'])
-        : (isDoubles
-              ? '${m['player1_username']} & ${m['player1_partner_username']}'
-              : m['player1_username']);
-
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       child: InkWell(
@@ -768,15 +781,32 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'vs $opponent',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                        color:
-                            Theme.of(context).textTheme.bodyLarge?.color ??
-                            AppColors.textDark,
-                      ),
+                    Row(
+                      children: [
+                        Text(
+                          'vs ',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                            color:
+                                Theme.of(context).textTheme.bodyLarge?.color ??
+                                AppColors.textDark,
+                          ),
+                        ),
+                        Flexible(
+                          child: _opponentTeamNameRow(
+                            m,
+                            _currentUserId,
+                            TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                              color:
+                                  Theme.of(context).textTheme.bodyLarge?.color ??
+                                  AppColors.textDark,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     Text(
                       m['league_name'] ?? m['area'],

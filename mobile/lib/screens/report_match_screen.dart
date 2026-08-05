@@ -5,10 +5,10 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
-import '../utils.dart';
 import '../validators.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
+import '../widgets/match_photo_picker.dart';
 
 class ReportMatchScreen extends StatefulWidget {
   final int leagueId;
@@ -57,30 +57,9 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
   bool _submitting = false;
 
   // GAP-17 — an optional scorecard photo, attached the same base64
-  // data-URI way as a profile picture (see utils.dart's pickImageAsDataUri).
-  Uint8List? _photoBytes;
+  // data-URI way as a profile picture. Picker UI lives in the shared
+  // MatchPhotoPicker widget, used by every report/edit dialog in the app.
   String? _photoDataUri;
-
-  Future<void> _pickPhoto() async {
-    try {
-      // Scorecard photos need more detail than a tiny avatar — 1024px keeps
-      // it legible without ballooning past the server's request-body limit.
-      final picked = await pickImageAsDataUri(
-        maxWidth: 1024,
-        maxHeight: 1024,
-        imageQuality: 70,
-        maxSizeBytes: 4 * 1024 * 1024,
-      );
-      if (picked == null) return;
-      setState(() {
-        _photoBytes = picked.bytes;
-        _photoDataUri = picked.dataUri;
-      });
-    } on ProfileImageTooLargeException {
-      if (!mounted) return;
-      _showAlert('Photo too large', 'Please choose a smaller photo.');
-    }
-  }
 
   String get _unitLabel => widget.sport == 'tennis' ? 'Set' : 'Game';
 
@@ -547,41 +526,9 @@ class _ReportMatchScreenState extends State<ReportMatchScreen> {
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
-            if (_photoBytes != null)
-              Stack(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.memory(
-                      _photoBytes!,
-                      height: 160,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                    ),
-                  ),
-                  Positioned(
-                    top: 4,
-                    right: 4,
-                    child: IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white),
-                      tooltip: 'Remove photo',
-                      style: IconButton.styleFrom(
-                        backgroundColor: Colors.black45,
-                      ),
-                      onPressed: () => setState(() {
-                        _photoBytes = null;
-                        _photoDataUri = null;
-                      }),
-                    ),
-                  ),
-                ],
-              )
-            else
-              OutlinedButton.icon(
-                onPressed: _pickPhoto,
-                icon: const Icon(Icons.add_a_photo_outlined),
-                label: const Text('Attach a photo'),
-              ),
+            MatchPhotoPicker(
+              onChanged: (dataUri) => setState(() => _photoDataUri = dataUri),
+            ),
             const SizedBox(height: 24),
             ElevatedButton(
               onPressed: _submitting ? null : _handleSubmit,

@@ -10,6 +10,8 @@ import '../widgets/match_badges.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
 import '../widgets/player_name.dart';
+import '../widgets/match_photo_picker.dart';
+import '../widgets/match_photo_thumbnail.dart';
 import 'add_manual_match_screen.dart';
 
 class GroupsOverviewScreen extends StatefulWidget {
@@ -753,6 +755,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
         title: 'Edit Score',
         unitLabel: _unitLabel,
         initialSets: initialSets,
+        initialPhotoUrl: f['photo_url'],
       ),
     );
     if (result == null) return;
@@ -818,6 +821,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
           'player2Units': result['player2Units'],
           'player1Won': result['player1Won'],
           'setScores': result['setScores'],
+          if (result['photoUrl'] != null) 'photoUrl': result['photoUrl'],
         },
       );
       if (!mounted) return;
@@ -1006,9 +1010,20 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
           ],
           if (isCompleted) ...[
             const SizedBox(height: 4),
-            Text(
-              _formatSetScores(f['set_scores']),
-              style: const TextStyle(fontSize: 11, color: AppColors.textGrey),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _formatSetScores(f['set_scores']),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textGrey,
+                    ),
+                  ),
+                ),
+                if (f['photo_url'] != null)
+                  MatchPhotoThumbnail(photoUrl: f['photo_url'], size: 28),
+              ],
             ),
           ],
           if (isHost) ...[
@@ -1115,6 +1130,9 @@ class _HostScoreDialog extends StatefulWidget {
   final String title;
   final String unitLabel;
   final List<Map<String, int>>? initialSets;
+  // GAP-17 — seeds the photo preview on an edit path; null on a fresh
+  // report. See MatchPhotoPicker for why there's no "remove" affordance.
+  final String? initialPhotoUrl;
 
   const _HostScoreDialog({
     required this.player1Name,
@@ -1122,6 +1140,7 @@ class _HostScoreDialog extends StatefulWidget {
     this.title = 'Enter Score',
     this.unitLabel = 'Game',
     this.initialSets,
+    this.initialPhotoUrl,
   });
 
   @override
@@ -1131,6 +1150,7 @@ class _HostScoreDialog extends StatefulWidget {
 class _HostScoreDialogState extends State<_HostScoreDialog> {
   late List<_SetScore> _sets;
   String? _error;
+  String? _photoUrl;
 
   @override
   void initState() {
@@ -1202,6 +1222,7 @@ class _HostScoreDialogState extends State<_HostScoreDialog> {
                           Icons.remove_circle_outline,
                           color: AppColors.danger,
                         ),
+                        tooltip: 'Remove ${widget.unitLabel} ${index + 1}',
                         onPressed: () => setState(() => _sets.removeAt(index)),
                       ),
                   ],
@@ -1212,6 +1233,11 @@ class _HostScoreDialogState extends State<_HostScoreDialog> {
               onPressed: () => setState(() => _sets.add(_SetScore())),
               icon: const Icon(Icons.add),
               label: Text('Add ${widget.unitLabel}'),
+            ),
+            const SizedBox(height: 12),
+            MatchPhotoPicker(
+              initialPhotoUrl: widget.initialPhotoUrl,
+              onChanged: (dataUri) => _photoUrl = dataUri,
             ),
           ],
         ),
@@ -1259,6 +1285,7 @@ class _HostScoreDialogState extends State<_HostScoreDialog> {
               'player2Units': totalP2,
               'player1Won': setsWonByP1 > setsWonByP2,
               'setScores': setScores,
+              if (_photoUrl != null) 'photoUrl': _photoUrl,
             });
           },
           child: const Text('Submit'),

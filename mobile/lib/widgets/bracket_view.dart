@@ -14,6 +14,9 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../config.dart';
+import 'match_photo_picker.dart';
+import 'match_photo_thumbnail.dart';
+import 'team_name_row.dart';
 
 class BracketView extends StatefulWidget {
   final int leagueId;
@@ -347,6 +350,7 @@ class BracketViewState extends State<BracketView> {
         unitLabel: _unitLabel,
         opponentLabel: opponentName,
         initialSets: initialSets,
+        initialPhotoUrl: m['photo_url'],
       ),
     );
     if (result == null) return;
@@ -472,6 +476,7 @@ class BracketViewState extends State<BracketView> {
         title: 'Edit Score',
         unitLabel: _unitLabel,
         initialSets: initialSets,
+        initialPhotoUrl: m['photo_url'],
       ),
     );
     if (result == null) return;
@@ -767,11 +772,16 @@ class BracketViewState extends State<BracketView> {
                         Row(
                           children: [
                             Expanded(
-                              child: Text.rich(
-                                TextSpan(
-                                  children: [
-                                    TextSpan(
-                                      text: player1Name,
+                              child: Row(
+                                children: [
+                                  Flexible(
+                                    child: TeamNameRow(
+                                      playerId: m['player1_id'],
+                                      playerName:
+                                          m['player1_username'] ?? 'TBD',
+                                      partnerId: m['player1_partner_id'],
+                                      partnerName:
+                                          m['player1_partner_username'],
                                       style: TextStyle(
                                         fontSize: 13,
                                         fontWeight: team1Won
@@ -782,15 +792,22 @@ class BracketViewState extends State<BracketView> {
                                             : primaryTextColor,
                                       ),
                                     ),
-                                    TextSpan(
-                                      text: '  vs  ',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: subtleTextColor,
-                                      ),
+                                  ),
+                                  Text(
+                                    '  vs  ',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: subtleTextColor,
                                     ),
-                                    TextSpan(
-                                      text: player2Name,
+                                  ),
+                                  Flexible(
+                                    child: TeamNameRow(
+                                      playerId: m['player2_id'],
+                                      playerName:
+                                          m['player2_username'] ?? 'TBD',
+                                      partnerId: m['player2_partner_id'],
+                                      partnerName:
+                                          m['player2_partner_username'],
                                       style: TextStyle(
                                         fontSize: 13,
                                         fontWeight: team2Won
@@ -801,8 +818,8 @@ class BracketViewState extends State<BracketView> {
                                             : primaryTextColor,
                                       ),
                                     ),
-                                  ],
-                                ),
+                                  ),
+                                ],
                               ),
                             ),
                             Container(
@@ -831,12 +848,23 @@ class BracketViewState extends State<BracketView> {
                         ),
                         if (m['set_scores'] != null) ...[
                           const SizedBox(height: 4),
-                          Text(
-                            _formatSetScores(m['set_scores']),
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: subtleTextColor,
-                            ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  _formatSetScores(m['set_scores']),
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: subtleTextColor,
+                                  ),
+                                ),
+                              ),
+                              if (m['photo_url'] != null)
+                                MatchPhotoThumbnail(
+                                  photoUrl: m['photo_url'],
+                                  size: 28,
+                                ),
+                            ],
                           ),
                         ],
                         if (_hostEntersScores && widget.isHost && isReady) ...[
@@ -984,12 +1012,16 @@ class _PlayoffReportDialog extends StatefulWidget {
   final String unitLabel;
   final String opponentLabel;
   final List<Map<String, int>>? initialSets;
+  // GAP-17 — seeds the photo preview on an edit path; null on a fresh
+  // report. See MatchPhotoPicker for why there's no "remove" affordance.
+  final String? initialPhotoUrl;
 
   const _PlayoffReportDialog({
     this.title = 'Report Result',
     this.unitLabel = 'Set',
     this.opponentLabel = 'Opponent',
     this.initialSets,
+    this.initialPhotoUrl,
   });
 
   @override
@@ -1004,6 +1036,7 @@ class _SetScore {
 class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
   late List<_SetScore> _sets;
   String? _error;
+  String? _photoUrl;
 
   @override
   void initState() {
@@ -1074,6 +1107,7 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
                           Icons.remove_circle_outline,
                           color: AppColors.danger,
                         ),
+                        tooltip: 'Remove ${widget.unitLabel} ${index + 1}',
                         onPressed: () => setState(() => _sets.removeAt(index)),
                       ),
                   ],
@@ -1084,6 +1118,11 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
               onPressed: () => setState(() => _sets.add(_SetScore())),
               icon: const Icon(Icons.add),
               label: Text('Add ${widget.unitLabel}'),
+            ),
+            const SizedBox(height: 12),
+            MatchPhotoPicker(
+              initialPhotoUrl: widget.initialPhotoUrl,
+              onChanged: (dataUri) => _photoUrl = dataUri,
             ),
           ],
         ),
@@ -1131,6 +1170,7 @@ class _PlayoffReportDialogState extends State<_PlayoffReportDialog> {
               'opponentUnits': totalOpp,
               'iWon': setsWonByMe > setsWonByOpp,
               'setScores': setScores,
+              if (_photoUrl != null) 'photoUrl': _photoUrl,
             });
           },
           child: const Text('Submit'),
@@ -1146,6 +1186,9 @@ class _HostPlayoffReportDialog extends StatefulWidget {
   final String title;
   final String unitLabel;
   final List<Map<String, int>>? initialSets;
+  // GAP-17 — seeds the photo preview on an edit path; null on a fresh
+  // report. See MatchPhotoPicker for why there's no "remove" affordance.
+  final String? initialPhotoUrl;
 
   const _HostPlayoffReportDialog({
     required this.player1Name,
@@ -1153,6 +1196,7 @@ class _HostPlayoffReportDialog extends StatefulWidget {
     this.title = 'Enter Score',
     this.unitLabel = 'Set',
     this.initialSets,
+    this.initialPhotoUrl,
   });
 
   @override
@@ -1163,6 +1207,7 @@ class _HostPlayoffReportDialog extends StatefulWidget {
 class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
   late List<_SetScore> _sets;
   String? _error;
+  String? _photoUrl;
 
   @override
   void initState() {
@@ -1234,6 +1279,7 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
                           Icons.remove_circle_outline,
                           color: AppColors.danger,
                         ),
+                        tooltip: 'Remove ${widget.unitLabel} ${index + 1}',
                         onPressed: () => setState(() => _sets.removeAt(index)),
                       ),
                   ],
@@ -1244,6 +1290,11 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
               onPressed: () => setState(() => _sets.add(_SetScore())),
               icon: const Icon(Icons.add),
               label: Text('Add ${widget.unitLabel}'),
+            ),
+            const SizedBox(height: 12),
+            MatchPhotoPicker(
+              initialPhotoUrl: widget.initialPhotoUrl,
+              onChanged: (dataUri) => _photoUrl = dataUri,
             ),
           ],
         ),
@@ -1291,6 +1342,7 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
               'player2Units': totalP2,
               'player1Won': setsWonByP1 > setsWonByP2,
               'setScores': setScores,
+              if (_photoUrl != null) 'photoUrl': _photoUrl,
             });
           },
           child: const Text('Submit'),
