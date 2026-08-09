@@ -1904,12 +1904,21 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               '${latest['updated_at'] != null ? ' (edited)' : ''}',
               style: const TextStyle(fontSize: 11, color: AppColors.textGrey),
             ),
-            if (_announcements.length > 1)
+            // Was gated on length > 1 alone — that's fine for a plain
+            // "see the rest" link, but it's also the only way into the
+            // edit/delete menu, so a host with exactly one announcement had
+            // no way to reach it at all. Keep it hidden for a non-host with
+            // just one (nothing more to see, nothing to manage).
+            if (_announcements.length > 1 || isHost)
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
                   onPressed: () => _showAllAnnouncements(isHost),
-                  child: Text('See all (${_announcements.length})'),
+                  child: Text(
+                    _announcements.length > 1
+                        ? 'See all (${_announcements.length})'
+                        : 'Manage',
+                  ),
                 ),
               ),
           ],
