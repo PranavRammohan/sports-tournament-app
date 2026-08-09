@@ -204,6 +204,43 @@ class BracketViewState extends State<BracketView> {
     }
   }
 
+  Future<void> _promptCustomBracketSize() async {
+    final unit = _isDoubles ? 'teams' : 'players';
+    final controller = TextEditingController();
+    final size = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Custom bracket size'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+            labelText: 'Number of $unit',
+            hintText: "Any number — doesn't need to be a power of 2",
+            isDense: true,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              final n = int.tryParse(controller.text.trim());
+              if (n == null || n < 2) return;
+              Navigator.pop(ctx, n);
+            },
+            child: const Text('Generate'),
+          ),
+        ],
+      ),
+    );
+    if (size != null) await generateBracket(size);
+  }
+
   Future<void> confirmCancelPlayoffs() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -694,6 +731,20 @@ class BracketViewState extends State<BracketView> {
                   ),
                 ],
               ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: _generating ? null : _promptCustomBracketSize,
+                child: const Text('Custom size...'),
+              ),
+              // A field count that isn't a power of 2 (e.g. Top 5, Top 6)
+              // gets byes automatically — the size a bit above it gets built,
+              // and whichever real entrants don't have an opponent advance
+              // without playing.
+              const Text(
+                "Not a power of 2? That's fine — the extra slots become byes.",
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 11),
+              ),
             ],
           ],
         ),
@@ -742,10 +793,17 @@ class BracketViewState extends State<BracketView> {
                   final isReady = m['status'] == 'ready';
                   final isReported = m['status'] == 'reported';
                   final isConfirmed = m['status'] == 'confirmed';
+                  // A bye — the bracket was padded to the next power of 2
+                  // for the real entrant count and this slot's pairing
+                  // never had a second real player, so the one that's here
+                  // already advanced automatically at generation time (see
+                  // backend/playoffRoutes.js's advanceWinner call for byes).
+                  // Nothing to report, nothing pending.
+                  final isBye = m['status'] == 'bye';
                   final team1Won =
-                      isConfirmed && m['winner_id'] == m['player1_id'];
+                      (isConfirmed || isBye) && m['winner_id'] == m['player1_id'];
                   final team2Won =
-                      isConfirmed && m['winner_id'] == m['player2_id'];
+                      (isConfirmed || isBye) && m['winner_id'] == m['player2_id'];
                   final involvesMe =
                       m['player1_id'] == _currentUserId ||
                       m['player2_id'] == _currentUserId ||
@@ -801,23 +859,32 @@ class BracketViewState extends State<BracketView> {
                                     ),
                                   ),
                                   Flexible(
-                                    child: TeamNameRow(
-                                      playerId: m['player2_id'],
-                                      playerName:
-                                          m['player2_username'] ?? 'TBD',
-                                      partnerId: m['player2_partner_id'],
-                                      partnerName:
-                                          m['player2_partner_username'],
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: team2Won
-                                            ? FontWeight.bold
-                                            : FontWeight.normal,
-                                        color: team2Won
-                                            ? AppColors.success
-                                            : primaryTextColor,
-                                      ),
-                                    ),
+                                    child: isBye
+                                        ? Text(
+                                            '— Bye —',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontStyle: FontStyle.italic,
+                                              color: subtleTextColor,
+                                            ),
+                                          )
+                                        : TeamNameRow(
+                                            playerId: m['player2_id'],
+                                            playerName:
+                                                m['player2_username'] ?? 'TBD',
+                                            partnerId: m['player2_partner_id'],
+                                            partnerName:
+                                                m['player2_partner_username'],
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: team2Won
+                                                  ? FontWeight.bold
+                                                  : FontWeight.normal,
+                                              color: team2Won
+                                                  ? AppColors.success
+                                                  : primaryTextColor,
+                                            ),
+                                          ),
                                   ),
                                 ],
                               ),
@@ -830,23 +897,52 @@ class BracketViewState extends State<BracketView> {
                               decoration: BoxDecoration(
                                 color: isConfirmed
                                     ? AppColors.success.withValues(alpha: 0.1)
+                                    : isBye
+                                    ? AppColors.accent.withValues(alpha: 0.15)
                                     : AppColors.warning.withValues(alpha: 0.1),
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
-                                isConfirmed ? 'Done' : 'Pending',
+                                isConfirmed
+                                    ? 'Done'
+                                    : isBye
+                                    ? 'Bye'
+                                    : 'Pending',
                                 style: TextStyle(
                                   fontSize: 10,
                                   fontWeight: FontWeight.w600,
                                   color: isConfirmed
                                       ? AppColors.success
+                                      : isBye
+                                      ? AppColors.accent
                                       : AppColors.warning,
                                 ),
                               ),
                             ),
                           ],
                         ),
-                        if (m['set_scores'] != null) ...[
+                        if (m['is_walkover'] == true) ...[
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Walkover',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontStyle: FontStyle.italic,
+                                    color: subtleTextColor,
+                                  ),
+                                ),
+                              ),
+                              if (m['photo_url'] != null)
+                                MatchPhotoThumbnail(
+                                  photoUrl: m['photo_url'],
+                                  size: 28,
+                                ),
+                            ],
+                          ),
+                        ] else if (m['set_scores'] != null) ...[
                           const SizedBox(height: 4),
                           Row(
                             children: [
@@ -1208,6 +1304,8 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
   late List<_SetScore> _sets;
   String? _error;
   String? _photoUrl;
+  bool _isWalkover = false;
+  bool? _walkoverWinnerIsP1;
 
   @override
   void initState() {
@@ -1241,56 +1339,87 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
                   style: const TextStyle(color: AppColors.danger, fontSize: 13),
                 ),
               ),
-            ..._sets.asMap().entries.map((entry) {
-              final index = entry.key;
-              final set = entry.value;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: set.myScore,
-                        keyboardType: TextInputType.number,
-                        decoration: InputDecoration(
-                          labelText:
-                              '${widget.unitLabel} ${index + 1} — ${widget.player1Name}',
-                          isDense: true,
-                        ),
-                      ),
-                    ),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 6),
-                      child: Text('-'),
-                    ),
-                    Expanded(
-                      child: TextField(
-                        controller: set.opponentScore,
-                        keyboardType: TextInputType.number,
-                        decoration: InputDecoration(
-                          labelText: widget.player2Name,
-                          isDense: true,
-                        ),
-                      ),
-                    ),
-                    if (_sets.length > 1)
-                      IconButton(
-                        icon: const Icon(
-                          Icons.remove_circle_outline,
-                          color: AppColors.danger,
-                        ),
-                        tooltip: 'Remove ${widget.unitLabel} ${index + 1}',
-                        onPressed: () => setState(() => _sets.removeAt(index)),
-                      ),
-                  ],
-                ),
-              );
-            }),
-            TextButton.icon(
-              onPressed: () => setState(() => _sets.add(_SetScore())),
-              icon: const Icon(Icons.add),
-              label: Text('Add ${widget.unitLabel}'),
+            CheckboxListTile(
+              value: _isWalkover,
+              onChanged: (v) => setState(() {
+                _isWalkover = v ?? false;
+                _error = null;
+              }),
+              title: const Text('Walkover (opponent didn\'t show)'),
+              subtitle: const Text('Awards the win with no set scores and no rating change.'),
+              controlAffinity: ListTileControlAffinity.leading,
+              contentPadding: EdgeInsets.zero,
+              dense: true,
             ),
+            if (_isWalkover) ...[
+              RadioListTile<bool>(
+                value: true,
+                groupValue: _walkoverWinnerIsP1,
+                onChanged: (v) => setState(() => _walkoverWinnerIsP1 = v),
+                title: Text('${widget.player1Name} wins'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              ),
+              RadioListTile<bool>(
+                value: false,
+                groupValue: _walkoverWinnerIsP1,
+                onChanged: (v) => setState(() => _walkoverWinnerIsP1 = v),
+                title: Text('${widget.player2Name} wins'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              ),
+            ] else ...[
+              ..._sets.asMap().entries.map((entry) {
+                final index = entry.key;
+                final set = entry.value;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: set.myScore,
+                          keyboardType: TextInputType.number,
+                          decoration: InputDecoration(
+                            labelText:
+                                '${widget.unitLabel} ${index + 1} — ${widget.player1Name}',
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 6),
+                        child: Text('-'),
+                      ),
+                      Expanded(
+                        child: TextField(
+                          controller: set.opponentScore,
+                          keyboardType: TextInputType.number,
+                          decoration: InputDecoration(
+                            labelText: widget.player2Name,
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      if (_sets.length > 1)
+                        IconButton(
+                          icon: const Icon(
+                            Icons.remove_circle_outline,
+                            color: AppColors.danger,
+                          ),
+                          tooltip: 'Remove ${widget.unitLabel} ${index + 1}',
+                          onPressed: () => setState(() => _sets.removeAt(index)),
+                        ),
+                    ],
+                  ),
+                );
+              }),
+              TextButton.icon(
+                onPressed: () => setState(() => _sets.add(_SetScore())),
+                icon: const Icon(Icons.add),
+                label: Text('Add ${widget.unitLabel}'),
+              ),
+            ],
             const SizedBox(height: 12),
             MatchPhotoPicker(
               initialPhotoUrl: widget.initialPhotoUrl,
@@ -1306,6 +1435,19 @@ class _HostPlayoffReportDialogState extends State<_HostPlayoffReportDialog> {
         ),
         ElevatedButton(
           onPressed: () {
+            if (_isWalkover) {
+              if (_walkoverWinnerIsP1 == null) {
+                setState(() => _error = 'Please choose who won.');
+                return;
+              }
+              Navigator.pop(context, {
+                'isWalkover': true,
+                'player1Won': _walkoverWinnerIsP1,
+                if (_photoUrl != null) 'photoUrl': _photoUrl,
+              });
+              return;
+            }
+
             int totalP1 = 0;
             int totalP2 = 0;
             int setsWonByP1 = 0;

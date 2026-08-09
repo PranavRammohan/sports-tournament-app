@@ -144,6 +144,7 @@ async function findMatchingFixture(db, leagueId, team1Ids, team2Ids) {
 
 async function finalizeMatch(db, match, league) {
   const { sport, format } = league;
+  const isWalkover = match.is_walkover === true;
 
   const rating1a = await getRating(db, match.player1_id, sport, format);
   const rating2a = await getRating(db, match.player2_id, sport, format);
@@ -173,9 +174,18 @@ async function finalizeMatch(db, match, league) {
 
   const team1Won = match.winner_id === match.player1_id;
 
-  const { newRating1, newRating2 } = calculateNewRatings(
-    sport, team1Rating, team2Rating, team1Won, match.player1_units, match.player2_units
-  );
+  // A walkover didn't actually get played, so nobody's skill rating should
+  // move for it — held at the current rating (a real, honest change of 0,
+  // not skipped outright) so it still counts toward matches_played/wins/
+  // losses via updateRating below, and reverses correctly later if this
+  // match is ever edited or deleted (reverseRatingChange treats an actual
+  // 0 as "nothing to undo numerically, but still undo the win/loss tally",
+  // whereas a null change means "this player wasn't in this match at all").
+  const { newRating1, newRating2 } = isWalkover
+    ? { newRating1: team1Rating, newRating2: team2Rating }
+    : calculateNewRatings(
+        sport, team1Rating, team2Rating, team1Won, match.player1_units, match.player2_units
+      );
 
   const change1 = newRating1 - team1Rating;
   const change2 = newRating2 - team2Rating;
@@ -428,19 +438,28 @@ router.post('/report-as-host', async (req, res) => {
     player1Won,
     setScores,
     photoUrl,
+    isWalkover,
   } = req.body;
 
-  if (!leagueId || !player1Id || !player2Id || player1Units == null || player2Units == null || player1Won == null) {
+  if (!leagueId || !player1Id || !player2Id || player1Won == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
   }
-  if (!isValidUnitCount(player1Units) || !isValidUnitCount(player2Units)) {
-    return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
-  }
-  if (!isValidSetScores(setScores)) {
-    return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
-  }
-  if (!winnerUnitsAreConsistent(player1Won, player1Units, player2Units)) {
-    return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
+  // A walkover has no real score to validate — just a declared winner. Host
+  // dialogs only, since a self-report walkover would need the no-show
+  // opponent to confirm it, which defeats the point.
+  if (!isWalkover) {
+    if (player1Units == null || player2Units == null) {
+      return res.status(400).json({ error: 'Missing required fields.' });
+    }
+    if (!isValidUnitCount(player1Units) || !isValidUnitCount(player2Units)) {
+      return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
+    }
+    if (!isValidSetScores(setScores)) {
+      return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
+    }
+    if (!winnerUnitsAreConsistent(player1Won, player1Units, player2Units)) {
+      return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
+    }
   }
 
   try {
@@ -484,8 +503,8 @@ router.post('/report-as-host', async (req, res) => {
       const result = await client.query(
         `INSERT INTO matches
           (league_id, player1_id, player1_partner_id, player2_id, player2_partner_id,
-           player1_units, player2_units, winner_id, reported_by, status, format, set_scores, scheduled_match_id, photo_url)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'confirmed', $10, $11, $12, $13)
+           player1_units, player2_units, winner_id, reported_by, status, format, set_scores, scheduled_match_id, photo_url, is_walkover)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'confirmed', $10, $11, $12, $13, $14)
          RETURNING *`,
         [
           leagueId,
@@ -493,14 +512,15 @@ router.post('/report-as-host', async (req, res) => {
           player1PartnerId || null,
           player2Id,
           player2PartnerId || null,
-          player1Units,
-          player2Units,
+          isWalkover ? 0 : player1Units,
+          isWalkover ? 0 : player2Units,
           winnerId,
           userId,
           league.format,
-          JSON.stringify(setScores || []),
+          isWalkover ? '[]' : JSON.stringify(setScores || []),
           scheduledMatchId,
           photoUrl || null,
+          isWalkover === true,
         ]
       );
 
@@ -672,7 +692,7 @@ router.get('/history', async (req, res) => {
     const result = await pool.query(
       `SELECT * FROM (
          SELECT m.id, m.league_id, m.player1_id, m.player2_id, m.player1_partner_id, m.player2_partner_id,
-                m.player1_units, m.player2_units, m.set_scores, m.winner_id, m.photo_url, m.created_at,
+                m.player1_units, m.player2_units, m.set_scores, m.winner_id, m.photo_url, m.created_at, m.is_walkover,
                 m.player1_rating_change, m.player2_rating_change,
                 m.player1_partner_rating_change, m.player2_partner_rating_change,
                 l.sport, l.format as league_format, l.area, l.name as league_name,
@@ -689,7 +709,7 @@ router.get('/history', async (req, res) => {
            AND (m.player1_id = $1 OR m.player2_id = $1 OR m.player1_partner_id = $1 OR m.player2_partner_id = $1)
          UNION ALL
          SELECT pm.id, pm.league_id, pm.player1_id, pm.player2_id, pm.player1_partner_id, pm.player2_partner_id,
-                pm.player1_units, pm.player2_units, pm.set_scores, pm.winner_id, pm.photo_url, pm.created_at,
+                pm.player1_units, pm.player2_units, pm.set_scores, pm.winner_id, pm.photo_url, pm.created_at, pm.is_walkover,
                 pm.player1_rating_change, pm.player2_rating_change,
                 pm.player1_partner_rating_change, pm.player2_partner_rating_change,
                 l.sport, l.format as league_format, l.area, l.name as league_name,
@@ -1028,19 +1048,24 @@ router.put('/:id/edit-report', async (req, res) => {
 router.put('/:id/edit', async (req, res) => {
   const userId = req.userId;
   const matchId = req.params.id;
-  const { player1Units, player2Units, player1Won, setScores, photoUrl } = req.body;
+  const { player1Units, player2Units, player1Won, setScores, photoUrl, isWalkover } = req.body;
 
-  if (player1Units == null || player2Units == null || player1Won == null) {
+  if (player1Won == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
   }
-  if (!isValidUnitCount(player1Units) || !isValidUnitCount(player2Units)) {
-    return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
-  }
-  if (!isValidSetScores(setScores)) {
-    return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
-  }
-  if (!winnerUnitsAreConsistent(player1Won, player1Units, player2Units)) {
-    return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
+  if (!isWalkover) {
+    if (player1Units == null || player2Units == null) {
+      return res.status(400).json({ error: 'Missing required fields.' });
+    }
+    if (!isValidUnitCount(player1Units) || !isValidUnitCount(player2Units)) {
+      return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
+    }
+    if (!isValidSetScores(setScores)) {
+      return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
+    }
+    if (!winnerUnitsAreConsistent(player1Won, player1Units, player2Units)) {
+      return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
+    }
   }
 
   try {
@@ -1074,9 +1099,17 @@ router.put('/:id/edit', async (req, res) => {
       // photo attached at report time.
       await client.query(
         `UPDATE matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4,
-           photo_url = COALESCE($5, photo_url)
-         WHERE id = $6`,
-        [player1Units, player2Units, winnerId, JSON.stringify(setScores || []), photoUrl || null, matchId]
+           photo_url = COALESCE($5, photo_url), is_walkover = $6
+         WHERE id = $7`,
+        [
+          isWalkover ? 0 : player1Units,
+          isWalkover ? 0 : player2Units,
+          winnerId,
+          isWalkover ? '[]' : JSON.stringify(setScores || []),
+          photoUrl || null,
+          isWalkover === true,
+          matchId,
+        ]
       );
 
       const updatedMatchResult = await client.query('SELECT * FROM matches WHERE id = $1', [matchId]);

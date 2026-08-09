@@ -30,6 +30,17 @@ function isPowerOfTwo(n) {
   return n > 0 && (n & (n - 1)) === 0;
 }
 
+// Smallest power of two >= n. A bracket for a non-power-of-two field is
+// built at this size, with (result - n) byes — real entrants beyond a
+// bracket the exact right size for them just don't exist, so those seed
+// slots are left empty and their pairing partner (a real entrant) advances
+// without playing. See the bye-handling in POST /:leagueId/generate below.
+function nextPowerOfTwo(n) {
+  let p = 1;
+  while (p < n) p *= 2;
+  return p;
+}
+
 // Same guard leagueRoutes.js/matchRoutes.js use — kept as a local copy here
 // since this file has no shared module with them. Returns a user-facing
 // error string if the league has been marked completed (read-only), or null
@@ -276,6 +287,7 @@ function resolveDoublesTeams(league, members) {
 async function finalizePlayoffMatch(db, match, league) {
   const { sport, format } = league;
   const isDoubles = format === 'doubles' && match.player1_partner_id && match.player2_partner_id;
+  const isWalkover = match.is_walkover === true;
 
   if (!isDoubles) {
     const rating1 = await getRating(db, match.player1_id, sport, format);
@@ -296,9 +308,14 @@ async function finalizePlayoffMatch(db, match, league) {
 
     const team1Won = match.winner_id === match.player1_id;
 
-    const { newRating1, newRating2 } = calculateNewRatings(
-      sport, rating1, rating2, team1Won, match.player1_units, match.player2_units
-    );
+    // A walkover didn't get played, so held at the current rating (a real
+    // 0 change, not skipped — see finalizeMatch's identical comment in
+    // matchRoutes.js for why 0 vs null matters for reversal later).
+    const { newRating1, newRating2 } = isWalkover
+      ? { newRating1: rating1, newRating2: rating2 }
+      : calculateNewRatings(
+          sport, rating1, rating2, team1Won, match.player1_units, match.player2_units
+        );
 
     const updatedRating1 = Math.round(newRating1 * 100) / 100;
     const updatedRating2 = Math.round(newRating2 * 100) / 100;
@@ -340,9 +357,11 @@ async function finalizePlayoffMatch(db, match, league) {
     const team2Rating = (r2a + r2b) / 2;
     const team1Won = match.winner_id === match.player1_id;
 
-    const { newRating1: newTeam1Rating, newRating2: newTeam2Rating } = calculateNewRatings(
-      sport, team1Rating, team2Rating, team1Won, match.player1_units, match.player2_units
-    );
+    const { newRating1: newTeam1Rating, newRating2: newTeam2Rating } = isWalkover
+      ? { newRating1: team1Rating, newRating2: team2Rating }
+      : calculateNewRatings(
+          sport, team1Rating, team2Rating, team1Won, match.player1_units, match.player2_units
+        );
 
     const team1Delta = newTeam1Rating - team1Rating;
     const team2Delta = newTeam2Rating - team2Rating;
@@ -457,8 +476,8 @@ router.post('/:leagueId/generate', async (req, res) => {
   const leagueId = req.params.leagueId;
   const { qualifierCount, force } = req.body;
 
-  if (!isPowerOfTwo(qualifierCount) || qualifierCount < 2) {
-    return res.status(400).json({ error: 'Qualifier count must be a power of 2 (2, 4, 8, 16...).' });
+  if (!Number.isInteger(qualifierCount) || qualifierCount < 2) {
+    return res.status(400).json({ error: 'Qualifier count must be a whole number of at least 2.' });
   }
 
   try {
@@ -519,21 +538,46 @@ router.post('/:leagueId/generate', async (req, res) => {
         return res.status(400).json({ error: `Need at least ${qualifierCount} players in the leaderboard to start this bracket size.` });
       }
 
-      const seedOrder = generateSeedOrder(qualifierCount);
-      const totalRounds = Math.log2(qualifierCount);
+      // qualifierCount is the real number of entrants, which needn't be a
+      // power of two — the bracket itself is built at the next power of two
+      // up, and any seed beyond qualifierCount is a bye: whichever real
+      // entrant it's paired against advances immediately, no match played.
+      const bracketSize = nextPowerOfTwo(qualifierCount);
+      const seedOrder = generateSeedOrder(bracketSize);
+      const totalRounds = Math.log2(bracketSize);
+      const byeMatches = [];
 
       for (let i = 0; i < seedOrder.length; i += 2) {
         const seedA = seedOrder[i];
         const seedB = seedOrder[i + 1];
-        await pool.query(
-          `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, player2_id, status)
-           VALUES ($1, 1, $2, $3, $4, 'ready')`,
-          [leagueId, i / 2 + 1, qualifiers[seedA - 1].id, qualifiers[seedB - 1].id]
-        );
+        const position = i / 2 + 1;
+        const playerA = seedA <= qualifierCount ? qualifiers[seedA - 1] : null;
+        const playerB = seedB <= qualifierCount ? qualifiers[seedB - 1] : null;
+
+        if (playerA && playerB) {
+          await pool.query(
+            `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, player2_id, status)
+             VALUES ($1, 1, $2, $3, $4, 'ready')`,
+            [leagueId, position, playerA.id, playerB.id]
+          );
+        } else if (playerA || playerB) {
+          const byePlayer = playerA || playerB;
+          const byeMatch = await pool.query(
+            `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, winner_id, status)
+             VALUES ($1, 1, $2, $3, $3, 'bye') RETURNING *`,
+            [leagueId, position, byePlayer.id]
+          );
+          byeMatches.push(byeMatch.rows[0]);
+        } else {
+          // Mathematically shouldn't happen — bracketSize is always < 2x
+          // qualifierCount, so byes can never outnumber pairs. Fail loudly
+          // rather than silently leave a broken round 1.
+          throw new RouteError(500, 'Unexpected bracket seeding error.');
+        }
       }
 
       for (let round = 2; round <= totalRounds; round++) {
-        const matchesInRound = qualifierCount / Math.pow(2, round);
+        const matchesInRound = bracketSize / Math.pow(2, round);
         for (let pos = 1; pos <= matchesInRound; pos++) {
           await pool.query(
             `INSERT INTO playoff_matches (league_id, round_number, position, status)
@@ -541,6 +585,13 @@ router.post('/:leagueId/generate', async (req, res) => {
             [leagueId, round, pos]
           );
         }
+      }
+
+      // Round 2+ rows now exist, so byes can advance their lone player into
+      // them right away — the match they're paired against was never real,
+      // so there's nothing to wait on.
+      for (const byeMatch of byeMatches) {
+        await advanceWinner(pool, byeMatch);
       }
 
       return res.status(201).json({ message: 'Bracket generated.' });
@@ -581,24 +632,41 @@ router.post('/:leagueId/generate', async (req, res) => {
     }
     const qualifierTeams = teams.slice(0, qualifierCount);
 
-    const seedOrder = generateSeedOrder(qualifierCount);
-    const totalRounds = Math.log2(qualifierCount);
+    const bracketSize = nextPowerOfTwo(qualifierCount);
+    const seedOrder = generateSeedOrder(bracketSize);
+    const totalRounds = Math.log2(bracketSize);
+    const byeMatches = [];
 
     for (let i = 0; i < seedOrder.length; i += 2) {
       const seedA = seedOrder[i];
       const seedB = seedOrder[i + 1];
-      const teamA = qualifierTeams[seedA - 1];
-      const teamB = qualifierTeams[seedB - 1];
-      await pool.query(
-        `INSERT INTO playoff_matches
-          (league_id, round_number, position, player1_id, player1_partner_id, player2_id, player2_partner_id, status)
-         VALUES ($1, 1, $2, $3, $4, $5, $6, 'ready')`,
-        [leagueId, i / 2 + 1, teamA.player1.id, teamA.player2.id, teamB.player1.id, teamB.player2.id]
-      );
+      const position = i / 2 + 1;
+      const teamA = seedA <= qualifierCount ? qualifierTeams[seedA - 1] : null;
+      const teamB = seedB <= qualifierCount ? qualifierTeams[seedB - 1] : null;
+
+      if (teamA && teamB) {
+        await pool.query(
+          `INSERT INTO playoff_matches
+            (league_id, round_number, position, player1_id, player1_partner_id, player2_id, player2_partner_id, status)
+           VALUES ($1, 1, $2, $3, $4, $5, $6, 'ready')`,
+          [leagueId, position, teamA.player1.id, teamA.player2.id, teamB.player1.id, teamB.player2.id]
+        );
+      } else if (teamA || teamB) {
+        const byeTeam = teamA || teamB;
+        const byeMatch = await pool.query(
+          `INSERT INTO playoff_matches
+            (league_id, round_number, position, player1_id, player1_partner_id, winner_id, status)
+           VALUES ($1, 1, $2, $3, $4, $3, 'bye') RETURNING *`,
+          [leagueId, position, byeTeam.player1.id, byeTeam.player2.id]
+        );
+        byeMatches.push(byeMatch.rows[0]);
+      } else {
+        throw new RouteError(500, 'Unexpected bracket seeding error.');
+      }
     }
 
     for (let round = 2; round <= totalRounds; round++) {
-      const matchesInRound = qualifierCount / Math.pow(2, round);
+      const matchesInRound = bracketSize / Math.pow(2, round);
       for (let pos = 1; pos <= matchesInRound; pos++) {
         await pool.query(
           `INSERT INTO playoff_matches (league_id, round_number, position, status)
@@ -606,6 +674,10 @@ router.post('/:leagueId/generate', async (req, res) => {
           [leagueId, round, pos]
         );
       }
+    }
+
+    for (const byeMatch of byeMatches) {
+      await advanceWinner(pool, byeMatch);
     }
 
     res.status(201).json({ message: 'Bracket generated.' });
@@ -890,19 +962,24 @@ router.put('/match/:matchId/edit-report', async (req, res) => {
 router.post('/match/:matchId/report-as-host', async (req, res) => {
   const userId = req.userId;
   const matchId = req.params.matchId;
-  const { player1Units, player2Units, player1Won, setScores, photoUrl } = req.body;
+  const { player1Units, player2Units, player1Won, setScores, photoUrl, isWalkover } = req.body;
 
-  if (player1Units == null || player2Units == null || player1Won == null) {
+  if (player1Won == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
   }
-  if (!isValidUnitCount(player1Units) || !isValidUnitCount(player2Units)) {
-    return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
-  }
-  if (!isValidSetScores(setScores)) {
-    return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
-  }
-  if (!winnerUnitsAreConsistent(player1Won, player1Units, player2Units)) {
-    return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
+  if (!isWalkover) {
+    if (player1Units == null || player2Units == null) {
+      return res.status(400).json({ error: 'Missing required fields.' });
+    }
+    if (!isValidUnitCount(player1Units) || !isValidUnitCount(player2Units)) {
+      return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
+    }
+    if (!isValidSetScores(setScores)) {
+      return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
+    }
+    if (!winnerUnitsAreConsistent(player1Won, player1Units, player2Units)) {
+      return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
+    }
   }
 
   try {
@@ -937,9 +1014,18 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
 
       await client.query(
         `UPDATE playoff_matches SET reported_by = $1,
-          player1_units = $2, player2_units = $3, winner_id = $4, set_scores = $5, photo_url = $6
-         WHERE id = $7`,
-        [userId, player1Units, player2Units, winnerId, JSON.stringify(setScores || []), photoUrl || null, matchId]
+          player1_units = $2, player2_units = $3, winner_id = $4, set_scores = $5, photo_url = $6, is_walkover = $7
+         WHERE id = $8`,
+        [
+          userId,
+          isWalkover ? 0 : player1Units,
+          isWalkover ? 0 : player2Units,
+          winnerId,
+          isWalkover ? '[]' : JSON.stringify(setScores || []),
+          photoUrl || null,
+          isWalkover === true,
+          matchId,
+        ]
       );
 
       const updatedMatchResult = await client.query('SELECT * FROM playoff_matches WHERE id = $1', [matchId]);
@@ -976,19 +1062,24 @@ router.post('/match/:matchId/report-as-host', async (req, res) => {
 router.put('/match/:matchId/edit-score', async (req, res) => {
   const userId = req.userId;
   const matchId = req.params.matchId;
-  const { player1Units, player2Units, player1Won, setScores, photoUrl } = req.body;
+  const { player1Units, player2Units, player1Won, setScores, photoUrl, isWalkover } = req.body;
 
-  if (player1Units == null || player2Units == null || player1Won == null) {
+  if (player1Won == null) {
     return res.status(400).json({ error: 'Missing required fields.' });
   }
-  if (!isValidUnitCount(player1Units) || !isValidUnitCount(player2Units)) {
-    return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
-  }
-  if (!isValidSetScores(setScores)) {
-    return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
-  }
-  if (!winnerUnitsAreConsistent(player1Won, player1Units, player2Units)) {
-    return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
+  if (!isWalkover) {
+    if (player1Units == null || player2Units == null) {
+      return res.status(400).json({ error: 'Missing required fields.' });
+    }
+    if (!isValidUnitCount(player1Units) || !isValidUnitCount(player2Units)) {
+      return res.status(400).json({ error: 'Scores must be non-negative whole numbers.' });
+    }
+    if (!isValidSetScores(setScores)) {
+      return res.status(400).json({ error: 'Invalid set scores — each set needs non-negative whole numbers and a winner.' });
+    }
+    if (!winnerUnitsAreConsistent(player1Won, player1Units, player2Units)) {
+      return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
+    }
   }
 
   try {
@@ -1040,9 +1131,17 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
 
       await client.query(
         `UPDATE playoff_matches SET player1_units = $1, player2_units = $2, winner_id = $3, set_scores = $4,
-           photo_url = COALESCE($5, photo_url)
-         WHERE id = $6`,
-        [player1Units, player2Units, newWinnerId, JSON.stringify(setScores || []), photoUrl || null, matchId]
+           photo_url = COALESCE($5, photo_url), is_walkover = $6
+         WHERE id = $7`,
+        [
+          isWalkover ? 0 : player1Units,
+          isWalkover ? 0 : player2Units,
+          newWinnerId,
+          isWalkover ? '[]' : JSON.stringify(setScores || []),
+          photoUrl || null,
+          isWalkover === true,
+          matchId,
+        ]
       );
 
       if (winnerChanged) {
@@ -1094,9 +1193,11 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
         }
 
         const team1Won = updatedMatch.winner_id === updatedMatch.player1_id;
-        const { newRating1, newRating2 } = calculateNewRatings(
-          league.sport, rating1, rating2, team1Won, updatedMatch.player1_units, updatedMatch.player2_units
-        );
+        const { newRating1, newRating2 } = updatedMatch.is_walkover
+          ? { newRating1: rating1, newRating2: rating2 }
+          : calculateNewRatings(
+              league.sport, rating1, rating2, team1Won, updatedMatch.player1_units, updatedMatch.player2_units
+            );
         const updatedRating1 = Math.round(newRating1 * 100) / 100;
         const updatedRating2 = Math.round(newRating2 * 100) / 100;
         const change1 = Math.round((updatedRating1 - rating1) * 100) / 100;
@@ -1139,9 +1240,11 @@ router.put('/match/:matchId/edit-score', async (req, res) => {
         const team2Rating = (r2a + r2b) / 2;
         const team1Won = updatedMatch.winner_id === updatedMatch.player1_id;
 
-        const { newRating1: newTeam1Rating, newRating2: newTeam2Rating } = calculateNewRatings(
-          league.sport, team1Rating, team2Rating, team1Won, updatedMatch.player1_units, updatedMatch.player2_units
-        );
+        const { newRating1: newTeam1Rating, newRating2: newTeam2Rating } = updatedMatch.is_walkover
+          ? { newRating1: team1Rating, newRating2: team2Rating }
+          : calculateNewRatings(
+              league.sport, team1Rating, team2Rating, team1Won, updatedMatch.player1_units, updatedMatch.player2_units
+            );
 
         const team1Delta = newTeam1Rating - team1Rating;
         const team2Delta = newTeam2Rating - team2Rating;
@@ -1378,5 +1481,7 @@ router.put('/match/:matchId/schedule', async (req, res) => {
 router.resolvePointsConfig = resolvePointsConfig;
 router.awardPlayoffPoints = awardPlayoffPoints;
 router.reversePlayoffEffects = reversePlayoffEffects;
+router.advanceWinner = advanceWinner;
+router.nextPowerOfTwo = nextPowerOfTwo;
 
 module.exports = router;

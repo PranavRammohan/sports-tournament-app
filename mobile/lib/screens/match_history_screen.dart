@@ -201,6 +201,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                                   m['player2_partner_rating_change'],
                                 );
                               }
+                              if (m['is_walkover'] == true) ratingChange = null;
 
                               final tournamentLabel =
                                   (m['league_name'] as String?) ??
@@ -290,7 +291,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
                                                       TextOverflow.ellipsis,
                                                 ),
                                                 Text(
-                                                  '$tournamentLabel · ${_formatSetScores(m['set_scores'])} · ${formatMatchDate(m['created_at'])}',
+                                                  '$tournamentLabel · ${m['is_walkover'] == true ? 'Walkover' : _formatSetScores(m['set_scores'])} · ${formatMatchDate(m['created_at'])}',
                                                   style: const TextStyle(
                                                     fontSize: 10,
                                                     color: AppColors.textGrey,

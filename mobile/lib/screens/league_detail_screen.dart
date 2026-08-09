@@ -1306,10 +1306,11 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           'player1PartnerId': f['player1_partner_id'],
           'player2Id': f['player2_id'],
           'player2PartnerId': f['player2_partner_id'],
-          'player1Units': result['player1Units'],
-          'player2Units': result['player2Units'],
           'player1Won': result['player1Won'],
-          'setScores': result['setScores'],
+          if (result['isWalkover'] == true) 'isWalkover': true,
+          if (result['isWalkover'] != true) 'player1Units': result['player1Units'],
+          if (result['isWalkover'] != true) 'player2Units': result['player2Units'],
+          if (result['isWalkover'] != true) 'setScores': result['setScores'],
           if (result['photoUrl'] != null) 'photoUrl': result['photoUrl'],
         },
       );
@@ -3090,7 +3091,17 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                             ),
                           ),
                         ],
-                        if (m['set_scores'] != null) ...[
+                        if (m['is_walkover'] == true) ...[
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Walkover',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontStyle: FontStyle.italic,
+                              color: AppColors.textGrey,
+                            ),
+                          ),
+                        ] else if (m['set_scores'] != null) ...[
                           const SizedBox(height: 4),
                           Text(
                             _formatSetScores(m['set_scores']),
@@ -3566,7 +3577,17 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
               ],
             ),
           ],
-          if (isCompleted) ...[
+          if (isCompleted && f['is_walkover'] == true) ...[
+            const SizedBox(height: 4),
+            const Text(
+              'Walkover',
+              style: TextStyle(
+                fontSize: 11,
+                fontStyle: FontStyle.italic,
+                color: AppColors.textGrey,
+              ),
+            ),
+          ] else if (isCompleted) ...[
             const SizedBox(height: 4),
             Text(
               _formatSetScores(f['set_scores']),
@@ -3911,6 +3932,8 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
   late List<_SetScore> _sets;
   String? _error;
   String? _photoUrl;
+  bool _isWalkover = false;
+  bool? _walkoverWinnerIsP1;
 
   @override
   void initState() {
@@ -3944,65 +3967,96 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
                   style: const TextStyle(color: AppColors.danger, fontSize: 13),
                 ),
               ),
-            ..._sets.asMap().entries.map((entry) {
-              final index = entry.key;
-              final set = entry.value;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: set.myScore,
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly,
-                          LengthLimitingTextInputFormatter(3),
-                        ],
-                        decoration: InputDecoration(
-                          labelText:
-                              '${widget.unitLabel} ${index + 1} — ${widget.player1Name}',
-                          isDense: true,
-                        ),
-                      ),
-                    ),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 6),
-                      child: Text('-'),
-                    ),
-                    Expanded(
-                      child: TextField(
-                        controller: set.opponentScore,
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly,
-                          LengthLimitingTextInputFormatter(3),
-                        ],
-                        decoration: InputDecoration(
-                          labelText: widget.player2Name,
-                          isDense: true,
-                        ),
-                      ),
-                    ),
-                    if (_sets.length > 1)
-                      IconButton(
-                        icon: const Icon(
-                          Icons.remove_circle_outline,
-                          color: AppColors.danger,
-                        ),
-                        tooltip: 'Remove ${widget.unitLabel} ${index + 1}',
-                        onPressed: () => setState(() => _sets.removeAt(index)),
-                      ),
-                  ],
-                ),
-              );
-            }),
-            if (_sets.length < _maxSets)
-              TextButton.icon(
-                onPressed: () => setState(() => _sets.add(_SetScore())),
-                icon: const Icon(Icons.add),
-                label: Text('Add ${widget.unitLabel}'),
+            CheckboxListTile(
+              value: _isWalkover,
+              onChanged: (v) => setState(() {
+                _isWalkover = v ?? false;
+                _error = null;
+              }),
+              title: const Text('Walkover (opponent didn\'t show)'),
+              subtitle: const Text('Awards the win with no set scores and no rating change.'),
+              controlAffinity: ListTileControlAffinity.leading,
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+            ),
+            if (_isWalkover) ...[
+              RadioListTile<bool>(
+                value: true,
+                groupValue: _walkoverWinnerIsP1,
+                onChanged: (v) => setState(() => _walkoverWinnerIsP1 = v),
+                title: Text('${widget.player1Name} wins'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
               ),
+              RadioListTile<bool>(
+                value: false,
+                groupValue: _walkoverWinnerIsP1,
+                onChanged: (v) => setState(() => _walkoverWinnerIsP1 = v),
+                title: Text('${widget.player2Name} wins'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              ),
+            ] else ...[
+              ..._sets.asMap().entries.map((entry) {
+                final index = entry.key;
+                final set = entry.value;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: set.myScore,
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                            LengthLimitingTextInputFormatter(3),
+                          ],
+                          decoration: InputDecoration(
+                            labelText:
+                                '${widget.unitLabel} ${index + 1} — ${widget.player1Name}',
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 6),
+                        child: Text('-'),
+                      ),
+                      Expanded(
+                        child: TextField(
+                          controller: set.opponentScore,
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                            LengthLimitingTextInputFormatter(3),
+                          ],
+                          decoration: InputDecoration(
+                            labelText: widget.player2Name,
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      if (_sets.length > 1)
+                        IconButton(
+                          icon: const Icon(
+                            Icons.remove_circle_outline,
+                            color: AppColors.danger,
+                          ),
+                          tooltip: 'Remove ${widget.unitLabel} ${index + 1}',
+                          onPressed: () => setState(() => _sets.removeAt(index)),
+                        ),
+                    ],
+                  ),
+                );
+              }),
+              if (_sets.length < _maxSets)
+                TextButton.icon(
+                  onPressed: () => setState(() => _sets.add(_SetScore())),
+                  icon: const Icon(Icons.add),
+                  label: Text('Add ${widget.unitLabel}'),
+                ),
+            ],
             const SizedBox(height: 12),
             MatchPhotoPicker(
               initialPhotoUrl: widget.initialPhotoUrl,
@@ -4018,6 +4072,19 @@ class _HostReportSetsDialogState extends State<_HostReportSetsDialog> {
         ),
         ElevatedButton(
           onPressed: () {
+            if (_isWalkover) {
+              if (_walkoverWinnerIsP1 == null) {
+                setState(() => _error = 'Please choose who won.');
+                return;
+              }
+              Navigator.pop(context, {
+                'isWalkover': true,
+                'player1Won': _walkoverWinnerIsP1,
+                if (_photoUrl != null) 'photoUrl': _photoUrl,
+              });
+              return;
+            }
+
             int totalP1 = 0, totalP2 = 0, setsWonByP1 = 0, setsWonByP2 = 0;
             final List<Map<String, int>> setScores = [];
             for (final s in _sets) {

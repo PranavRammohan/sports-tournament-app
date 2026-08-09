@@ -8,6 +8,7 @@ const { reverseRatingChange } = require('./ratingEngine');
 const { createNotification, createNotifications } = require('./notifications');
 const { findSchedulingConflicts } = require('./scheduling');
 const { seedStartingRating } = require('./sportsRoutes');
+const { advanceWinner, nextPowerOfTwo } = require('./playoffRoutes');
 const { isLeagueAdmin } = require('./authorization');
 const { redactFixturePhones } = require('./privacy');
 const { toCsv } = require('./csv');
@@ -1240,7 +1241,7 @@ router.get('/:id/groups/:groupId/schedule', async (req, res) => {
               pp1.username as player1_partner_username, pp1.phone_number as player1_partner_phone,
               p2.username as player2_username, p2.phone_number as player2_phone,
               pp2.username as player2_partner_username, pp2.phone_number as player2_partner_phone,
-              m.id as match_id, m.status as match_status, m.set_scores, m.winner_id, m.reported_by, m.photo_url,
+              m.id as match_id, m.status as match_status, m.set_scores, m.winner_id, m.reported_by, m.photo_url, m.is_walkover,
               m.player1_id as reported_player1_id, m.player2_id as reported_player2_id
        FROM scheduled_matches sm
        LEFT JOIN matches m ON m.scheduled_match_id = sm.id AND m.status != 'rejected'
@@ -1822,35 +1823,67 @@ router.post('/:id/groups/:groupId/lock', async (req, res) => {
       if (group.schedule_type === 'custom') {
         // Nothing to generate — the host adds matches to this group by hand.
       } else if (group.schedule_type === 'knockout') {
-        if (unitCount < 2 || !isPowerOfTwo(unitCount)) {
-          throw new RouteError(400, `Knockout groups need an exact power-of-2 number of ${unitNoun}s (2, 4, 8, 16...) — "${group.name}" currently has ${unitCount}. Adjust its membership before locking.`);
+        if (unitCount < 2) {
+          throw new RouteError(400, `Knockout groups need at least 2 ${unitNoun}s — "${group.name}" currently has ${unitCount}. Adjust its membership before locking.`);
         }
-        const size = unitCount;
-        const seedOrder = generateSeedOrder(size);
-        const totalRounds = Math.log2(size);
+        // Doesn't need to be a power of two — same bye treatment as the
+        // whole-tournament knockout paths (playoffRoutes.js's generate,
+        // generateKnockoutBracket above).
+        const bracketSize = nextPowerOfTwo(unitCount);
+        const seedOrder = generateSeedOrder(bracketSize);
+        const totalRounds = Math.log2(bracketSize);
+        const byeMatches = [];
 
         for (let i = 0; i < seedOrder.length; i += 2) {
           const seedA = seedOrder[i];
           const seedB = seedOrder[i + 1];
+          const position = i / 2 + 1;
           if (isDoubles) {
-            const teamA = teams[seedA - 1];
-            const teamB = teams[seedB - 1];
-            await client.query(
-              `INSERT INTO playoff_matches
-                (league_id, group_id, round_number, position, player1_id, player1_partner_id, player2_id, player2_partner_id, status)
-               VALUES ($1, $2, 1, $3, $4, $5, $6, $7, 'ready')`,
-              [leagueId, groupId, i / 2 + 1, teamA.player1.id, teamA.player2.id, teamB.player1.id, teamB.player2.id]
-            );
+            const teamA = seedA <= unitCount ? teams[seedA - 1] : null;
+            const teamB = seedB <= unitCount ? teams[seedB - 1] : null;
+            if (teamA && teamB) {
+              await client.query(
+                `INSERT INTO playoff_matches
+                  (league_id, group_id, round_number, position, player1_id, player1_partner_id, player2_id, player2_partner_id, status)
+                 VALUES ($1, $2, 1, $3, $4, $5, $6, $7, 'ready')`,
+                [leagueId, groupId, position, teamA.player1.id, teamA.player2.id, teamB.player1.id, teamB.player2.id]
+              );
+            } else if (teamA || teamB) {
+              const byeTeam = teamA || teamB;
+              const byeMatch = await client.query(
+                `INSERT INTO playoff_matches
+                  (league_id, group_id, round_number, position, player1_id, player1_partner_id, winner_id, status)
+                 VALUES ($1, $2, 1, $3, $4, $5, $4, 'bye') RETURNING *`,
+                [leagueId, groupId, position, byeTeam.player1.id, byeTeam.player2.id]
+              );
+              byeMatches.push(byeMatch.rows[0]);
+            } else {
+              throw new RouteError(500, 'Unexpected bracket seeding error.');
+            }
           } else {
-            await client.query(
-              `INSERT INTO playoff_matches (league_id, group_id, round_number, position, player1_id, player2_id, status)
-               VALUES ($1, $2, 1, $3, $4, $5, 'ready')`,
-              [leagueId, groupId, i / 2 + 1, members[seedA - 1].id, members[seedB - 1].id]
-            );
+            const playerA = seedA <= unitCount ? members[seedA - 1] : null;
+            const playerB = seedB <= unitCount ? members[seedB - 1] : null;
+            if (playerA && playerB) {
+              await client.query(
+                `INSERT INTO playoff_matches (league_id, group_id, round_number, position, player1_id, player2_id, status)
+                 VALUES ($1, $2, 1, $3, $4, $5, 'ready')`,
+                [leagueId, groupId, position, playerA.id, playerB.id]
+              );
+            } else if (playerA || playerB) {
+              const byePlayer = playerA || playerB;
+              const byeMatch = await client.query(
+                `INSERT INTO playoff_matches (league_id, group_id, round_number, position, player1_id, winner_id, status)
+                 VALUES ($1, $2, 1, $3, $4, $4, 'bye') RETURNING *`,
+                [leagueId, groupId, position, byePlayer.id]
+              );
+              byeMatches.push(byeMatch.rows[0]);
+            } else {
+              throw new RouteError(500, 'Unexpected bracket seeding error.');
+            }
           }
         }
         for (let round = 2; round <= totalRounds; round++) {
-          const matchesInRound = size / Math.pow(2, round);
+          const matchesInRound = bracketSize / Math.pow(2, round);
           for (let pos = 1; pos <= matchesInRound; pos++) {
             await client.query(
               `INSERT INTO playoff_matches (league_id, group_id, round_number, position, status)
@@ -1859,7 +1892,10 @@ router.post('/:id/groups/:groupId/lock', async (req, res) => {
             );
           }
         }
-        matchCount = size - 1;
+        for (const byeMatch of byeMatches) {
+          await advanceWinner(client, byeMatch);
+        }
+        matchCount = unitCount - 1;
       } else {
         if (unitCount < 2) {
           throw new RouteError(400, `"${group.name}" only has ${unitCount} ${unitNoun}(s) — every group needs at least 2 to generate matches.`);
@@ -3068,28 +3104,49 @@ async function generateKnockoutBracket(req, res, league) {
   const members = membersResult.rows;
 
   if (league.format === 'singles') {
-    if (!isPowerOfTwo(members.length) || members.length < 2) {
+    if (members.length < 2) {
       return res.status(400).json({
-        error: `Knockout leagues need an exact power-of-two number of players (2, 4, 8, 16...). Currently has ${members.length}.`,
+        error: `Knockout leagues need at least 2 players. Currently has ${members.length}.`,
       });
     }
 
-    const size = members.length;
-    const seedOrder = generateSeedOrder(size);
-    const totalRounds = Math.log2(size);
+    // Doesn't need to be a power of two — the bracket is built one size up
+    // when it isn't, and the gap becomes byes (see playoffRoutes.js's
+    // POST /:leagueId/generate, which uses the identical approach).
+    const realCount = members.length;
+    const bracketSize = nextPowerOfTwo(realCount);
+    const seedOrder = generateSeedOrder(bracketSize);
+    const totalRounds = Math.log2(bracketSize);
+    const byeMatches = [];
 
     for (let i = 0; i < seedOrder.length; i += 2) {
       const seedA = seedOrder[i];
       const seedB = seedOrder[i + 1];
-      await pool.query(
-        `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, player2_id, status)
-         VALUES ($1, 1, $2, $3, $4, 'ready')`,
-        [leagueId, i / 2 + 1, members[seedA - 1].id, members[seedB - 1].id]
-      );
+      const position = i / 2 + 1;
+      const playerA = seedA <= realCount ? members[seedA - 1] : null;
+      const playerB = seedB <= realCount ? members[seedB - 1] : null;
+
+      if (playerA && playerB) {
+        await pool.query(
+          `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, player2_id, status)
+           VALUES ($1, 1, $2, $3, $4, 'ready')`,
+          [leagueId, position, playerA.id, playerB.id]
+        );
+      } else if (playerA || playerB) {
+        const byePlayer = playerA || playerB;
+        const byeMatch = await pool.query(
+          `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, winner_id, status)
+           VALUES ($1, 1, $2, $3, $3, 'bye') RETURNING *`,
+          [leagueId, position, byePlayer.id]
+        );
+        byeMatches.push(byeMatch.rows[0]);
+      } else {
+        throw new RouteError(500, 'Unexpected bracket seeding error.');
+      }
     }
 
     for (let round = 2; round <= totalRounds; round++) {
-      const matchesInRound = size / Math.pow(2, round);
+      const matchesInRound = bracketSize / Math.pow(2, round);
       for (let pos = 1; pos <= matchesInRound; pos++) {
         await pool.query(
           `INSERT INTO playoff_matches (league_id, round_number, position, status)
@@ -3097,6 +3154,10 @@ async function generateKnockoutBracket(req, res, league) {
           [leagueId, round, pos]
         );
       }
+    }
+
+    for (const byeMatch of byeMatches) {
+      await advanceWinner(pool, byeMatch);
     }
 
     return res.status(201).json({ message: 'Bracket generated.', matchCount: seedOrder.length / 2 });
@@ -3116,31 +3177,48 @@ async function generateKnockoutBracket(req, res, league) {
 
   teams.sort((a, b) => b.avgRating - a.avgRating);
 
-  if (!isPowerOfTwo(teams.length) || teams.length < 2) {
+  if (teams.length < 2) {
     return res.status(400).json({
-      error: `Knockout doubles leagues need an exact power-of-two number of teams (2, 4, 8, 16...). Currently has ${teams.length} team(s) — ${members.length} player(s).`,
+      error: `Knockout doubles leagues need at least 2 teams. Currently has ${teams.length} team(s) — ${members.length} player(s).`,
     });
   }
 
-  const size = teams.length;
-  const seedOrder = generateSeedOrder(size);
-  const totalRounds = Math.log2(size);
+  const realCount = teams.length;
+  const bracketSize = nextPowerOfTwo(realCount);
+  const seedOrder = generateSeedOrder(bracketSize);
+  const totalRounds = Math.log2(bracketSize);
+  const byeMatches = [];
 
   for (let i = 0; i < seedOrder.length; i += 2) {
     const seedA = seedOrder[i];
     const seedB = seedOrder[i + 1];
-    const teamA = teams[seedA - 1];
-    const teamB = teams[seedB - 1];
-    await pool.query(
-      `INSERT INTO playoff_matches
-        (league_id, round_number, position, player1_id, player1_partner_id, player2_id, player2_partner_id, status)
-       VALUES ($1, 1, $2, $3, $4, $5, $6, 'ready')`,
-      [leagueId, i / 2 + 1, teamA.player1.id, teamA.player2.id, teamB.player1.id, teamB.player2.id]
-    );
+    const position = i / 2 + 1;
+    const teamA = seedA <= realCount ? teams[seedA - 1] : null;
+    const teamB = seedB <= realCount ? teams[seedB - 1] : null;
+
+    if (teamA && teamB) {
+      await pool.query(
+        `INSERT INTO playoff_matches
+          (league_id, round_number, position, player1_id, player1_partner_id, player2_id, player2_partner_id, status)
+         VALUES ($1, 1, $2, $3, $4, $5, $6, 'ready')`,
+        [leagueId, position, teamA.player1.id, teamA.player2.id, teamB.player1.id, teamB.player2.id]
+      );
+    } else if (teamA || teamB) {
+      const byeTeam = teamA || teamB;
+      const byeMatch = await pool.query(
+        `INSERT INTO playoff_matches
+          (league_id, round_number, position, player1_id, player1_partner_id, winner_id, status)
+         VALUES ($1, 1, $2, $3, $4, $3, 'bye') RETURNING *`,
+        [leagueId, position, byeTeam.player1.id, byeTeam.player2.id]
+      );
+      byeMatches.push(byeMatch.rows[0]);
+    } else {
+      throw new RouteError(500, 'Unexpected bracket seeding error.');
+    }
   }
 
   for (let round = 2; round <= totalRounds; round++) {
-    const matchesInRound = size / Math.pow(2, round);
+    const matchesInRound = bracketSize / Math.pow(2, round);
     for (let pos = 1; pos <= matchesInRound; pos++) {
       await pool.query(
         `INSERT INTO playoff_matches (league_id, round_number, position, status)
@@ -3148,6 +3226,10 @@ async function generateKnockoutBracket(req, res, league) {
         [leagueId, round, pos]
       );
     }
+  }
+
+  for (const byeMatch of byeMatches) {
+    await advanceWinner(pool, byeMatch);
   }
 
   res.status(201).json({ message: 'Bracket generated.', matchCount: seedOrder.length / 2 });
@@ -3796,7 +3878,7 @@ router.get('/:id/schedule', async (req, res) => {
               pp1.username as player1_partner_username, pp1.phone_number as player1_partner_phone,
               p2.username as player2_username, p2.phone_number as player2_phone,
               pp2.username as player2_partner_username, pp2.phone_number as player2_partner_phone,
-              m.id as match_id, m.status as match_status, m.set_scores, m.winner_id, m.reported_by, m.photo_url,
+              m.id as match_id, m.status as match_status, m.set_scores, m.winner_id, m.reported_by, m.photo_url, m.is_walkover,
               m.player1_id as reported_player1_id, m.player2_id as reported_player2_id
        FROM scheduled_matches sm
        LEFT JOIN matches m ON m.scheduled_match_id = sm.id AND m.status != 'rejected'

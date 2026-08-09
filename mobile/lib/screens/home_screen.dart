@@ -589,6 +589,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } else if (m['player2_partner_id'] == _currentUserId) {
       ratingChange = _toDouble(m['player2_partner_rating_change']);
     }
+    if (m['is_walkover'] == true) ratingChange = null;
     final isPlayoff = m['match_type'] == 'playoff';
 
     return InkWell(
