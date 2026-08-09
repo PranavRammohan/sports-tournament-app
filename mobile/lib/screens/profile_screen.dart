@@ -10,6 +10,7 @@ import '../widgets/player_avatar.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/win_rate_bar.dart';
 import '../widgets/rating_sparkline.dart';
+import '../widgets/rating_scale_bar.dart';
 import '../utils.dart';
 import '../constants/sports.dart';
 import 'add_sport_screen.dart';
@@ -525,100 +526,116 @@ class _ProfileScreenState extends State<ProfileScreen> {
         color: bgColor,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                  color: textColor,
-                ),
-              ),
-              Text(
-                '${data['matches_played']} matches · ${data['wins']}W ${data['losses']}L',
-                style: TextStyle(fontSize: 11, color: subtleTextColor),
-              ),
-              if ((data['matches_played'] ?? 0) > 0) ...[
-                const SizedBox(height: 4),
-                SizedBox(
-                  width: 90,
-                  child: WinRateBar(
-                    wins: data['wins'] ?? 0,
-                    losses: data['losses'] ?? 0,
-                  ),
-                ),
-              ],
-            ],
-          ),
           Row(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              if (_user?['id'] != null &&
-                  data['matches_played'] != null &&
-                  data['matches_played'] > 0) ...[
-                RatingSparkline(
-                  userId: _user!['id'] as int,
-                  sport: data['sport'],
-                  format: data['format'],
-                ),
-                const SizedBox(width: 10),
-              ],
               Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    formatRating(data['sport'], data['rating']),
-                    style: const TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.accent,
+                    label,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: textColor,
                     ),
                   ),
-                  if (ratingBandFor(data['sport'], data['rating']) != null)
-                    Text(
-                      ratingBandFor(data['sport'], data['rating'])!,
-                      style: TextStyle(fontSize: 10, color: subtleTextColor),
+                  Text(
+                    '${data['matches_played']} matches · ${data['wins']}W ${data['losses']}L',
+                    style: TextStyle(fontSize: 11, color: subtleTextColor),
+                  ),
+                  if ((data['matches_played'] ?? 0) > 0) ...[
+                    const SizedBox(height: 4),
+                    SizedBox(
+                      width: 90,
+                      child: WinRateBar(
+                        wins: data['wins'] ?? 0,
+                        losses: data['losses'] ?? 0,
+                      ),
                     ),
+                  ],
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_user?['id'] != null &&
+                      data['matches_played'] != null &&
+                      data['matches_played'] > 0) ...[
+                    RatingSparkline(
+                      userId: _user!['id'] as int,
+                      sport: data['sport'],
+                      format: data['format'],
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        formatRating(data['sport'], data['rating']),
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.accent,
+                        ),
+                      ),
+                      if (ratingBandFor(data['sport'], data['rating']) != null)
+                        Text(
+                          ratingBandFor(data['sport'], data['rating'])!,
+                          style: TextStyle(fontSize: 10, color: subtleTextColor),
+                        ),
+                    ],
+                  ),
                 ],
               ),
             ],
           ),
+          if (data['rating'] != null) ...[
+            const SizedBox(height: 8),
+            RatingScaleBar(sport: data['sport'], rating: data['rating']),
+          ],
         ],
       ),
     );
   }
 
   Future<void> _showRatingInfoDialog() async {
+    // Derived from sportLevels (via sportRatingRange) rather than a second,
+    // hand-typed copy of the same four ranges that could quietly drift out
+    // of sync with it.
+    const sportKeys = ['badminton', 'tennis', 'table_tennis', 'pickleball'];
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         title: const Text('About ratings'),
-        content: const SingleChildScrollView(
+        content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              const Text(
                 'Your rating moves after every confirmed match — up when you '
                 'win, down when you lose, more for a surprising result and '
                 'less for an expected one.',
               ),
-              SizedBox(height: 12),
-              Text(
+              const SizedBox(height: 12),
+              const Text(
                 'Each sport uses its own practical scale, so the numbers '
                 "aren't comparable across sports:",
               ),
-              SizedBox(height: 8),
-              Text('• Badminton: roughly 6000–8500'),
-              Text('• Tennis: roughly 2.5–13'),
-              Text('• Table Tennis: roughly 1000–2500'),
-              Text('• Pickleball: roughly 2.5–7'),
+              const SizedBox(height: 8),
+              for (final sport in sportKeys)
+                if (sportRatingRange(sport) != null)
+                  Text(
+                    '• ${_formatSportName(sport)}: roughly '
+                    '${formatRating(sport, sportRatingRange(sport)!.min)}–'
+                    '${formatRating(sport, sportRatingRange(sport)!.max)}',
+                  ),
             ],
           ),
         ),

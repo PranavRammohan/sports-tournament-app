@@ -77,6 +77,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -99,10 +100,15 @@ class _LoginScreenState extends State<LoginScreen> {
                   Text(
                     'PlayMySet',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 30,
                       fontWeight: FontWeight.bold,
-                      color: AppColors.primary,
+                      // AppColors.primary is near-black — invisible against
+                      // the equally near-black dark-mode background, so
+                      // this is the one spot in the app that needs to
+                      // actively invert rather than use the brand color
+                      // directly.
+                      color: isDark ? Colors.white : AppColors.primary,
                     ),
                   ),
                   const SizedBox(height: 6),

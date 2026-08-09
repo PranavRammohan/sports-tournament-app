@@ -13,6 +13,7 @@ import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
 import '../widgets/win_rate_bar.dart';
 import '../widgets/team_name_row.dart';
+import '../widgets/rating_scale_bar.dart';
 import 'add_sport_screen.dart';
 import 'my_leagues_screen.dart';
 import 'match_history_screen.dart';
@@ -727,21 +728,30 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _sportRatingLine(String label, Map<String, dynamic> data, String sport) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              label,
+              style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
+            ),
+            Text(
+              formatRating(sport, data['rating']),
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+                color: AppColors.accent,
+              ),
+            ),
+          ],
         ),
-        Text(
-          formatRating(sport, data['rating']),
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.bold,
-            color: AppColors.accent,
-          ),
-        ),
+        if (data['rating'] != null) ...[
+          const SizedBox(height: 4),
+          RatingScaleBar(sport: sport, rating: data['rating']),
+        ],
       ],
     );
   }

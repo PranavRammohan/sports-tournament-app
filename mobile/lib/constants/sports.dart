@@ -51,6 +51,24 @@ String _titleCaseSport(String sport) => sport
     .map((w) => w.isEmpty ? w : w[0].toUpperCase() + w.substring(1))
     .join(' ');
 
+// Public accessor for sportLevels keyed by the backend's snake_case sport
+// value ("table_tennis") rather than the Title Case display name this
+// file's own table uses internally — lets other callers (rating_scale_bar.
+// dart) avoid re-deriving _titleCaseSport a third time.
+Map<String, num>? sportLevelsFor(String sport) =>
+    sportLevels[_titleCaseSport(sport)];
+
+// The practical min/max a sport's rating falls in, derived from the same
+// sportLevels table (its first/last entries are always the beginner/pro
+// anchors) — one source of truth instead of a second, hand-typed copy of
+// the same four ranges.
+({num min, num max})? sportRatingRange(String sport) {
+  final levels = sportLevelsFor(sport);
+  if (levels == null || levels.isEmpty) return null;
+  final values = levels.values.toList();
+  return (min: values.first, max: values.last);
+}
+
 // GAP-11 — turns a raw rating number into a human skill-level label, so
 // "6500.0" also reads as "Intermediate" somewhere on screen. sportLevels'
 // thresholds are already in ascending order, so the band is just the
