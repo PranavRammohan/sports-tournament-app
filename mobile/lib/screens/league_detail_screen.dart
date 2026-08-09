@@ -1,11 +1,9 @@
 // league_detail_screen.dart
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:path_provider/path_provider.dart';
 import '../main.dart';
 import '../api_client.dart';
 import '../utils.dart';
@@ -648,18 +646,31 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     // response shape or a share-sheet/file-write failure on the device
     // failed completely silently — "the button does nothing." Surfacing
     // whatever actually goes wrong instead of swallowing it.
+    //
+    // Building the XFile straight from bytes (not writing to a temp file
+    // first) rather than the path_provider route this used to take —
+    // path_provider's getTemporaryDirectory() has no web implementation,
+    // so exporting from a browser threw MissingPluginException every time.
+    // XFile.fromData works identically on every platform since it never
+    // touches the filesystem at all.
     try {
       final filename = res.data['filename'] as String?;
       final csv = res.data['csv'] as String?;
       if (filename == null || csv == null) {
         throw const FormatException('Export response was missing filename/csv.');
       }
-      final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/$filename');
-      await file.writeAsString(csv);
 
       await SharePlus.instance.share(
-        ShareParams(files: [XFile(file.path)], text: filename),
+        ShareParams(
+          files: [
+            XFile.fromData(
+              Uint8List.fromList(utf8.encode(csv)),
+              name: filename,
+              mimeType: 'text/csv',
+            ),
+          ],
+          text: filename,
+        ),
       );
     } catch (err) {
       if (!mounted) return;

@@ -41,7 +41,6 @@ dependencies:
   google_fonts: ^8.2.0
   url_launcher: ^6.3.2
   fl_chart: ^1.2.0
-  path_provider: ^2.1.4
   app_links: ^6.3.2
 dev_dependencies:
   flutter_test:
@@ -100,9 +99,6 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
-
-dependency_overrides:
-  path_provider_android: 2.2.14
 
 # Run `dart run flutter_launcher_icons` after changing this to regenerate
 # the Android/iOS/web app icon from assets/icon.png (the icon-only mark —
