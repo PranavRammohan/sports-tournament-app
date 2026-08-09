@@ -153,7 +153,7 @@ class _SignupScreenState extends State<SignupScreen> {
               ),
               const SizedBox(height: 6),
               Text(
-                'Join the ladder and start competing.',
+                'Play. Compete. Rank. Let\'s set up your profile.',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyMedium,
               ),

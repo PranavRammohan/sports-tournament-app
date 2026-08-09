@@ -4049,7 +4049,7 @@ router.get('/:id/announcements', async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT la.id, la.body, la.created_at, u.username AS author_username
+      `SELECT la.id, la.body, la.created_at, la.updated_at, u.username AS author_username
        FROM league_announcements la
        LEFT JOIN users u ON u.id = la.author_id
        WHERE la.league_id = $1
@@ -4061,6 +4061,46 @@ router.get('/:id/announcements', async (req, res) => {
   } catch (err) {
     console.error('Get announcements error:', err);
     res.status(500).json({ error: 'Something went wrong fetching announcements.' });
+  }
+});
+
+router.put('/:id/announcements/:announcementId', async (req, res) => {
+  const userId = req.userId;
+  const { id: leagueId, announcementId } = req.params;
+  const { body } = req.body;
+
+  if (!body || !body.trim()) {
+    return res.status(400).json({ error: 'Please enter an announcement.' });
+  }
+  if (body.trim().length > 2000) {
+    return res.status(400).json({ error: 'Announcement must be 2000 characters or fewer.' });
+  }
+
+  try {
+    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+    if (leagueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Tournament not found.' });
+    }
+    const league = leagueResult.rows[0];
+
+    if (!(await isLeagueAdmin(pool, league, userId))) {
+      return res.status(403).json({ error: 'Only the tournament host or a co-host can edit announcements.' });
+    }
+
+    const result = await pool.query(
+      `UPDATE league_announcements SET body = $1, updated_at = now()
+       WHERE id = $2 AND league_id = $3
+       RETURNING *`,
+      [body.trim(), announcementId, leagueId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Announcement not found.' });
+    }
+
+    res.status(200).json({ announcement: result.rows[0] });
+  } catch (err) {
+    console.error('Edit announcement error:', err);
+    res.status(500).json({ error: 'Something went wrong updating the announcement.' });
   }
 });
 
@@ -4190,7 +4230,7 @@ router.put('/:id', async (req, res) => {
   const {
     name, area, seasonStart, seasonEnd, academyName, isPrivate, hostEntersScores,
     registrationStart, registrationEnd, partnerMode,
-    pointsEnabled, pointsWin, pointsLoss, maxPlayers,
+    pointsEnabled, pointsWin, pointsLoss, maxPlayers, minRating, maxRating,
   } = req.body;
 
   try {
@@ -4311,6 +4351,27 @@ router.put('/:id', async (req, res) => {
         }
       }
       updates.push(`max_players = $${idx++}`); params.push(maxPlayers);
+    }
+
+    // Same "resolve against the current row, validate the pair together"
+    // pattern as the points config above — min/max rating are two separate
+    // optional fields but only meaningful validated together, and either
+    // one can arrive alone (e.g. widening just the max).
+    if (minRating !== undefined || maxRating !== undefined) {
+      const finalMinRating = minRating !== undefined ? minRating : league.min_rating;
+      const finalMaxRating = maxRating !== undefined ? maxRating : league.max_rating;
+      if (finalMinRating != null && finalMaxRating != null &&
+          parseFloat(finalMinRating) > parseFloat(finalMaxRating)) {
+        return res.status(400).json({ error: 'Minimum rating cannot be higher than maximum rating.' });
+      }
+      if (minRating !== undefined) {
+        updates.push(`min_rating = $${idx++}`);
+        params.push(minRating != null ? parseFloat(minRating) : null);
+      }
+      if (maxRating !== undefined) {
+        updates.push(`max_rating = $${idx++}`);
+        params.push(maxRating != null ? parseFloat(maxRating) : null);
+      }
     }
 
     if (updates.length === 0) {

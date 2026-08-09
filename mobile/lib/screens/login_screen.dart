@@ -88,6 +88,14 @@ class _LoginScreenState extends State<LoginScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  Center(
+                    child: Image.asset(
+                      'assets/icon.png',
+                      height: 84,
+                      width: 84,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
                   Text(
                     'PlayMySet',
                     textAlign: TextAlign.center,
@@ -99,7 +107,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Log in to keep climbing the ladder.',
+                    'Log in to get back to your matches.',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),

@@ -58,6 +58,10 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
   bool _restrictCapacity = false;
   final TextEditingController _maxPlayersController = TextEditingController();
 
+  bool _restrictByRating = false;
+  final TextEditingController _minRatingController = TextEditingController();
+  final TextEditingController _maxRatingController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -91,6 +95,14 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
     _restrictCapacity = l['max_players'] != null;
     if (l['max_players'] != null) {
       _maxPlayersController.text = l['max_players'].toString();
+    }
+
+    _restrictByRating = l['min_rating'] != null || l['max_rating'] != null;
+    if (l['min_rating'] != null) {
+      _minRatingController.text = l['min_rating'].toString();
+    }
+    if (l['max_rating'] != null) {
+      _maxRatingController.text = l['max_rating'].toString();
     }
 
     if (_isDoubles) {
@@ -131,11 +143,32 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
     _pointsWinController.dispose();
     _pointsLossController.dispose();
     _maxPlayersController.dispose();
+    _minRatingController.dispose();
+    _maxRatingController.dispose();
     super.dispose();
   }
 
   String _formatForApi(DateTime d) {
     return '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  }
+
+  // Same ranges as create_league_screen.dart's _ratingHintFor, keyed off
+  // the lowercase sport values the backend actually stores (widget.league
+  // never has the display-cased 'Badminton'/'Tennis'/... create's own
+  // sport dropdown uses).
+  String? _ratingHintFor(String? sport) {
+    switch (sport) {
+      case 'badminton':
+        return 'e.g. 6000–8500';
+      case 'tennis':
+        return 'e.g. 2.5–13';
+      case 'table_tennis':
+        return 'e.g. 1000–2500';
+      case 'pickleball':
+        return 'e.g. 2.5–7';
+      default:
+        return null;
+    }
   }
 
   String _formatDisplayDate(DateTime? d) {
@@ -411,6 +444,27 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
       }
     }
 
+    double? minRating;
+    double? maxRating;
+    if (_restrictByRating) {
+      minRating = double.tryParse(_minRatingController.text.trim());
+      maxRating = double.tryParse(_maxRatingController.text.trim());
+      if (minRating == null && maxRating == null) {
+        _showAlert(
+          'Missing info',
+          'Enter at least a minimum or maximum rating, or turn off the rating restriction.',
+        );
+        return;
+      }
+      if (minRating != null && maxRating != null && minRating > maxRating) {
+        _showAlert(
+          'Invalid range',
+          'Minimum rating cannot be higher than maximum rating.',
+        );
+        return;
+      }
+    }
+
     int? pointsWin;
     int? pointsLoss;
     if (_pointsEnabled) {
@@ -458,6 +512,8 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
           'pointsWin': _pointsEnabled ? pointsWin : null,
           'pointsLoss': _pointsEnabled ? pointsLoss : null,
           'maxPlayers': _restrictCapacity ? maxPlayers : null,
+          'minRating': _restrictByRating ? minRating : null,
+          'maxRating': _restrictByRating ? maxRating : null,
         }),
       );
 
@@ -505,6 +561,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final ratingHint = _ratingHintFor(widget.league['sport']);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Edit Tournament')),
@@ -671,6 +728,52 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                   prefixIcon: Icon(Icons.groups_outlined),
                 ),
               ),
+            const SizedBox(height: 14),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _restrictByRating,
+              onChanged: (v) => setState(() => _restrictByRating = v),
+              title: const Text('Restrict by rating'),
+              subtitle: const Text('Only players within a rating range can join.'),
+            ),
+            if (_restrictByRating) ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _minRatingController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: InputDecoration(
+                        labelText: 'Min rating',
+                        hintText: ratingHint,
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      controller: _maxRatingController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: InputDecoration(
+                        labelText: 'Max rating',
+                        hintText: ratingHint,
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Leave one blank for an open-ended range.',
+                style: TextStyle(fontSize: 11),
+              ),
+            ],
             if (_isDoubles) ...[
               const SizedBox(height: 14),
               Text(
@@ -788,7 +891,9 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                         SharePlus.instance.share(
                           ShareParams(
                             text:
-                                'Join my tournament "${_nameController.text.trim()}" on PlayMySet! Use join code: $_joinCode\nOr tap: playmyset://join/$_joinCode',
+                                'Join my tournament "${_nameController.text.trim()}" on PlayMySet!\n'
+                                'Join code: $_joinCode\n'
+                                '(Tap this link if it opens the app: playmyset://join/$_joinCode)',
                           ),
                         );
                       },

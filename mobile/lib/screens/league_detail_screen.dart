@@ -644,15 +644,32 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       return;
     }
 
-    final filename = res.data['filename'] as String;
-    final csv = res.data['csv'] as String;
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/$filename');
-    await file.writeAsString(csv);
+    // Everything past the status check used to be un-guarded, so a bad
+    // response shape or a share-sheet/file-write failure on the device
+    // failed completely silently — "the button does nothing." Surfacing
+    // whatever actually goes wrong instead of swallowing it.
+    try {
+      final filename = res.data['filename'] as String?;
+      final csv = res.data['csv'] as String?;
+      if (filename == null || csv == null) {
+        throw const FormatException('Export response was missing filename/csv.');
+      }
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/$filename');
+      await file.writeAsString(csv);
 
-    await SharePlus.instance.share(
-      ShareParams(files: [XFile(file.path)], text: filename),
-    );
+      await SharePlus.instance.share(
+        ShareParams(files: [XFile(file.path)], text: filename),
+      );
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not export: $err'),
+          backgroundColor: AppColors.danger,
+        ),
+      );
+    }
   }
 
   Future<void> _confirmLeave() async {
@@ -1871,14 +1888,16 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
             Text(latest['body'], maxLines: 3, overflow: TextOverflow.ellipsis),
             const SizedBox(height: 4),
             Text(
-              '${latest['author_username'] ?? 'Host'} · ${formatRelativeTime(latest['created_at'])}',
+              '${latest['author_username'] ?? 'Host'} · '
+              '${formatRelativeTime(latest['updated_at'] ?? latest['created_at'])}'
+              '${latest['updated_at'] != null ? ' (edited)' : ''}',
               style: const TextStyle(fontSize: 11, color: AppColors.textGrey),
             ),
             if (_announcements.length > 1)
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
-                  onPressed: _showAllAnnouncements,
+                  onPressed: () => _showAllAnnouncements(isHost),
                   child: Text('See all (${_announcements.length})'),
                 ),
               ),
@@ -1888,13 +1907,16 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     );
   }
 
-  Future<void> _composeAnnouncement() async {
-    final controller = TextEditingController();
+  // `existing` set means edit-in-place (PUT, pre-filled) rather than a
+  // brand-new post (POST, blank) — same dialog either way.
+  Future<void> _composeAnnouncement({Map<String, dynamic>? existing}) async {
+    final isEdit = existing != null;
+    final controller = TextEditingController(text: existing?['body'] ?? '');
     final posted = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        title: const Text('Post announcement'),
+        title: Text(isEdit ? 'Edit announcement' : 'Post announcement'),
         content: TextField(
           controller: controller,
           maxLines: 5,
@@ -1910,14 +1932,19 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           TextButton(
             onPressed: () async {
               if (controller.text.trim().isEmpty) return;
-              final res = await ApiClient.post(
-                '/leagues/${widget.leagueId}/announcements',
-                body: {'body': controller.text.trim()},
-              );
+              final res = isEdit
+                  ? await ApiClient.put(
+                      '/leagues/${widget.leagueId}/announcements/${existing['id']}',
+                      body: {'body': controller.text.trim()},
+                    )
+                  : await ApiClient.post(
+                      '/leagues/${widget.leagueId}/announcements',
+                      body: {'body': controller.text.trim()},
+                    );
               if (!ctx.mounted) return;
-              Navigator.pop(ctx, res.statusCode == 201);
+              Navigator.pop(ctx, res.statusCode == (isEdit ? 200 : 201));
             },
-            child: const Text('Post'),
+            child: Text(isEdit ? 'Save' : 'Post'),
           ),
         ],
       ),
@@ -1925,7 +1952,44 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
     if (posted == true) _loadAll();
   }
 
-  Future<void> _showAllAnnouncements() async {
+  Future<void> _deleteAnnouncement(int announcementId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Delete this announcement?'),
+        content: const Text('Members who already saw it keep their notification.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete', style: TextStyle(color: AppColors.danger)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final res = await ApiClient.delete(
+      '/leagues/${widget.leagueId}/announcements/$announcementId',
+    );
+    if (!mounted) return;
+    if (res.statusCode == 200) {
+      _loadAll();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(res.errorOr('Could not delete the announcement.')),
+          backgroundColor: AppColors.danger,
+        ),
+      );
+    }
+  }
+
+  Future<void> _showAllAnnouncements(bool isHost) async {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1939,11 +2003,39 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
           separatorBuilder: (_, _) => const Divider(),
           itemBuilder: (context, index) {
             final a = _announcements[index];
+            final edited = a['updated_at'] != null;
             return ListTile(
               title: Text(a['body']),
               subtitle: Text(
-                '${a['author_username'] ?? 'Host'} · ${formatRelativeTime(a['created_at'])}',
+                '${a['author_username'] ?? 'Host'} · '
+                '${formatRelativeTime(edited ? a['updated_at'] : a['created_at'])}'
+                '${edited ? ' (edited)' : ''}',
               ),
+              trailing: isHost
+                  ? PopupMenuButton<String>(
+                      icon: const Icon(Icons.more_vert, size: 20),
+                      onSelected: (value) {
+                        // The bottom sheet doesn't live-refresh its own list
+                        // when _announcements changes underneath it (no
+                        // StatefulBuilder here) — close it first so the
+                        // reopened card/sheet picks up the reload cleanly,
+                        // same as the compose flow already does.
+                        Navigator.pop(ctx);
+                        if (value == 'edit') {
+                          _composeAnnouncement(existing: a);
+                        } else if (value == 'delete') {
+                          _deleteAnnouncement(a['id']);
+                        }
+                      },
+                      itemBuilder: (context) => const [
+                        PopupMenuItem(value: 'edit', child: Text('Edit')),
+                        PopupMenuItem(
+                          value: 'delete',
+                          child: Text('Delete', style: TextStyle(color: AppColors.danger)),
+                        ),
+                      ],
+                    )
+                  : null,
             );
           },
         ),
@@ -2135,7 +2227,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                           ),
                         ),
                         IconButton(
-                          tooltip: 'Copy join code',
+                          tooltip: 'Copy join code (just the code, no link)',
                           icon: const Icon(Icons.copy_outlined, size: 18),
                           onPressed: () {
                             HapticFeedback.selectionClick();
@@ -2144,21 +2236,25 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                             );
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
-                                content: Text('Join code copied.'),
+                                content: Text(
+                                  'Join code copied — use Share instead to send a tappable link too.',
+                                ),
                                 backgroundColor: AppColors.success,
                               ),
                             );
                           },
                         ),
                         IconButton(
-                          tooltip: 'Share join code',
+                          tooltip: 'Share join code and link',
                           icon: const Icon(Icons.share_outlined, size: 18),
                           onPressed: () {
                             HapticFeedback.selectionClick();
                             SharePlus.instance.share(
                               ShareParams(
                                 text:
-                                    'Join my tournament "${_league!['name']}" on PlayMySet! Use join code: ${_league!['join_code']}\nOr tap: playmyset://join/${_league!['join_code']}',
+                                    'Join my tournament "${_league!['name']}" on PlayMySet!\n'
+                                    'Join code: ${_league!['join_code']}\n'
+                                    '(Tap this link if it opens the app: playmyset://join/${_league!['join_code']})',
                               ),
                             );
                           },
@@ -2176,7 +2272,8 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                         SharePlus.instance.share(
                           ShareParams(
                             text:
-                                'Check out "${_league!['name']}" on PlayMySet!\nplaymyset://league/${widget.leagueId}',
+                                'Check out "${_league!['name']}" on PlayMySet!\n'
+                                '(Tap this link if it opens the app: playmyset://league/${widget.leagueId})',
                           ),
                         );
                       },

@@ -46,8 +46,14 @@ class WinLossPill extends StatelessWidget {
   }
 }
 
-/// A rating change like "+1.23" (green) or "-0.87" (red). Renders nothing
-/// when `delta` is null (e.g. a match predating rating-change tracking).
+/// A rating change like "+1.23" (brand accent) or "-0.87" (red). Renders
+/// nothing when `delta` is null (e.g. a match predating rating-change
+/// tracking). A gain uses the same `AppColors.accent` a static rating
+/// number renders in everywhere else (profile, home, leaderboards) — one
+/// consistent "rating" color, rather than a second, different green just
+/// for this widget. A drop stays `danger` red; that's a distinct, necessary
+/// signal (matches `WinLossPill`'s red for a loss) that a gain-colored
+/// green can't also carry.
 class RatingDeltaText extends StatelessWidget {
   final double? delta;
   final double fontSize;
@@ -74,7 +80,7 @@ class RatingDeltaText extends StatelessWidget {
           style: TextStyle(
             fontSize: fontSize,
             fontWeight: FontWeight.bold,
-            color: positive ? AppColors.success : AppColors.danger,
+            color: positive ? AppColors.accent : AppColors.danger,
           ),
         ),
       ),
