@@ -40,7 +40,7 @@ const List<_OnboardingSlide> _slides = [
 ];
 
 class OnboardingScreen extends StatefulWidget {
-  // GAP-18 — set when this screen is reopened from Profile ("How RallyX
+  // GAP-18 — set when this screen is reopened from Profile ("How PlayMySet
   // works") instead of shown at first launch. Skip/finish then just pops
   // back to Profile instead of touching the hasSeenOnboarding flag or
   // routing to /login, which would otherwise dump an already-logged-in user

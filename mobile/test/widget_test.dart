@@ -13,10 +13,10 @@ import 'package:mobile/main.dart';
 
 void main() {
   testWidgets('App boots to the login screen', (WidgetTester tester) async {
-    await tester.pumpWidget(const RallyXApp(initialRoute: '/login'));
+    await tester.pumpWidget(const PlayMySetApp(initialRoute: '/login'));
     await tester.pumpAndSettle();
 
-    expect(find.text('RallyX'), findsOneWidget);
+    expect(find.text('PlayMySet'), findsOneWidget);
     expect(find.text('Log In'), findsOneWidget);
     expect(find.text('Email or mobile number'), findsOneWidget);
     expect(find.text('Password'), findsOneWidget);

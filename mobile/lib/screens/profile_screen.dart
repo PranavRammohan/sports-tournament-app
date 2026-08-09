@@ -154,7 +154,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         title: const Text('Log out?'),
-        content: const Text("You'll need to sign in again to use RallyX."),
+        content: const Text("You'll need to sign in again to use PlayMySet."),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -364,7 +364,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         color: primaryTextColor,
                       ),
                       title: Text(
-                        'How RallyX works',
+                        'How PlayMySet works',
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
                           fontSize: 14,

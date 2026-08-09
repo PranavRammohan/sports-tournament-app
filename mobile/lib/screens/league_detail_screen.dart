@@ -2158,7 +2158,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                             SharePlus.instance.share(
                               ShareParams(
                                 text:
-                                    'Join my tournament "${_league!['name']}" on RallyX! Use join code: ${_league!['join_code']}\nOr tap: rallyx://join/${_league!['join_code']}',
+                                    'Join my tournament "${_league!['name']}" on PlayMySet! Use join code: ${_league!['join_code']}\nOr tap: playmyset://join/${_league!['join_code']}',
                               ),
                             );
                           },
@@ -2176,7 +2176,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
                         SharePlus.instance.share(
                           ShareParams(
                             text:
-                                'Check out "${_league!['name']}" on RallyX!\nrallyx://league/${widget.leagueId}',
+                                'Check out "${_league!['name']}" on PlayMySet!\nplaymyset://league/${widget.leagueId}',
                           ),
                         );
                       },

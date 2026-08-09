@@ -788,7 +788,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
                         SharePlus.instance.share(
                           ShareParams(
                             text:
-                                'Join my tournament "${_nameController.text.trim()}" on RallyX! Use join code: $_joinCode\nOr tap: rallyx://join/$_joinCode',
+                                'Join my tournament "${_nameController.text.trim()}" on PlayMySet! Use join code: $_joinCode\nOr tap: playmyset://join/$_joinCode',
                           ),
                         );
                       },

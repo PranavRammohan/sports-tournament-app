@@ -6,7 +6,7 @@ import '../validators.dart';
 import 'league_detail_screen.dart';
 
 class JoinByCodeScreen extends StatefulWidget {
-  // Prefilled when this screen is opened from a rallyx://join/<code> deep
+  // Prefilled when this screen is opened from a playmyset://join/<code> deep
   // link — see deep_links.dart.
   final String? initialCode;
 

@@ -89,7 +89,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'RallyX',
+                    'PlayMySet',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 30,

@@ -9,16 +9,22 @@ import 'screens/onboarding_screen.dart';
 import 'deep_links.dart';
 
 class AppColors {
-  static const Color primary = Color(0xFF1E293B);
-  static const Color primaryDark = Color(0xFF0F172A);
-  // Dark-mode variant of primary — the raw navy above has poor contrast
-  // against the near-black dark surfaces below, so interactive elements
-  // (buttons, links) use this lighter tone of the same blue hue in dark
-  // mode instead, keeping one consistent brand color logic rather than
-  // swapping to the gold accent (which stays a highlight/FAB color in both
-  // modes, not the primary interactive color).
-  static const Color primaryLight = Color(0xFF3B82F6);
-  static const Color accent = Color(0xFFB8860B);
+  // Brand black, sampled from the logo's own background — used for the
+  // AppBar, primary buttons, focused-input border, and selected nav label
+  // in light mode, where black-on-white reads cleanly.
+  static const Color primary = Color(0xFF0D0D0D);
+  static const Color primaryDark = Color(0xFF000000);
+  // Dark-mode variant of primary. Unlike the old navy brand color, near-
+  // black `primary` has no "lighter tone of the same hue" that would still
+  // read as a distinct, tappable color against the near-black dark surfaces
+  // below — so dark mode leans on the brand's other color, the lime-green
+  // accent, for its interactive elements (buttons, links, focused border)
+  // instead. `accent` itself stays the FAB/chip/progress highlight in both
+  // modes; here it doubles as the primary interactive color specifically
+  // because black no longer can be in dark mode.
+  static const Color primaryLight = Color(0xFFA3C305);
+  // Brand lime-green, sampled from the logo's "S" and ring accent.
+  static const Color accent = Color(0xFFA3C305);
   static const Color background = Color(0xFFF7F7F5);
   static const Color success = Color(0xFF2E9E5B);
   static const Color danger = Color(0xFFC0392B);
@@ -83,17 +89,17 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await _loadSavedThemeMode();
   final seenOnboarding = await _hasSeenOnboarding();
-  runApp(RallyXApp(initialRoute: seenOnboarding ? '/login' : '/onboarding'));
+  runApp(PlayMySetApp(initialRoute: seenOnboarding ? '/login' : '/onboarding'));
   // Fire-and-forget: not awaited in main() so app startup isn't blocked on
   // it, and it needs navigatorKey.currentState to exist (i.e. runApp to
   // have run) before it can navigate anywhere anyway.
   DeepLinkService.init();
 }
 
-class RallyXApp extends StatelessWidget {
+class PlayMySetApp extends StatelessWidget {
   final String initialRoute;
 
-  const RallyXApp({super.key, required this.initialRoute});
+  const PlayMySetApp({super.key, required this.initialRoute});
 
   @override
   Widget build(BuildContext context) {

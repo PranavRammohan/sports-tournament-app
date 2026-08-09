@@ -205,7 +205,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('RallyX'),
+        title: const Text('PlayMySet'),
         actions: [
           IconButton(
             tooltip: 'Find Players',

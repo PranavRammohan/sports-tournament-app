@@ -346,7 +346,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
                   SharePlus.instance.share(
                     ShareParams(
                       text:
-                          'Join my tournament "${league['name']}" on RallyX! Use join code: ${league['join_code']}\nOr tap: rallyx://join/${league['join_code']}',
+                          'Join my tournament "${league['name']}" on PlayMySet! Use join code: ${league['join_code']}\nOr tap: playmyset://join/${league['join_code']}',
                     ),
                   );
                 },

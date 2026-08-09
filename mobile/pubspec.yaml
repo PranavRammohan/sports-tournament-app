@@ -1,5 +1,5 @@
 name: mobile
-description: "RallyX — sports league and tournament management for racquet sports."
+description: "PlayMySet — sports league and tournament management for racquet sports."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -53,6 +53,8 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+  flutter_native_splash: ^2.4.6
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -98,3 +100,31 @@ flutter:
 
 dependency_overrides:
   path_provider_android: 2.2.14
+
+# Run `dart run flutter_launcher_icons` after changing this to regenerate
+# the Android/iOS/web app icon from assets/icon.png (the icon-only mark —
+# assets/logo.png, the full wordmark+tagline lockup, is deliberately not
+# used here since it'd be illegible shrunk to icon size).
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon.png"
+  min_sdk_android: 21
+  web:
+    generate: true
+    image_path: "assets/icon.png"
+    background_color: "#000000"
+    theme_color: "#000000"
+
+# Run `dart run flutter_native_splash:create` after changing this to
+# regenerate the native splash screens. Uses the same icon-only mark as the
+# app icon, centered on the brand black — the image's own baked-in black
+# background matches the splash background exactly, so it reads as one flat
+# graphic rather than an image floating on a color field.
+flutter_native_splash:
+  color: "#000000"
+  image: "assets/icon.png"
+  android_12:
+    image: "assets/icon.png"
+    color: "#000000"
+  web: false

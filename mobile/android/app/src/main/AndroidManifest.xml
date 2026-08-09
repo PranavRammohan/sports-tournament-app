@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <application
-        android:label="RallyX"
+        android:label="PlayMySet"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -25,17 +25,16 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <!-- GAP-16 — custom-scheme deep links (rallyx://league/<id>,
-                 rallyx://join/<code>). Not an App Link (no host/autoVerify) —
-                 that would need a domain we control and a fixed bundle id
-                 (still com.example.mobile today) to serve assetlinks.json.
+            <!-- GAP-16 — custom-scheme deep links (playmyset://league/<id>,
+                 playmyset://join/<code>). Not an App Link (no host/autoVerify) —
+                 that would need a domain we control to serve assetlinks.json.
                  This works from any app (WhatsApp, SMS) that lets the user
-                 tap a rallyx:// link, just not from a plain web browser. -->
+                 tap a playmyset:// link, just not from a plain web browser. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="rallyx"/>
+                <data android:scheme="playmyset"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

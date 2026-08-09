@@ -1,9 +1,9 @@
 // deep_links.dart
-// GAP-16 — handles rallyx://league/<id> and rallyx://join/<code> links, both
-// the cold-start initial link and the warm stream while the app is already
-// running. Custom scheme only (see the AndroidManifest.xml/Info.plist
-// comments for why, not a universal/app link) — works from WhatsApp/SMS,
-// not from a plain web browser.
+// GAP-16 — handles playmyset://league/<id> and playmyset://join/<code>
+// links, both the cold-start initial link and the warm stream while the app
+// is already running. Custom scheme only (see the AndroidManifest.xml/
+// Info.plist comments for why, not a universal/app link) — works from
+// WhatsApp/SMS, not from a plain web browser.
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -33,7 +33,7 @@ class DeepLinkService {
   }
 
   static Future<void> _handleUri(Uri uri) async {
-    if (uri.scheme != 'rallyx') return;
+    if (uri.scheme != 'playmyset') return;
 
     final prefs = await SharedPreferences.getInstance();
     final loggedIn = prefs.getString('authToken') != null;
@@ -57,8 +57,8 @@ class DeepLinkService {
     final navigator = navigatorKey.currentState;
     if (navigator == null) return;
 
-    // rallyx://league/<id> -> host='league', pathSegments=['<id>']
-    // rallyx://join/<code> -> host='join', pathSegments=['<code>']
+    // playmyset://league/<id> -> host='league', pathSegments=['<id>']
+    // playmyset://join/<code> -> host='join', pathSegments=['<code>']
     if (uri.host == 'league' && uri.pathSegments.isNotEmpty) {
       final leagueId = int.tryParse(uri.pathSegments.first);
       if (leagueId == null) return;
