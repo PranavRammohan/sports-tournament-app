@@ -8,6 +8,12 @@ mobile/.dart_tool/
 mobile/.idea/
 mobile/*.iml
 
+# Android release signing — a keystore + its passwords must never be
+# committed. See mobile/android/app/build.gradle.kts for how this is read.
+mobile/android/key.properties
+mobile/android/*.jks
+mobile/android/*.keystore
+
 # General
 .DS_Store
 *.log
