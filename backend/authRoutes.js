@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const pool = require('./db');
 const authMiddleware = require('./authMiddleware');
+const { sendPasswordResetEmail } = require('./email');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const SALT_ROUNDS = 10;
@@ -279,10 +280,74 @@ router.patch('/change-password', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/forgot-password', async (req, res) => {
-  const { email, phoneNumber, newPassword } = req.body;
+// ---------- FORGOT PASSWORD — STEP 1: REQUEST A CODE ----------
+// Replaces the old "email/username + phone number" self-service reset (see
+// migration_password_reset_tokens.sql for why: neither value is actually
+// secret in this app — usernames are shown app-wide and phone numbers are
+// deliberately shown to scheduled opponents by privacy.js — so that flow let
+// any past opponent take over an account). This step only ever confirms an
+// email was *sent*, never whether the account exists, so the response can't
+// be used to enumerate registered emails.
+const RESET_CODE_TTL_MINUTES = 15;
+const RESET_CODE_MAX_ATTEMPTS = 5;
 
-  if (!email || !phoneNumber || !newPassword) {
+function generateResetCode() {
+  // 6-digit numeric code, zero-padded (crypto.randomInt is already used
+  // elsewhere in this file for the account-deletion lock hash's entropy
+  // source, so this stays consistent with that).
+  return crypto.randomInt(0, 1000000).toString().padStart(6, '0');
+}
+
+router.post('/forgot-password', async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: 'Enter your email address.' });
+  }
+
+  const normalizedEmail = normalizeEmail(email);
+  const genericResponse = {
+    message: "If that email is registered, we've sent a reset code to it.",
+  };
+
+  try {
+    const result = await pool.query(
+      'SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL',
+      [normalizedEmail]
+    );
+
+    // Same response whether or not the account exists — see comment above.
+    if (result.rows.length === 0) {
+      return res.status(200).json(genericResponse);
+    }
+
+    const userId = result.rows[0].id;
+    const code = generateResetCode();
+    const codeHash = await bcrypt.hash(code, SALT_ROUNDS);
+    const expiresAt = new Date(Date.now() + RESET_CODE_TTL_MINUTES * 60 * 1000);
+
+    await pool.query(
+      `INSERT INTO password_reset_tokens (user_id, code_hash, expires_at)
+       VALUES ($1, $2, $3)`,
+      [userId, codeHash, expiresAt]
+    );
+
+    await sendPasswordResetEmail(normalizedEmail, code);
+
+    res.status(200).json(genericResponse);
+  } catch (err) {
+    console.error('Forgot password error:', err);
+    // Still generic — a 500 here would itself leak whether the lookup
+    // reached the "account exists" branch versus failing earlier.
+    res.status(200).json(genericResponse);
+  }
+});
+
+// ---------- FORGOT PASSWORD — STEP 2: REDEEM THE CODE ----------
+router.post('/reset-password', async (req, res) => {
+  const { email, code, newPassword } = req.body;
+
+  if (!email || !code || !newPassword) {
     return res.status(400).json({ error: 'All fields are required.' });
   }
   if (newPassword.length < 6) {
@@ -290,28 +355,46 @@ router.post('/forgot-password', async (req, res) => {
   }
 
   try {
-    // Accepts email (new accounts) or username (legacy accounts that never
-    // set an email) in the same field, always paired with the phone number
-    // on file — same email-or-legacy-identifier split as /login.
-    const identifier = email.trim();
-    const result = await pool.query(
-      `SELECT id FROM users
-       WHERE (LOWER(email) = LOWER($1) OR LOWER(username) = LOWER($1))
-         AND phone_number = $2 AND deleted_at IS NULL`,
-      [identifier, phoneNumber]
+    const normalizedEmail = normalizeEmail(email);
+    const userResult = await pool.query(
+      'SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL',
+      [normalizedEmail]
     );
+    if (userResult.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid or expired code.' });
+    }
+    const userId = userResult.rows[0].id;
 
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'Email and mobile number do not match any account.' });
+    // Most recent still-usable token for this user — expired/used/exhausted
+    // ones are excluded outright rather than fetched and checked in JS, so
+    // a stale row from an earlier request never blocks a fresh one.
+    const tokenResult = await pool.query(
+      `SELECT * FROM password_reset_tokens
+       WHERE user_id = $1 AND used_at IS NULL AND expires_at > NOW() AND attempts < $2
+       ORDER BY created_at DESC LIMIT 1`,
+      [userId, RESET_CODE_MAX_ATTEMPTS]
+    );
+    if (tokenResult.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid or expired code. Request a new one.' });
+    }
+    const token = tokenResult.rows[0];
+
+    const codeMatches = await bcrypt.compare(code, token.code_hash);
+    if (!codeMatches) {
+      await pool.query(
+        'UPDATE password_reset_tokens SET attempts = attempts + 1 WHERE id = $1',
+        [token.id]
+      );
+      return res.status(400).json({ error: 'Invalid or expired code.' });
     }
 
-    const userId = result.rows[0].id;
     const newHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
     await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, userId]);
+    await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1', [token.id]);
 
     res.status(200).json({ message: 'Password reset successfully. You can now log in.' });
   } catch (err) {
-    console.error('Forgot password error:', err);
+    console.error('Reset password error:', err);
     res.status(500).json({ error: 'Something went wrong resetting your password.' });
   }
 });
