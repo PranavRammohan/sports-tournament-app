@@ -16,3 +16,12 @@ const String baseApiUrl = String.fromEnvironment(
   'API_URL',
   defaultValue: 'https://sports-tournament-app-87r1.onrender.com/api',
 );
+
+// The same backend also serves a couple of public, non-API HTML pages
+// (privacy policy, account-deletion instructions — see backend/server.js's
+// express.static + backend/public/) for the store listing to link to.
+// Derived from baseApiUrl rather than hardcoded a second time, so it always
+// points at whichever backend baseApiUrl points at (including the
+// --dart-define=API_URL override used for local testing).
+String get privacyPolicyUrl =>
+    '${baseApiUrl.replaceFirst(RegExp(r'/api/?$'), '')}/privacy.html';

@@ -16,6 +16,16 @@ Future<void> launchPhoneCall(String phone) async {
   }
 }
 
+/// Opens [url] in the device's browser. Same silent-no-op-if-unhandleable
+/// posture as [launchPhoneCall] — used for the privacy policy link on
+/// Profile, where a broken link shouldn't crash the screen.
+Future<void> launchWebUrl(String url) async {
+  final uri = Uri.parse(url);
+  if (await canLaunchUrl(uri)) {
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+}
+
 /// Thrown by [pickImageAsDataUri] when the picked photo is too large to send
 /// even after compression — callers should catch this and show a friendly
 /// message instead of letting the upload hit the server's body-size limit

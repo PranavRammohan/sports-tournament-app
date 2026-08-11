@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
+import '../config.dart';
 import '../widgets/sport_icon.dart';
 import '../widgets/player_avatar.dart';
 import '../widgets/loading_skeleton.dart';
@@ -486,6 +487,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       );
                     }),
                   const SizedBox(height: 22),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: cardColor,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: ListTile(
+                      leading: Icon(
+                        Icons.privacy_tip_outlined,
+                        color: subtleTextColor,
+                      ),
+                      title: const Text('Privacy Policy'),
+                      trailing: Icon(Icons.open_in_new, size: 16, color: subtleTextColor),
+                      onTap: () => launchWebUrl(privacyPolicyUrl),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
                   Container(
                     decoration: BoxDecoration(
                       color: cardColor,
