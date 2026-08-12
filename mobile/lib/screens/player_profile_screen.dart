@@ -14,6 +14,7 @@ import '../widgets/loading_skeleton.dart';
 import '../widgets/rating_sparkline.dart';
 import '../widgets/win_rate_bar.dart';
 import '../widgets/recent_form_strip.dart';
+import '../widgets/friendly_challenge_dialog.dart';
 
 class PlayerProfileScreen extends StatefulWidget {
   final int userId;
@@ -32,6 +33,9 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
   int? _currentUserId;
   bool _loading = true;
   String? _error;
+  // Sports both players have a singles rating for — the only ones a
+  // friendly-match challenge (singles-only for now) can offer.
+  List<String> _sharedSports = [];
 
   bool get _isOwnProfile =>
       _currentUserId != null && _currentUserId == widget.userId;
@@ -84,11 +88,72 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
           // Head-to-head is a nice-to-have; don't block the rest of the
           // profile from loading if this call fails.
         }
+
+        try {
+          final mineRes = await ApiClient.get('/sports/mine');
+          if (mineRes.statusCode == 200) {
+            final mySports = (mineRes.data['sports'] as List<dynamic>)
+                .where((s) => s['format'] == 'singles')
+                .map((s) => s['sport'] as String)
+                .toSet();
+            final theirSports = _sports
+                .where((s) => s['format'] == 'singles')
+                .map((s) => s['sport'] as String)
+                .toSet();
+            setState(() {
+              _sharedSports = mySports.intersection(theirSports).toList();
+            });
+          }
+        } catch (err) {
+          // Same as above — the challenge button just won't show.
+        }
       }
     } catch (err) {
       setState(() => _error = 'Could not reach the server.');
     } finally {
       setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _sendChallenge() async {
+    final result = await showFriendlyChallengeDialog(
+      context,
+      opponentName: _user?['username'] ?? 'this player',
+      sportOptions: _sharedSports,
+    );
+    if (result == null || !mounted) return;
+
+    try {
+      final res = await ApiClient.post(
+        '/friendlies/challenge',
+        body: {
+          'opponentId': widget.userId,
+          'sport': result['sport'],
+          'proposedTime': result['proposedTime'],
+          'venue': result['venue'],
+        },
+      );
+      if (!mounted) return;
+      if (res.statusCode == 201) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Challenge sent to ${_user?['username']}!'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not send challenge.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
     }
   }
 
@@ -212,6 +277,14 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
               ],
             ),
           ),
+          if (!_isOwnProfile && _sharedSports.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              onPressed: _sendChallenge,
+              icon: const Icon(Icons.sports_tennis, size: 18),
+              label: const Text('Challenge to a friendly match'),
+            ),
+          ],
           if (!_isOwnProfile) ...[
             const SizedBox(height: 20),
             Text('Head-to-Head', style: Theme.of(context).textTheme.titleLarge),

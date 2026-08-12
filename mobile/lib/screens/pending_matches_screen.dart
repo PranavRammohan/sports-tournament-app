@@ -35,6 +35,14 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
   // confirm/reject request, matching the pattern in add_players_screen.dart.
   final Set<dynamic> _actingIds = {};
 
+  // Friendly-match challenges — a separate table/endpoint from tournament
+  // matches (see backend/friendlyRoutes.js), so fetched and rendered as
+  // their own section rather than merged into _matches.
+  List<dynamic> _friendlyIncoming = [];
+  List<dynamic> _friendlyOutgoing = [];
+  List<dynamic> _friendlyAccepted = [];
+  final Set<dynamic> _friendlyActingIds = {};
+
   @override
   void initState() {
     super.initState();
@@ -64,6 +72,20 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
         setState(
           () => _error = res.errorOr('Could not load pending matches.'),
         );
+      }
+
+      try {
+        final friendlyRes = await ApiClient.get('/friendlies/pending');
+        if (friendlyRes.statusCode == 200) {
+          setState(() {
+            _friendlyIncoming = friendlyRes.data['incoming'];
+            _friendlyOutgoing = friendlyRes.data['outgoing'];
+            _friendlyAccepted = friendlyRes.data['accepted'];
+          });
+        }
+      } catch (err) {
+        // Friendly challenges are a secondary section — don't let a failure
+        // here block the tournament-matches list from loading.
       }
     } catch (err) {
       setState(() => _error = 'Could not reach the server.');
@@ -179,6 +201,135 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     }
   }
 
+  Future<void> _respondFriendly(dynamic challenge, bool accept) async {
+    HapticFeedback.lightImpact();
+    setState(() => _friendlyActingIds.add(challenge['id']));
+    try {
+      final res = await ApiClient.post(
+        '/friendlies/${challenge['id']}/respond',
+        body: {'accept': accept},
+      );
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(accept ? 'Challenge accepted!' : 'Challenge declined.'),
+            backgroundColor: accept ? AppColors.success : AppColors.warning,
+          ),
+        );
+        _loadMatches();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not respond to the challenge.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _friendlyActingIds.remove(challenge['id']));
+    }
+  }
+
+  Future<void> _cancelFriendly(dynamic challenge) async {
+    HapticFeedback.lightImpact();
+    setState(() => _friendlyActingIds.add(challenge['id']));
+    try {
+      final res = await ApiClient.delete('/friendlies/${challenge['id']}');
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Challenge cancelled.'),
+            backgroundColor: AppColors.warning,
+          ),
+        );
+        _loadMatches();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not cancel the challenge.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _friendlyActingIds.remove(challenge['id']));
+    }
+  }
+
+  Future<void> _reportFriendly(dynamic f) async {
+    final isPlayer1 = f['player1_id'] == _currentUserId;
+    final myName = isPlayer1 ? f['player1_username'] : f['player2_username'];
+    final opponentName = isPlayer1 ? f['player2_username'] : f['player1_username'];
+
+    final result = await showDialog<Map<String, int>>(
+      context: context,
+      builder: (ctx) => _FriendlyScoreDialog(
+        myName: myName,
+        opponentName: opponentName,
+      ),
+    );
+    if (result == null) return;
+
+    final myUnits = result['me']!;
+    final opponentUnits = result['opponent']!;
+    final player1Units = isPlayer1 ? myUnits : opponentUnits;
+    final player2Units = isPlayer1 ? opponentUnits : myUnits;
+    final iWon = myUnits > opponentUnits;
+    final winnerId = iWon
+        ? _currentUserId
+        : (isPlayer1 ? f['player2_id'] : f['player1_id']);
+
+    HapticFeedback.lightImpact();
+    setState(() => _friendlyActingIds.add(f['id']));
+    try {
+      final res = await ApiClient.post(
+        '/friendlies/${f['id']}/report',
+        body: {
+          'player1Units': player1Units,
+          'player2Units': player2Units,
+          'setScores': [],
+          'winnerId': winnerId,
+        },
+      );
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Result recorded!'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadMatches();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not record the result.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _friendlyActingIds.remove(f['id']));
+    }
+  }
+
   String _formatSport(String sport) => sport
       .split('_')
       .map((w) => w[0].toUpperCase() + w.substring(1))
@@ -240,6 +391,113 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     return contacts;
   }
 
+  Widget _buildFriendlySection(
+    Color cardColor,
+    bool isDark,
+    Color primaryTextColor,
+    Color subtleTextColor,
+  ) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.accent.withValues(alpha: 0.4)),
+        boxShadow: AppShadows.card(isDark),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.sports_tennis, size: 18, color: AppColors.accent),
+              const SizedBox(width: 6),
+              Text(
+                'Friendly Matches',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: primaryTextColor,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ..._friendlyIncoming.map((c) {
+            final isActing = _friendlyActingIds.contains(c['id']);
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${c['player1_username']} challenged you · ${_formatSport(c['sport'])}',
+                      style: TextStyle(fontSize: 13, color: primaryTextColor),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.check_circle, color: AppColors.success),
+                    tooltip: 'Accept',
+                    onPressed: isActing ? null : () => _respondFriendly(c, true),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.cancel, color: AppColors.danger),
+                    tooltip: 'Decline',
+                    onPressed: isActing ? null : () => _respondFriendly(c, false),
+                  ),
+                ],
+              ),
+            );
+          }),
+          ..._friendlyOutgoing.map((c) {
+            final isActing = _friendlyActingIds.contains(c['id']);
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Waiting on ${c['player2_username']} · ${_formatSport(c['sport'])}',
+                      style: TextStyle(fontSize: 13, color: subtleTextColor),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: isActing ? null : () => _cancelFriendly(c),
+                    child: const Text('Cancel'),
+                  ),
+                ],
+              ),
+            );
+          }),
+          ..._friendlyAccepted.map((f) {
+            final isActing = _friendlyActingIds.contains(f['id']);
+            final isPlayer1 = f['player1_id'] == _currentUserId;
+            final opponentName =
+                isPlayer1 ? f['player2_username'] : f['player1_username'];
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'vs $opponentName · ${_formatSport(f['sport'])} — accepted',
+                      style: TextStyle(fontSize: 13, color: primaryTextColor),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: isActing ? null : () => _reportFriendly(f),
+                    child: const Text('Report Score'),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -270,7 +528,19 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                 ),
               ),
             )
-          : RefreshIndicator(
+          : Column(
+              children: [
+                if (_friendlyIncoming.isNotEmpty ||
+                    _friendlyOutgoing.isNotEmpty ||
+                    _friendlyAccepted.isNotEmpty)
+                  _buildFriendlySection(
+                    cardColor,
+                    isDark,
+                    primaryTextColor,
+                    subtleTextColor,
+                  ),
+                Expanded(
+                  child: RefreshIndicator(
               onRefresh: _loadMatches,
               child: _matches.isEmpty
                   ? ListView(
@@ -503,7 +773,106 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                         );
                       },
                     ),
+                  ),
+                ),
+              ],
             ),
+    );
+  }
+}
+
+// Simple score entry for a friendly match — a single units total per side
+// rather than the full multi-set breakdown host-reported tournament matches
+// use, since a friendly is casual and the units are only ever shown back to
+// the two players themselves. Winner is derived from whichever side scored
+// higher (the backend's winnerUnitsAreConsistent check rejects a mismatch).
+class _FriendlyScoreDialog extends StatefulWidget {
+  final String myName;
+  final String opponentName;
+
+  const _FriendlyScoreDialog({
+    required this.myName,
+    required this.opponentName,
+  });
+
+  @override
+  State<_FriendlyScoreDialog> createState() => _FriendlyScoreDialogState();
+}
+
+class _FriendlyScoreDialogState extends State<_FriendlyScoreDialog> {
+  final TextEditingController _myController = TextEditingController();
+  final TextEditingController _opponentController = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _myController.dispose();
+    _opponentController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      title: const Text('Report Friendly Result'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Text(
+                _error!,
+                style: const TextStyle(color: AppColors.danger, fontSize: 13),
+              ),
+            ),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _myController,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(labelText: widget.myName),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 6),
+                child: Text('-'),
+              ),
+              Expanded(
+                child: TextField(
+                  controller: _opponentController,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(labelText: widget.opponentName),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            final my = int.tryParse(_myController.text.trim());
+            final opponent = int.tryParse(_opponentController.text.trim());
+            if (my == null || opponent == null) {
+              setState(() => _error = 'Please fill in both scores.');
+              return;
+            }
+            if (my == opponent) {
+              setState(() => _error = 'The match needs a winner.');
+              return;
+            }
+            Navigator.pop(context, {'me': my, 'opponent': opponent});
+          },
+          child: const Text('Submit'),
+        ),
+      ],
     );
   }
 }

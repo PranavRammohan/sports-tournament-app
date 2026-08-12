@@ -13,6 +13,7 @@ import '../date_utils.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
 import 'league_detail_screen.dart';
+import 'pending_matches_screen.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -92,6 +93,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         MaterialPageRoute(
           builder: (_) => LeagueDetailScreen(leagueId: n['league_id']),
         ),
+      );
+    } else if (n['type'] == 'friendly_challenge' || n['type'] == 'friendly_response') {
+      // Friendly challenges have no league to link back to — the Pending
+      // tab is where accepting/declining/reporting them actually happens.
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const PendingMatchesScreen()),
       );
     }
   }

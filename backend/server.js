@@ -8,6 +8,7 @@ const leagueRoutes = require('./leagueRoutes');
 const matchRoutes = require('./matchRoutes');
 const playoffRoutes = require('./playoffRoutes');
 const notificationRoutes = require('./notificationRoutes');
+const friendlyRoutes = require('./friendlyRoutes');
 const authMiddleware = require('./authMiddleware');
 
 const app = express();
@@ -43,5 +44,6 @@ app.use('/api/leagues', authMiddleware, leagueRoutes);
 app.use('/api/matches', authMiddleware, matchRoutes);
 app.use('/api/playoffs', authMiddleware, playoffRoutes);
 app.use('/api/notifications', authMiddleware, notificationRoutes);
+app.use('/api/friendlies', authMiddleware, friendlyRoutes);
 
 app.listen(3000, () => console.log('Server running on port 3000'));
