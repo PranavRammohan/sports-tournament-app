@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import '../api_client.dart';
 import '../constants/areas.dart';
+import '../constants/cities.dart';
 import '../main.dart';
 import '../validators.dart';
 
@@ -26,6 +27,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _academyNameController = TextEditingController();
   String? _selectedSport;
+  String? _selectedCity;
   String? _selectedArea;
   String? _selectedFormat;
   String? _selectedGenderCategory;
@@ -155,6 +157,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
     final name = _nameController.text.trim();
 
     if (_selectedSport == null ||
+        _selectedCity == null ||
         _selectedArea == null ||
         _selectedFormat == null ||
         _selectedGenderCategory == null ||
@@ -264,6 +267,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
         body: {
           'name': name,
           'sport': _selectedSport!.toLowerCase().replaceAll(' ', '_'),
+          'city': _selectedCity,
           'area': _selectedArea,
           'seasonStart': _startDate!.toIso8601String().split('T')[0],
           'seasonEnd': _endDate!.toIso8601String().split('T')[0],
@@ -485,13 +489,28 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
             ),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
+              initialValue: _selectedCity,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'City'),
+              items: indianCities
+                  .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                  .toList(),
+              onChanged: (v) => setState(() {
+                _selectedCity = v;
+                _selectedArea = null;
+              }),
+            ),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
               initialValue: _selectedArea,
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Area'),
-              items: bangaloreAreas
+              items: (areasByCity[_selectedCity] ?? [])
                   .map((a) => DropdownMenuItem(value: a, child: Text(a)))
                   .toList(),
-              onChanged: (v) => setState(() => _selectedArea = v),
+              onChanged: _selectedCity == null
+                  ? null
+                  : (v) => setState(() => _selectedArea = v),
             ),
             const SizedBox(height: 16),
             ListTile(

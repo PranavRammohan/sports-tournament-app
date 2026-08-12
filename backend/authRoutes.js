@@ -38,6 +38,7 @@ router.post('/signup', async (req, res) => {
     phoneNumber,
     password,
     confirmPassword,
+    city,
     area,
     gender,
     profilePicUrl,
@@ -50,6 +51,7 @@ router.post('/signup', async (req, res) => {
     !phoneNumber ||
     !password ||
     !confirmPassword ||
+    !city ||
     !area ||
     !gender
   ) {
@@ -93,9 +95,9 @@ router.post('/signup', async (req, res) => {
 
     const result = await pool.query(
       `INSERT INTO users
-         (username, first_name, last_name, email, phone_number, password_hash, location, gender, profile_pic_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, username, first_name, last_name, email, phone_number, location, gender, profile_pic_url, created_at`,
+         (username, first_name, last_name, email, phone_number, password_hash, location, city, gender, profile_pic_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, username, first_name, last_name, email, phone_number, location, city, gender, profile_pic_url, created_at`,
       [
         username,
         firstName.trim(),
@@ -104,6 +106,7 @@ router.post('/signup', async (req, res) => {
         phoneNumber,
         passwordHash,
         area,
+        city,
         gender,
         profilePicUrl || null,
       ]
@@ -170,9 +173,9 @@ router.post('/login', async (req, res) => {
 
 router.patch('/profile', authMiddleware, async (req, res) => {
   const userId = req.userId;
-  const { firstName, lastName, email, phoneNumber, area, gender } = req.body;
+  const { firstName, lastName, email, phoneNumber, city, area, gender } = req.body;
 
-  if (!firstName || !lastName || !email || !phoneNumber || !area || !gender) {
+  if (!firstName || !lastName || !email || !phoneNumber || !city || !area || !gender) {
     return res.status(400).json({ error: 'All fields are required.' });
   }
   const normalizedEmail = normalizeEmail(email);
@@ -210,13 +213,13 @@ router.patch('/profile', authMiddleware, async (req, res) => {
     const result = await pool.query(
       updatingPhoto
         ? `UPDATE users SET username = $1, first_name = $2, last_name = $3, email = $4,
-             phone_number = $5, location = $6, gender = $7, profile_pic_url = $8
-           WHERE id = $9
-           RETURNING id, username, first_name, last_name, email, phone_number, location, gender, profile_pic_url`
+             phone_number = $5, location = $6, city = $7, gender = $8, profile_pic_url = $9
+           WHERE id = $10
+           RETURNING id, username, first_name, last_name, email, phone_number, location, city, gender, profile_pic_url`
         : `UPDATE users SET username = $1, first_name = $2, last_name = $3, email = $4,
-             phone_number = $5, location = $6, gender = $7
-           WHERE id = $8
-           RETURNING id, username, first_name, last_name, email, phone_number, location, gender, profile_pic_url`,
+             phone_number = $5, location = $6, city = $7, gender = $8
+           WHERE id = $9
+           RETURNING id, username, first_name, last_name, email, phone_number, location, city, gender, profile_pic_url`,
       updatingPhoto
         ? [
             username,
@@ -225,6 +228,7 @@ router.patch('/profile', authMiddleware, async (req, res) => {
             normalizedEmail,
             phoneNumber,
             area,
+            city,
             gender,
             profilePicUrl || null,
             userId,
@@ -236,6 +240,7 @@ router.patch('/profile', authMiddleware, async (req, res) => {
             normalizedEmail,
             phoneNumber,
             area,
+            city,
             gender,
             userId,
           ]
@@ -445,7 +450,7 @@ router.delete('/account', authMiddleware, async (req, res) => {
       await client.query(
         `UPDATE users
          SET username = 'Deleted user', first_name = NULL, last_name = NULL, email = NULL,
-             profile_pic_url = NULL, location = NULL, phone_number = $1,
+             profile_pic_url = NULL, location = NULL, city = NULL, phone_number = $1,
              password_hash = $2, deleted_at = now()
          WHERE id = $3`,
         [`DELETED${userId}`, lockHash, userId]

@@ -171,13 +171,13 @@ function resolveGroupPointsOverride(body) {
 router.post('/create', async (req, res) => {
   const userId = req.userId;
   const {
-    name, sport, area, seasonStart, seasonEnd, format, genderCategory,
+    name, sport, city, area, seasonStart, seasonEnd, format, genderCategory,
     scheduleType, matchesPerPlayer, hostEntersScores, hostPlays, isPrivate, academyName,
     minRating, maxRating, registrationStart, registrationEnd, partnerMode,
     pointsEnabled, pointsWin, pointsLoss, maxPlayers,
   } = req.body;
 
-  if (!name || !sport || !area || !seasonStart || !seasonEnd || !format || !genderCategory) {
+  if (!name || !sport || !city || !area || !seasonStart || !seasonEnd || !format || !genderCategory) {
     return res.status(400).json({ error: 'All fields are required.' });
   }
   if (!['singles', 'doubles'].includes(format)) {
@@ -250,17 +250,17 @@ router.post('/create', async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO leagues (name, sport, area, season_start, season_end, created_by, format, gender_category,
+      `INSERT INTO leagues (name, sport, area, city, season_start, season_end, created_by, format, gender_category,
                             schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
                             min_rating, max_rating, registration_start, registration_end, partner_mode,
                             points_enabled, points_win, points_loss, max_players)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
-       RETURNING id, name, sport, area, season_start, season_end, format, gender_category, created_by,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+       RETURNING id, name, sport, area, city, season_start, season_end, format, gender_category, created_by,
                  schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
                  min_rating, max_rating, registration_start, registration_end, partner_mode,
                  points_enabled, points_win, points_loss, max_players`,
       [
-        name, sport, area, seasonStart, seasonEnd, userId, format, genderCategory,
+        name, sport, area, city, seasonStart, seasonEnd, userId, format, genderCategory,
         finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null,
         hostEntersScores === true, isPrivate === true, joinCode,
         academyName && academyName.trim().length > 0 ? academyName.trim() : null,
@@ -304,17 +304,19 @@ const BROWSE_MAX_LIMIT = 50;
 // ---------- BROWSE LEAGUES (public only) ----------
 router.get('/', async (req, res) => {
   const userId = req.userId;
-  const { area, format, sport, q, sort, limit, offset } = req.query;
+  const { city, area, format, sport, q, sort, limit, offset } = req.query;
 
   try {
-    const userResult = await pool.query('SELECT gender FROM users WHERE id = $1', [userId]);
+    const userResult = await pool.query('SELECT gender, city, location FROM users WHERE id = $1', [userId]);
     if (userResult.rows.length === 0) {
       return res.status(404).json({ error: 'User not found.' });
     }
     const userGenderCategory = userResult.rows[0].gender === 'M' ? 'mens' : 'womens';
+    const userCity = userResult.rows[0].city;
+    const userArea = userResult.rows[0].location;
 
     let query = `
-      SELECT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
+      SELECT l.id, l.name, l.sport, l.area, l.city, l.season_start, l.season_end, l.format, l.gender_category,
              l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.academy_name,
              l.min_rating, l.max_rating, l.registration_start, l.registration_end, l.partner_mode, l.status,
              l.max_players,
@@ -334,6 +336,19 @@ router.get('/', async (req, res) => {
     `;
     const params = [userId, userGenderCategory];
 
+    if (city) {
+      // Same comma-list-or-single-value shape as area below, so the Browse
+      // screen's city filter (pre-seeded from the user's own city) can be
+      // narrowed or cleared the same way the area filter already works.
+      const cityList = String(city)
+        .split(',')
+        .map((c) => c.trim())
+        .filter(Boolean);
+      if (cityList.length > 0) {
+        params.push(cityList);
+        query += ` AND l.city = ANY($${params.length}::text[])`;
+      }
+    }
     if (area) {
       // Accepts either a single area or a comma-separated list, so the
       // Browse Tournaments screen can filter by multiple areas at once.
@@ -359,7 +374,22 @@ router.get('/', async (req, res) => {
       query += ` AND l.name ILIKE $${params.length}`;
     }
 
-    const orderBy = BROWSE_SORT_OPTIONS[sort] || BROWSE_SORT_OPTIONS.starting;
+    // "nearby" (the default the mobile app requests, labeled "Recommended"
+    // there) isn't a fixed ORDER BY fragment like the others in
+    // BROWSE_SORT_OPTIONS, because it needs to reference *this* requester's
+    // own area/city as bound params — same area ranks first, the rest of
+    // their city next, everything else after, by soonest-starting. This is
+    // a ranking, not a filter, so nothing is hidden even with no city/area
+    // filter applied above.
+    let orderBy;
+    if (sort === 'nearby' || !sort) {
+      params.push(userArea, userCity);
+      const areaParamIdx = params.length - 1;
+      const cityParamIdx = params.length;
+      orderBy = `(l.area = $${areaParamIdx}) DESC, (l.city = $${cityParamIdx}) DESC, l.season_start ASC`;
+    } else {
+      orderBy = BROWSE_SORT_OPTIONS[sort] || BROWSE_SORT_OPTIONS.starting;
+    }
     query += ` GROUP BY l.id ORDER BY ${orderBy}`;
 
     const parsedLimit = Math.min(parseInt(limit, 10) || BROWSE_MAX_LIMIT, BROWSE_MAX_LIMIT);
@@ -383,7 +413,7 @@ router.get('/mine', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT DISTINCT l.id, l.name, l.sport, l.area, l.season_start, l.season_end, l.format, l.gender_category,
+      `SELECT DISTINCT l.id, l.name, l.sport, l.area, l.city, l.season_start, l.season_end, l.format, l.gender_category,
               l.schedule_type, l.matches_per_player, l.host_enters_scores, l.is_private, l.join_code, l.academy_name,
               l.min_rating, l.max_rating, l.registration_start, l.registration_end, l.partner_mode, l.status,
               l.max_players,
@@ -4310,7 +4340,7 @@ router.put('/:id', async (req, res) => {
   const userId = req.userId;
   const leagueId = req.params.id;
   const {
-    name, area, seasonStart, seasonEnd, academyName, isPrivate, hostEntersScores,
+    name, city, area, seasonStart, seasonEnd, academyName, isPrivate, hostEntersScores,
     registrationStart, registrationEnd, partnerMode,
     pointsEnabled, pointsWin, pointsLoss, maxPlayers, minRating, maxRating,
   } = req.body;
@@ -4331,6 +4361,7 @@ router.put('/:id', async (req, res) => {
     let idx = 1;
 
     if (name !== undefined) { updates.push(`name = $${idx++}`); params.push(name); }
+    if (city !== undefined) { updates.push(`city = $${idx++}`); params.push(city); }
     if (area !== undefined) { updates.push(`area = $${idx++}`); params.push(area); }
     if (seasonStart !== undefined) { updates.push(`season_start = $${idx++}`); params.push(seasonStart); }
     if (seasonEnd !== undefined) { updates.push(`season_end = $${idx++}`); params.push(seasonEnd); }
@@ -4511,14 +4542,14 @@ router.post('/:id/clone', async (req, res) => {
       }
 
       const insertResult = await client.query(
-        `INSERT INTO leagues (name, sport, area, season_start, season_end, created_by, format, gender_category,
+        `INSERT INTO leagues (name, sport, area, city, season_start, season_end, created_by, format, gender_category,
                               schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
                               min_rating, max_rating, registration_start, registration_end, partner_mode,
                               points_enabled, points_win, points_loss, max_players)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULL, NULL, $17, $18, $19, $20, $21)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULL, NULL, $18, $19, $20, $21, $22)
          RETURNING *`,
         [
-          name, league.sport, league.area, seasonStart, seasonEnd, userId, league.format, league.gender_category,
+          name, league.sport, league.area, league.city, seasonStart, seasonEnd, userId, league.format, league.gender_category,
           league.schedule_type, league.matches_per_player, league.host_enters_scores, league.is_private, joinCode,
           league.academy_name, league.min_rating, league.max_rating, league.partner_mode,
           league.points_enabled, league.points_win, league.points_loss, league.max_players,

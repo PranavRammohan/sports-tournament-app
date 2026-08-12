@@ -7,6 +7,7 @@ import '../main.dart';
 import '../api_client.dart';
 import '../utils.dart';
 import '../constants/areas.dart';
+import '../constants/cities.dart';
 import '../validators.dart';
 
 class SignupScreen extends StatefulWidget {
@@ -25,6 +26,7 @@ class _SignupScreenState extends State<SignupScreen> {
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmPasswordController =
       TextEditingController();
+  String? _selectedCity;
   String? _selectedArea;
   String? _selectedGender;
   bool _loading = false;
@@ -60,8 +62,12 @@ class _SignupScreenState extends State<SignupScreen> {
     final password = _passwordController.text;
     final confirmPassword = _confirmPasswordController.text;
 
+    if (_selectedCity == null) {
+      _showAlert('Missing city', 'Please select your city.');
+      return;
+    }
     if (_selectedArea == null) {
-      _showAlert('Missing area', 'Please select your area in Bangalore.');
+      _showAlert('Missing area', 'Please select your area.');
       return;
     }
     if (_selectedGender == null) {
@@ -81,6 +87,7 @@ class _SignupScreenState extends State<SignupScreen> {
           'phoneNumber': phoneNumber,
           'password': password,
           'confirmPassword': confirmPassword,
+          'city': _selectedCity,
           'area': _selectedArea,
           'gender': _selectedGender,
           'profilePicUrl': _profileImageBase64,
@@ -323,6 +330,29 @@ class _SignupScreenState extends State<SignupScreen> {
               ),
               const SizedBox(height: 18),
               DropdownButtonFormField<String>(
+                initialValue: _selectedCity,
+                decoration: const InputDecoration(
+                  labelText: 'City',
+                  prefixIcon: Icon(Icons.location_city_outlined),
+                ),
+                isExpanded: true,
+                hint: const Text('Select your city'),
+                items: indianCities
+                    .map(
+                      (city) =>
+                          DropdownMenuItem(value: city, child: Text(city)),
+                    )
+                    .toList(),
+                onChanged: (value) => setState(() {
+                  _selectedCity = value;
+                  // The area list is scoped to the chosen city — a
+                  // previously picked area from a different city wouldn't
+                  // be a valid option once the city changes.
+                  _selectedArea = null;
+                }),
+              ),
+              const SizedBox(height: 18),
+              DropdownButtonFormField<String>(
                 initialValue: _selectedArea,
                 decoration: const InputDecoration(
                   labelText: 'Area',
@@ -330,13 +360,15 @@ class _SignupScreenState extends State<SignupScreen> {
                 ),
                 isExpanded: true,
                 hint: const Text('Select your area'),
-                items: bangaloreAreas
+                items: (areasByCity[_selectedCity] ?? [])
                     .map(
                       (area) =>
                           DropdownMenuItem(value: area, child: Text(area)),
                     )
                     .toList(),
-                onChanged: (value) => setState(() => _selectedArea = value),
+                onChanged: _selectedCity == null
+                    ? null
+                    : (value) => setState(() => _selectedArea = value),
               ),
               const SizedBox(height: 24),
               ElevatedButton(

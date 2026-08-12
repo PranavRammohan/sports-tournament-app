@@ -9,6 +9,7 @@ import '../utils.dart';
 import '../validators.dart';
 import 'change_password_screen.dart';
 import '../constants/areas.dart';
+import '../constants/cities.dart';
 
 class EditProfileScreen extends StatefulWidget {
   final Map<String, dynamic> currentUser;
@@ -25,6 +26,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   late final TextEditingController _lastNameController;
   late final TextEditingController _emailController;
   late final TextEditingController _phoneController;
+  String? _selectedCity;
   String? _selectedArea;
   String? _selectedGender;
   bool _loading = false;
@@ -48,6 +50,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _phoneController = TextEditingController(
       text: widget.currentUser['phoneNumber'] ?? '',
     );
+    _selectedCity = widget.currentUser['city'];
     _selectedArea = widget.currentUser['location'];
     _selectedGender = widget.currentUser['gender'];
   }
@@ -83,7 +86,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   Future<void> _handleSave() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_selectedArea == null || _selectedGender == null) {
+    if (_selectedCity == null || _selectedArea == null || _selectedGender == null) {
       _showAlert('Missing fields', 'Please fill in all fields.');
       return;
     }
@@ -102,6 +105,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         'lastName': lastName,
         'email': email,
         'phoneNumber': phoneNumber,
+        'city': _selectedCity,
         'area': _selectedArea,
         'gender': _selectedGender,
       };
@@ -313,18 +317,38 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             ),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
+              initialValue: _selectedCity,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'City',
+                prefixIcon: Icon(Icons.location_city_outlined),
+              ),
+              items: indianCities
+                  .map(
+                    (city) => DropdownMenuItem(value: city, child: Text(city)),
+                  )
+                  .toList(),
+              onChanged: (value) => setState(() {
+                _selectedCity = value;
+                _selectedArea = null;
+              }),
+            ),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
               initialValue: _selectedArea,
               isExpanded: true,
               decoration: const InputDecoration(
                 labelText: 'Area',
                 prefixIcon: Icon(Icons.map_outlined),
               ),
-              items: bangaloreAreas
+              items: (areasByCity[_selectedCity] ?? [])
                   .map(
                     (area) => DropdownMenuItem(value: area, child: Text(area)),
                   )
                   .toList(),
-              onChanged: (value) => setState(() => _selectedArea = value),
+              onChanged: _selectedCity == null
+                  ? null
+                  : (value) => setState(() => _selectedArea = value),
             ),
             const SizedBox(height: 20),
             const Divider(),

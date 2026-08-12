@@ -1,7 +1,9 @@
 // browse_leagues_screen.dart
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
 import '../utils.dart';
@@ -10,6 +12,7 @@ import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
 import '../widgets/fade_in_list_item.dart';
 import '../constants/areas.dart';
+import '../constants/cities.dart';
 import 'create_league_screen.dart';
 import 'league_detail_screen.dart';
 
@@ -23,6 +26,7 @@ const List<String> _browseSports = [
 const int _browsePageSize = 20;
 
 const Map<String, String> _browseSortLabels = {
+  'nearby': 'Recommended',
   'starting': 'Starting soonest',
   'newest': 'Newest',
   'players': 'Most players',
@@ -44,8 +48,9 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
 
   String? _filterFormat;
   String? _filterSport;
+  String? _filterCity;
   List<String> _filterAreas = [];
-  String _sort = 'starting';
+  String _sort = 'nearby';
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
   Timer? _searchDebounce;
@@ -59,6 +64,20 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
   @override
   void initState() {
     super.initState();
+    _init();
+  }
+
+  // Pre-seeds the city filter from the logged-in user's own city before the
+  // first load, so Browse defaults to "tournaments near me" instead of
+  // every tournament everywhere — the whole point of the "nearby" sort is
+  // undercut if the first screenful is still every city mixed together.
+  Future<void> _init() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userJson = prefs.getString('user');
+    if (userJson != null) {
+      final user = jsonDecode(userJson);
+      _filterCity = user['city'];
+    }
     _loadLeagues();
   }
 
@@ -77,6 +96,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
     };
     if (_filterFormat != null) queryParams['format'] = _filterFormat!;
     if (_filterSport != null) queryParams['sport'] = _filterSport!;
+    if (_filterCity != null) queryParams['city'] = _filterCity!;
     if (_filterAreas.isNotEmpty) {
       queryParams['area'] = _filterAreas.join(',');
     }
@@ -142,6 +162,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
   }
 
   Future<void> _pickAreas() async {
+    final areaOptions = areasByCity[_filterCity] ?? bangaloreAreas;
     final result = await showDialog<List<String>>(
       context: context,
       builder: (ctx) {
@@ -157,7 +178,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                 width: double.maxFinite,
                 height: 420,
                 child: ListView(
-                  children: bangaloreAreas.map((area) {
+                  children: areaOptions.map((area) {
                     return CheckboxListTile(
                       value: temp.contains(area),
                       dense: true,
@@ -369,12 +390,37 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                       )
                       .toList(),
                   onChanged: (v) {
-                    setState(() => _sort = v ?? 'starting');
+                    setState(() => _sort = v ?? 'nearby');
                     _loadLeagues();
                   },
                 ),
               ),
             ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+          child: DropdownButtonFormField<String>(
+            initialValue: _filterCity,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'City',
+              isDense: true,
+            ),
+            items: [
+              const DropdownMenuItem(value: null, child: Text('Any')),
+              ...indianCities.map(
+                (c) => DropdownMenuItem(value: c, child: Text(c)),
+              ),
+            ],
+            onChanged: (v) {
+              setState(() {
+                _filterCity = v;
+                // Areas picked under a different city no longer apply.
+                _filterAreas = [];
+              });
+              _loadLeagues();
+            },
           ),
         ),
         Padding(
@@ -572,7 +618,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                                                   ),
                                                   const SizedBox(height: 1),
                                                   Text(
-                                                    '${_formatSport(league['sport'])} · ${league['area']}',
+                                                    '${_formatSport(league['sport'])} · ${league['area']}, ${league['city']}',
                                                     style: TextStyle(
                                                       fontSize: 11,
                                                       color: subtleTextColor,

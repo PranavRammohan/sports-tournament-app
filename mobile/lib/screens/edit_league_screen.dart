@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 import '../main.dart';
 import '../config.dart';
 import '../constants/areas.dart';
+import '../constants/cities.dart';
 import '../validators.dart';
 import 'regenerate_schedule_dialog.dart';
 
@@ -29,6 +30,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
   final _formKey = GlobalKey<FormState>();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _academyController = TextEditingController();
+  String? _selectedCity;
   String? _selectedArea;
   DateTime? _seasonStart;
   DateTime? _seasonEnd;
@@ -68,6 +70,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
     final l = widget.league;
     _nameController.text = l['name'] ?? '';
     _academyController.text = l['academy_name'] ?? '';
+    _selectedCity = l['city'];
     _selectedArea = l['area'];
     _seasonStart = DateTime.tryParse(l['season_start']?.toString() ?? '');
     _seasonEnd = DateTime.tryParse(l['season_end']?.toString() ?? '');
@@ -393,6 +396,10 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
 
   Future<void> _handleSave() async {
     if (!_formKey.currentState!.validate()) return;
+    if (_selectedCity == null) {
+      _showAlert('Missing city', 'Please select a city.');
+      return;
+    }
     if (_selectedArea == null) {
       _showAlert('Missing area', 'Please select an area.');
       return;
@@ -493,6 +500,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
         },
         body: jsonEncode({
           'name': _nameController.text.trim(),
+          'city': _selectedCity,
           'area': _selectedArea,
           'seasonStart': _formatForApi(_seasonStart!),
           'seasonEnd': _formatForApi(_seasonEnd!),
@@ -582,18 +590,38 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
             ),
             const SizedBox(height: 14),
             DropdownButtonFormField<String>(
+              initialValue: _selectedCity,
+              decoration: const InputDecoration(
+                labelText: 'City',
+                prefixIcon: Icon(Icons.location_city_outlined),
+              ),
+              isExpanded: true,
+              items: indianCities
+                  .map(
+                    (city) => DropdownMenuItem(value: city, child: Text(city)),
+                  )
+                  .toList(),
+              onChanged: (value) => setState(() {
+                _selectedCity = value;
+                _selectedArea = null;
+              }),
+            ),
+            const SizedBox(height: 14),
+            DropdownButtonFormField<String>(
               initialValue: _selectedArea,
               decoration: const InputDecoration(
                 labelText: 'Area',
                 prefixIcon: Icon(Icons.map_outlined),
               ),
               isExpanded: true,
-              items: bangaloreAreas
+              items: (areasByCity[_selectedCity] ?? [])
                   .map(
                     (area) => DropdownMenuItem(value: area, child: Text(area)),
                   )
                   .toList(),
-              onChanged: (value) => setState(() => _selectedArea = value),
+              onChanged: _selectedCity == null
+                  ? null
+                  : (value) => setState(() => _selectedArea = value),
             ),
             const SizedBox(height: 14),
             TextField(
