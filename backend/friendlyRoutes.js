@@ -43,7 +43,7 @@ function winnerUnitsAreConsistent(winnerIsPlayer1, player1Units, player2Units) {
 // ---------- FIND PLAYERS WITH A SIMILAR RATING ----------
 router.get('/nearby', async (req, res) => {
   const userId = req.userId;
-  const { sport } = req.query;
+  const { sport, city, area } = req.query;
 
   if (!sport) {
     return res.status(400).json({ error: 'Sport is required.' });
@@ -59,15 +59,32 @@ router.get('/nearby', async (req, res) => {
     }
     const myRating = myRatingResult.rows[0].rating;
 
-    const result = await pool.query(
-      `SELECT u.id, u.username, u.location, u.city, us.rating
-       FROM users u
-       JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = 'singles'
-       WHERE u.id != $2 AND u.deleted_at IS NULL
-       ORDER BY ABS(us.rating - $3) ASC
-       LIMIT 20`,
-      [sport, userId, myRating]
-    );
+    // city/area are optional — letting a traveling player search a
+    // different city than their own home city is the whole point of these
+    // filters, so unlike Browse's default-to-your-own-city seeding, there's
+    // no server-side default here; the mobile client seeds the initial
+    // value and the user is free to change it.
+    let query = `
+      SELECT u.id, u.username, u.location, u.city, us.rating
+      FROM users u
+      JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = 'singles'
+      WHERE u.id != $2 AND u.deleted_at IS NULL
+    `;
+    const params = [sport, userId];
+
+    if (city) {
+      params.push(city);
+      query += ` AND u.city = $${params.length}`;
+    }
+    if (area) {
+      params.push(area);
+      query += ` AND u.location = $${params.length}`;
+    }
+
+    params.push(myRating);
+    query += ` ORDER BY ABS(us.rating - $${params.length}) ASC LIMIT 20`;
+
+    const result = await pool.query(query, params);
 
     res.status(200).json({ players: result.rows, myRating });
   } catch (err) {

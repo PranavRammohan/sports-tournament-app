@@ -7,13 +7,17 @@
 // no shared-league check, so this doesn't expose anything new — it's just a
 // front door to data any authenticated user could already reach by id.
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
 import '../widgets/loading_skeleton.dart';
 import '../widgets/friendly_empty_state.dart';
 import '../widgets/friendly_challenge_dialog.dart';
+import '../constants/cities.dart';
+import '../constants/areas.dart';
 import 'player_profile_screen.dart';
 
 const List<String> _findPlayersSports = [
@@ -44,6 +48,27 @@ class _FindPlayersScreenState extends State<FindPlayersScreen> {
   List<dynamic> _nearbyResults = [];
   bool _nearbyLoading = false;
   String? _nearbyError;
+
+  // City/area filters for "Similar rating" — pre-seeded from the player's
+  // own city (same SharedPreferences read browse_leagues_screen.dart uses)
+  // but freely changeable, since the whole point is finding someone at your
+  // level in a city you're just visiting, not only your home city.
+  String? _nearbyCity;
+  String? _nearbyArea;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMyCity();
+  }
+
+  Future<void> _loadMyCity() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userJson = prefs.getString('user');
+    if (userJson != null && mounted) {
+      setState(() => _nearbyCity = jsonDecode(userJson)['city']);
+    }
+  }
 
   void _onSearchChanged(String query) {
     _debounce?.cancel();
@@ -96,7 +121,11 @@ class _FindPlayersScreenState extends State<FindPlayersScreen> {
     try {
       final res = await ApiClient.get(
         '/friendlies/nearby',
-        queryParams: {'sport': sport},
+        queryParams: {
+          'sport': sport,
+          if (_nearbyCity != null) 'city': _nearbyCity!,
+          if (_nearbyArea != null) 'area': _nearbyArea!,
+        },
       );
       if (res.statusCode == 200) {
         setState(() => _nearbyResults = res.data['players']);
@@ -358,7 +387,59 @@ class _FindPlayersScreenState extends State<FindPlayersScreen> {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  initialValue: _nearbyCity,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'City',
+                    isDense: true,
+                  ),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('Any')),
+                    ...indianCities.map(
+                      (c) => DropdownMenuItem(value: c, child: Text(c)),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    setState(() {
+                      _nearbyCity = v;
+                      // An area picked under a different city no longer applies.
+                      _nearbyArea = null;
+                    });
+                    if (_ratingSport != null) _loadNearby(_ratingSport!);
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  initialValue: _nearbyArea,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Area',
+                    isDense: true,
+                  ),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('Any')),
+                    ...(areasByCity[_nearbyCity] ?? []).map(
+                      (a) => DropdownMenuItem(value: a, child: Text(a)),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    setState(() => _nearbyArea = v);
+                    if (_ratingSport != null) _loadNearby(_ratingSport!);
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
           child: Wrap(
             spacing: 8,
             children: _findPlayersSports.map((sport) {
