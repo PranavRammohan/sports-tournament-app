@@ -27,10 +27,10 @@ const int _browsePageSize = 20;
 
 const Map<String, String> _browseSortLabels = {
   'nearby': 'Recommended',
-  'starting': 'Starting soonest',
-  'newest': 'Newest',
-  'players': 'Most players',
-  'name': 'Name (A-Z)',
+  'starting': 'Starting Soon',
+  'newest': 'Recently Added',
+  'players': 'Most Popular',
+  'name': 'Alphabetical (A–Z)',
 };
 
 class BrowseLeaguesScreen extends StatefulWidget {
@@ -94,7 +94,16 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
       'limit': '$_browsePageSize',
       'offset': '$offset',
     };
-    if (_filterFormat != null) queryParams['format'] = _filterFormat!;
+    // 'Mixed Doubles' is a single dropdown option but two backend filters —
+    // format and gender_category are separate, orthogonal columns (see
+    // leagueRoutes.js's GET /). Plain 'doubles' still means "any doubles
+    // tournament," unfiltered by gender_category, same as before.
+    if (_filterFormat == 'mixed_doubles') {
+      queryParams['format'] = 'doubles';
+      queryParams['genderCategory'] = 'mixed';
+    } else if (_filterFormat != null) {
+      queryParams['format'] = _filterFormat!;
+    }
     if (_filterSport != null) queryParams['sport'] = _filterSport!;
     if (_filterCity != null) queryParams['city'] = _filterCity!;
     if (_filterAreas.isNotEmpty) {
@@ -463,6 +472,10 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
                     DropdownMenuItem(value: null, child: Text('Any')),
                     DropdownMenuItem(value: 'singles', child: Text('Singles')),
                     DropdownMenuItem(value: 'doubles', child: Text('Doubles')),
+                    DropdownMenuItem(
+                      value: 'mixed_doubles',
+                      child: Text('Mixed Doubles'),
+                    ),
                   ],
                   onChanged: (v) {
                     setState(() => _filterFormat = v);

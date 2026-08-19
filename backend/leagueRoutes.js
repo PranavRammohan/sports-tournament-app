@@ -304,7 +304,7 @@ const BROWSE_MAX_LIMIT = 50;
 // ---------- BROWSE LEAGUES (public only) ----------
 router.get('/', async (req, res) => {
   const userId = req.userId;
-  const { city, area, format, sport, q, sort, limit, offset } = req.query;
+  const { city, area, format, sport, genderCategory, q, sort, limit, offset } = req.query;
 
   try {
     const userResult = await pool.query('SELECT gender, city, location FROM users WHERE id = $1', [userId]);
@@ -330,11 +330,21 @@ router.get('/', async (req, res) => {
         SELECT 1 FROM user_sports us
         WHERE us.user_id = $1 AND us.sport = l.sport
       )
-      AND (l.gender_category = $2 OR l.gender_category = 'mixed')
       AND l.is_private = false
       AND l.status = 'active'
     `;
-    const params = [userId, userGenderCategory];
+    const params = [userId];
+
+    if (['mens', 'womens', 'mixed'].includes(genderCategory)) {
+      // An explicit category (e.g. the mobile "Mixed Doubles" filter,
+      // format=doubles + genderCategory=mixed together) means exactly that
+      // category, not the usual own-gender-or-mixed inference below.
+      params.push(genderCategory);
+      query += ` AND l.gender_category = $${params.length}`;
+    } else {
+      params.push(userGenderCategory);
+      query += ` AND (l.gender_category = $${params.length} OR l.gender_category = 'mixed')`;
+    }
 
     if (city) {
       // Same comma-list-or-single-value shape as area below, so the Browse
