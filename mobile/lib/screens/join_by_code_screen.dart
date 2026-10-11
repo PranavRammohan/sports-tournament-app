@@ -46,12 +46,12 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
         body: {'code': code},
       );
 
+      if (!mounted) return;
       if (res.statusCode != 201) {
         _showAlert('Could not join', res.errorOr('Please try again.'));
         return;
       }
 
-      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
@@ -59,7 +59,7 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
         ),
       );
     } catch (err) {
-      _showAlert('Network error', 'Could not reach the server.');
+      if (mounted) _showAlert('Network error', 'Could not reach the server.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }

@@ -36,6 +36,7 @@ class _LoginScreenState extends State<LoginScreen> {
         body: {'email': email, 'password': password},
       );
 
+      if (!mounted) return;
       if (res.statusCode != 200) {
         _showAlert('Login failed', res.errorOr('Something went wrong.'));
         return;
@@ -49,10 +50,12 @@ class _LoginScreenState extends State<LoginScreen> {
       Navigator.pushReplacementNamed(context, '/home');
       DeepLinkService.consumePendingIfAny();
     } catch (err) {
-      _showAlert(
-        'Network error',
-        'Could not reach the server. Check your connection.',
-      );
+      if (mounted) {
+        _showAlert(
+          'Network error',
+          'Could not reach the server. Check your connection.',
+        );
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }

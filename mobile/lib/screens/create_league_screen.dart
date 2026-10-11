@@ -301,12 +301,11 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
         },
       );
 
+      if (!mounted) return;
       if (res.statusCode != 201) {
         _showAlert('Something went wrong', res.errorOr('Please try again.'));
         return;
       }
-
-      if (!mounted) return;
 
       final league = res.data['league'];
       if (_isPrivate && league['join_code'] != null) {
@@ -377,7 +376,7 @@ class _CreateLeagueScreenState extends State<CreateLeagueScreen> {
       if (!mounted) return;
       Navigator.pop(context, true);
     } catch (err) {
-      _showAlert('Network error', 'Could not reach the server.');
+      if (mounted) _showAlert('Network error', 'Could not reach the server.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }

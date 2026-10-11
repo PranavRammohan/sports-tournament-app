@@ -148,9 +148,9 @@ class _HomeScreenState extends State<HomeScreen> {
         _recentMatch = historyRes.data['matches'][0];
       }
     } catch (err) {
-      setState(() => _error = 'Could not reach the server.');
+      if (mounted) setState(() => _error = 'Could not reach the server.');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 

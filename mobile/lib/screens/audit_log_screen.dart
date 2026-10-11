@@ -52,15 +52,16 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
     });
     try {
       final res = await ApiClient.get('/leagues/${widget.leagueId}/audit');
+      if (!mounted) return;
       if (res.statusCode == 200) {
         setState(() => _entries = res.data['entries']);
       } else {
         setState(() => _error = res.errorOr('Could not load the activity log.'));
       }
     } catch (err) {
-      setState(() => _error = 'Could not reach the server.');
+      if (mounted) setState(() => _error = 'Could not reach the server.');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 

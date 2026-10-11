@@ -46,6 +46,7 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
       }
 
       final res = await ApiClient.get('/matches/history');
+      if (!mounted) return;
       if (res.statusCode == 200) {
         setState(() => _matches = res.data['matches']);
       } else {
@@ -54,9 +55,9 @@ class _MatchHistoryScreenState extends State<MatchHistoryScreen> {
         );
       }
     } catch (err) {
-      setState(() => _error = 'Could not reach the server.');
+      if (mounted) setState(() => _error = 'Could not reach the server.');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 

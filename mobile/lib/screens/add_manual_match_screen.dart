@@ -73,15 +73,15 @@ class _AddManualMatchScreenState extends State<AddManualMatchScreen> {
         },
       );
 
+      if (!mounted) return;
       if (res.statusCode != 201) {
         _showAlert('Something went wrong', res.errorOr('Please try again.'));
         return;
       }
 
-      if (!mounted) return;
       Navigator.pop(context, true);
     } catch (err) {
-      _showAlert('Network error', 'Could not reach the server.');
+      if (mounted) _showAlert('Network error', 'Could not reach the server.');
     } finally {
       if (mounted) setState(() => _submitting = false);
     }

@@ -138,6 +138,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
         ApiClient.get('/leagues/${widget.leagueId}'),
         ApiClient.get('/leagues/${widget.leagueId}/groups'),
       ]);
+      if (!mounted) return;
       final leagueRes = results[0];
       final groupsRes = results[1];
 
@@ -174,6 +175,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
             (g) => ApiClient.get('/leagues/${widget.leagueId}/groups/${g['id']}/schedule'),
           ),
         );
+        if (!mounted) return;
         final Map<int, List<dynamic>> schedules = {};
         for (var i = 0; i < scheduledGroups.length; i++) {
           final schedRes = schedResults[i];
@@ -194,7 +196,7 @@ class _GroupsOverviewScreenState extends State<GroupsOverviewScreen>
         _tabController = TabController(length: newLength, vsync: this);
       }
     } catch (err) {
-      setState(() => _error = 'Could not reach the server.');
+      if (mounted) setState(() => _error = 'Could not reach the server.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }

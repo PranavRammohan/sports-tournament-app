@@ -94,6 +94,7 @@ class _SignupScreenState extends State<SignupScreen> {
         },
       );
 
+      if (!mounted) return;
       if (res.statusCode != 201) {
         _showAlert('Signup failed', res.errorOr('Something went wrong.'));
         return;
@@ -106,10 +107,12 @@ class _SignupScreenState extends State<SignupScreen> {
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/select-sports');
     } catch (err) {
-      _showAlert(
-        'Network error',
-        'Could not reach the server. Check your connection.',
-      );
+      if (mounted) {
+        _showAlert(
+          'Network error',
+          'Could not reach the server. Check your connection.',
+        );
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }

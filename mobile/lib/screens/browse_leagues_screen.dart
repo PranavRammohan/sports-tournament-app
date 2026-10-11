@@ -126,6 +126,7 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
         queryParams: _buildQueryParams(offset: 0),
       );
 
+      if (!mounted) return;
       if (res.statusCode == 200) {
         final leagues = res.data['leagues'] as List<dynamic>;
         setState(() {
@@ -136,9 +137,9 @@ class _BrowseLeaguesScreenState extends State<BrowseLeaguesScreen> {
         setState(() => _error = res.errorOr('Could not load tournaments.'));
       }
     } catch (err) {
-      setState(() => _error = 'Could not reach the server.');
+      if (mounted) setState(() => _error = 'Could not reach the server.');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 

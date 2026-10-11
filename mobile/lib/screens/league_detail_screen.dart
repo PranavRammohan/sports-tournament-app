@@ -155,12 +155,14 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
     try {
       final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
       final userJson = prefs.getString('user');
       if (userJson != null) {
         _currentUserId = jsonDecode(userJson)['id'];
       }
 
       final leagueRes = await ApiClient.get('/leagues/${widget.leagueId}');
+      if (!mounted) return;
       if (leagueRes.statusCode != 200) {
         setState(
           () => _error = leagueRes.errorOr('Could not load tournament.'),
@@ -175,6 +177,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
 
       if (_isKnockout) {
         final bracketRes = await ApiClient.get('/playoffs/${widget.leagueId}');
+        if (!mounted) return;
         if (bracketRes.statusCode == 200) {
           setState(() => _bracket = bracketRes.data['bracket']);
         }
@@ -182,6 +185,7 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
         final scheduleRes = await ApiClient.get(
           '/leagues/${widget.leagueId}/schedule',
         );
+        if (!mounted) return;
         if (scheduleRes.statusCode == 200) {
           setState(() => _schedule = scheduleRes.data['schedule']);
         }
@@ -190,13 +194,14 @@ class _LeagueDetailScreenState extends State<LeagueDetailScreen> {
       final announcementsRes = await ApiClient.get(
         '/leagues/${widget.leagueId}/announcements',
       );
+      if (!mounted) return;
       if (announcementsRes.statusCode == 200) {
         setState(() => _announcements = announcementsRes.data['announcements']);
       }
     } catch (err) {
-      setState(() => _error = 'Could not reach the server.');
+      if (mounted) setState(() => _error = 'Could not reach the server.');
     } finally {
-      if (showFullLoading) {
+      if (showFullLoading && mounted) {
         setState(() => _loading = false);
       }
     }

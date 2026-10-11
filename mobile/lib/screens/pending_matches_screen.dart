@@ -60,12 +60,14 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     });
     try {
       final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
       final userJson = prefs.getString('user');
       if (userJson != null) {
         _currentUserId = jsonDecode(userJson)['id'];
       }
 
       final res = await ApiClient.get('/matches/pending');
+      if (!mounted) return;
       if (res.statusCode == 200) {
         setState(() => _matches = res.data['matches']);
       } else {
@@ -76,7 +78,7 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
 
       try {
         final friendlyRes = await ApiClient.get('/friendlies/pending');
-        if (friendlyRes.statusCode == 200) {
+        if (friendlyRes.statusCode == 200 && mounted) {
           setState(() {
             _friendlyIncoming = friendlyRes.data['incoming'];
             _friendlyOutgoing = friendlyRes.data['outgoing'];
@@ -88,9 +90,9 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
         // here block the tournament-matches list from loading.
       }
     } catch (err) {
-      setState(() => _error = 'Could not reach the server.');
+      if (mounted) setState(() => _error = 'Could not reach the server.');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 

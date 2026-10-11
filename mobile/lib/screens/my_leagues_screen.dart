@@ -41,6 +41,7 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
     });
     try {
       final res = await ApiClient.get('/leagues/mine');
+      if (!mounted) return;
       if (res.statusCode == 200) {
         setState(() => _leagues = res.data['leagues']);
       } else {
@@ -49,9 +50,9 @@ class _MyLeaguesScreenState extends State<MyLeaguesScreen> {
         );
       }
     } catch (err) {
-      setState(() => _error = 'Could not reach the server.');
+      if (mounted) setState(() => _error = 'Could not reach the server.');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 

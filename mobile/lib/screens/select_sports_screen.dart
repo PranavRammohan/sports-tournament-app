@@ -56,6 +56,7 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
 
     try {
       final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
       final token = prefs.getString('authToken');
 
       if (token == null) {
@@ -75,19 +76,21 @@ class _SelectSportsScreenState extends State<SelectSportsScreen> {
         body: {'sports': sportsPayload},
       );
 
+      if (!mounted) return;
       if (res.statusCode != 201) {
         _showAlert('Something went wrong', res.errorOr('Please try again.'));
         return;
       }
 
-      if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/home');
       DeepLinkService.consumePendingIfAny();
     } catch (err) {
-      _showAlert(
-        'Network error',
-        'Could not reach the server. Check your connection.',
-      );
+      if (mounted) {
+        _showAlert(
+          'Network error',
+          'Could not reach the server. Check your connection.',
+        );
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }

@@ -45,13 +45,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     });
     try {
       final res = await ApiClient.get('/notifications');
+      if (!mounted) return;
       if (res.statusCode == 200) {
         setState(() => _notifications = res.data['notifications']);
       } else {
         setState(() => _error = res.errorOr('Could not load notifications.'));
       }
     } catch (err) {
-      setState(() => _error = 'Could not reach the server.');
+      if (mounted) setState(() => _error = 'Could not reach the server.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }

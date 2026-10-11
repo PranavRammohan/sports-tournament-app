@@ -50,6 +50,7 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
     });
     try {
       final res = await ApiClient.get('/leagues/${widget.leagueId}/partners');
+      if (!mounted) return;
       if (res.statusCode == 200) {
         setState(() => _members = res.data['members']);
       } else {
@@ -58,7 +59,7 @@ class _PartnerSelectionScreenState extends State<PartnerSelectionScreen> {
         );
       }
     } catch (err) {
-      setState(() => _error = 'Could not reach the server.');
+      if (mounted) setState(() => _error = 'Could not reach the server.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }

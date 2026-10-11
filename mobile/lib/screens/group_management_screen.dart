@@ -65,6 +65,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
         ApiClient.get('/leagues/${widget.leagueId}'),
         ApiClient.get('/leagues/${widget.leagueId}/groups'),
       ]);
+      if (!mounted) return;
       final leagueRes = results[0];
       final groupsRes = results[1];
 
@@ -81,7 +82,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
         setState(() => _error = groupsRes.errorOr('Could not load groups.'));
       }
     } catch (err) {
-      setState(() => _error = 'Could not reach the server.');
+      if (mounted) setState(() => _error = 'Could not reach the server.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
