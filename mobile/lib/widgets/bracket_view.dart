@@ -10,10 +10,9 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import 'match_photo_picker.dart';
 import 'match_photo_thumbnail.dart';
 import 'team_name_row.dart';
@@ -89,40 +88,34 @@ class BracketViewState extends State<BracketView> {
     });
     try {
       final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
       final userJson = prefs.getString('user');
       if (userJson != null) {
         _currentUserId = jsonDecode(userJson)['id'];
       }
 
-      final leagueRes = await http.get(
-        Uri.parse('$baseApiUrl/leagues/${widget.leagueId}'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final leagueData = jsonDecode(leagueRes.body);
+      final leagueRes = await ApiClient.get('/leagues/${widget.leagueId}');
+      if (!mounted) return;
       if (leagueRes.statusCode == 200) {
-        _hostEntersScores = leagueData['league']['host_enters_scores'] == true;
-        _sport = leagueData['league']['sport'] ?? '';
+        _hostEntersScores =
+            leagueRes.data['league']['host_enters_scores'] == true;
+        _sport = leagueRes.data['league']['sport'] ?? '';
       }
 
       final bracketPath = widget.groupId != null
-          ? '$baseApiUrl/playoffs/${widget.leagueId}/group/${widget.groupId}'
-          : '$baseApiUrl/playoffs/${widget.leagueId}';
-      final response = await http.get(
-        Uri.parse(bracketPath),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
-      if (response.statusCode == 200) {
-        setState(() => _bracket = data['bracket']);
+          ? '/playoffs/${widget.leagueId}/group/${widget.groupId}'
+          : '/playoffs/${widget.leagueId}';
+      final res = await ApiClient.get(bracketPath);
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        setState(() => _bracket = res.data['bracket']);
         widget.onBracketChanged?.call(_bracket.isNotEmpty);
       } else {
-        setState(() => _error = data['error'] ?? 'Could not load bracket.');
+        setState(() => _error = res.errorOr('Could not load bracket.'));
       }
     } catch (err) {
-      setState(() => _error = 'Could not reach the server.');
+      if (mounted) setState(() => _error = 'Could not reach the server.');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -133,21 +126,13 @@ class BracketViewState extends State<BracketView> {
     HapticFeedback.lightImpact();
     setState(() => _generating = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/playoffs/${widget.leagueId}/generate'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({'qualifierCount': qualifierCount, 'force': force}),
+      final res = await ApiClient.post(
+        '/playoffs/${widget.leagueId}/generate',
+        body: {'qualifierCount': qualifierCount, 'force': force},
       );
-      final data = jsonDecode(response.body);
 
       if (!mounted) return;
-      if (response.statusCode == 201) {
+      if (res.statusCode == 201) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Bracket generated!'),
@@ -155,7 +140,7 @@ class BracketViewState extends State<BracketView> {
           ),
         );
         loadBracket();
-      } else if (data['incompleteMatches'] != null) {
+      } else if (res.data?['incompleteMatches'] != null) {
         setState(() => _generating = false);
         final proceed = await showDialog<bool>(
           context: context,
@@ -165,7 +150,7 @@ class BracketViewState extends State<BracketView> {
             ),
             title: const Text('Season not finished yet'),
             content: Text(
-              '${data['error']} Starting playoffs now means those matches will never be played. Continue anyway?',
+              '${res.data['error']} Starting playoffs now means those matches will never be played. Continue anyway?',
             ),
             actions: [
               TextButton(
@@ -182,6 +167,7 @@ class BracketViewState extends State<BracketView> {
             ],
           ),
         );
+        if (!mounted) return;
         if (proceed == true) {
           await generateBracket(qualifierCount, force: true);
         }
@@ -189,7 +175,7 @@ class BracketViewState extends State<BracketView> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not generate bracket.'),
+            content: Text(res.errorOr('Could not generate bracket.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -270,16 +256,10 @@ class BracketViewState extends State<BracketView> {
     HapticFeedback.mediumImpact();
     widget.onCancellingChanged?.call(true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.delete(
-        Uri.parse('$baseApiUrl/playoffs/${widget.leagueId}'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.delete('/playoffs/${widget.leagueId}');
 
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Playoff bracket removed.'),
@@ -290,7 +270,7 @@ class BracketViewState extends State<BracketView> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not remove bracket.'),
+            content: Text(res.errorOr('Could not remove bracket.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -322,21 +302,13 @@ class BracketViewState extends State<BracketView> {
 
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/playoffs/match/${m['id']}/report'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(result),
+      final res = await ApiClient.post(
+        '/playoffs/match/${m['id']}/report',
+        body: result,
       );
-      final data = jsonDecode(response.body);
 
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Result reported!'),
@@ -347,7 +319,7 @@ class BracketViewState extends State<BracketView> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not report.'),
+            content: Text(res.errorOr('Could not report.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -394,21 +366,13 @@ class BracketViewState extends State<BracketView> {
 
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.put(
-        Uri.parse('$baseApiUrl/playoffs/match/${m['id']}/edit-report'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(result),
+      final res = await ApiClient.put(
+        '/playoffs/match/${m['id']}/edit-report',
+        body: result,
       );
-      final data = jsonDecode(response.body);
 
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Report updated.'),
@@ -419,7 +383,7 @@ class BracketViewState extends State<BracketView> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not update report.'),
+            content: Text(res.errorOr('Could not update report.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -449,21 +413,13 @@ class BracketViewState extends State<BracketView> {
 
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/playoffs/match/$matchId/report-as-host'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(result),
+      final res = await ApiClient.post(
+        '/playoffs/match/$matchId/report-as-host',
+        body: result,
       );
-      final data = jsonDecode(response.body);
 
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Match confirmed!'),
@@ -474,7 +430,7 @@ class BracketViewState extends State<BracketView> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not enter score.'),
+            content: Text(res.errorOr('Could not enter score.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -520,25 +476,17 @@ class BracketViewState extends State<BracketView> {
 
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.put(
-        Uri.parse('$baseApiUrl/playoffs/match/${m['id']}/edit-score'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(result),
+      final res = await ApiClient.put(
+        '/playoffs/match/${m['id']}/edit-score',
+        body: result,
       );
-      final data = jsonDecode(response.body);
 
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['warning'] ?? 'Score updated.'),
-            backgroundColor: data['warning'] != null
+            content: Text(res.data?['warning'] ?? 'Score updated.'),
+            backgroundColor: res.data?['warning'] != null
                 ? AppColors.warning
                 : AppColors.success,
           ),
@@ -547,7 +495,7 @@ class BracketViewState extends State<BracketView> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not update score.'),
+            content: Text(res.errorOr('Could not update score.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -563,16 +511,10 @@ class BracketViewState extends State<BracketView> {
   Future<void> _confirmMatch(int matchId) async {
     HapticFeedback.lightImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/playoffs/match/$matchId/confirm'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.post('/playoffs/match/$matchId/confirm');
 
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Match confirmed!'),
@@ -583,7 +525,7 @@ class BracketViewState extends State<BracketView> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not confirm.'),
+            content: Text(res.errorOr('Could not confirm.')),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -599,16 +541,10 @@ class BracketViewState extends State<BracketView> {
   Future<void> _rejectMatch(int matchId) async {
     HapticFeedback.mediumImpact();
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.post(
-        Uri.parse('$baseApiUrl/playoffs/match/$matchId/reject'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
-      final data = jsonDecode(response.body);
+      final res = await ApiClient.post('/playoffs/match/$matchId/reject');
 
       if (!mounted) return;
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Result rejected.'),
@@ -619,7 +555,7 @@ class BracketViewState extends State<BracketView> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(data['error'] ?? 'Could not reject.'),
+            content: Text(res.errorOr('Could not reject.')),
             backgroundColor: AppColors.danger,
           ),
         );

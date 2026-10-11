@@ -1,12 +1,9 @@
 // edit_league_screen.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:share_plus/share_plus.dart';
 import '../main.dart';
-import '../config.dart';
+import '../api_client.dart';
 import '../constants/areas.dart';
 import '../constants/cities.dart';
 import '../validators.dart';
@@ -119,17 +116,14 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
   Future<void> _loadPartnerStatus() async {
     setState(() => _loadingPartnerStatus = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-      final response = await http.get(
-        Uri.parse('$baseApiUrl/leagues/${widget.league['id']}/partners'),
-        headers: {'Authorization': 'Bearer $token'},
+      final res = await ApiClient.get(
+        '/leagues/${widget.league['id']}/partners',
       );
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final members = data['members'] as List;
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        final members = res.data['members'] as List;
         final anyStarted = members.any((m) => m['partner_status'] != null);
-        if (mounted) setState(() => _anyPartnershipsStarted = anyStarted);
+        setState(() => _anyPartnershipsStarted = anyStarted);
       }
     } catch (err) {
       // Non-critical — worst case the dropdown stays enabled and the host
@@ -333,29 +327,19 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
     HapticFeedback.mediumImpact();
     setState(() => _changingFormat = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.post(
-        Uri.parse(
-          '$baseApiUrl/leagues/${widget.league['id']}/regenerate-schedule',
-        ),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
+      final res = await ApiClient.post(
+        '/leagues/${widget.league['id']}/regenerate-schedule',
+        body: {
           'scheduleType': result.scheduleType,
           'matchesPerPlayer': result.matchesPerPlayer,
           'force': force,
-        }),
+        },
       );
-      final data = jsonDecode(response.body);
 
       if (!mounted) return;
-      if (response.statusCode == 200 || response.statusCode == 201) {
+      if (res.statusCode == 200 || res.statusCode == 201) {
         Navigator.pop(context, true);
-      } else if (data['estimatedMatches'] != null) {
+      } else if (res.data?['estimatedMatches'] != null) {
         setState(() => _changingFormat = false);
         final proceed = await showDialog<bool>(
           context: context,
@@ -364,7 +348,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
               borderRadius: BorderRadius.circular(10),
             ),
             title: const Text('That\'s a lot of matches'),
-            content: Text('${data['error']} Continue anyway?'),
+            content: Text('${res.data['error']} Continue anyway?'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
@@ -377,6 +361,7 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
             ],
           ),
         );
+        if (!mounted) return;
         if (proceed == true) {
           await _changeFormat(retryResult: result, force: true);
         }
@@ -384,11 +369,11 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
       } else {
         _showAlert(
           'Could not change format',
-          data['error'] ?? 'Something went wrong.',
+          res.errorOr('Something went wrong.'),
         );
       }
     } catch (err) {
-      _showAlert('Network error', 'Could not reach the server.');
+      if (mounted) _showAlert('Network error', 'Could not reach the server.');
     } finally {
       if (mounted) setState(() => _changingFormat = false);
     }
@@ -489,16 +474,9 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
     HapticFeedback.lightImpact();
     setState(() => _saving = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('authToken');
-
-      final response = await http.put(
-        Uri.parse('$baseApiUrl/leagues/${widget.league['id']}'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
+      final res = await ApiClient.put(
+        '/leagues/${widget.league['id']}',
+        body: {
           'name': _nameController.text.trim(),
           'city': _selectedCity,
           'area': _selectedArea,
@@ -522,15 +500,13 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
           'maxPlayers': _restrictCapacity ? maxPlayers : null,
           'minRating': _restrictByRating ? minRating : null,
           'maxRating': _restrictByRating ? maxRating : null,
-        }),
+        },
       );
 
-      final data = jsonDecode(response.body);
-
       if (!mounted) return;
-      if (response.statusCode == 200) {
-        if (data['league']?['join_code'] != null) {
-          setState(() => _joinCode = data['league']['join_code']);
+      if (res.statusCode == 200) {
+        if (res.data?['league']?['join_code'] != null) {
+          setState(() => _joinCode = res.data['league']['join_code']);
         }
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -540,10 +516,10 @@ class _EditLeagueScreenState extends State<EditLeagueScreen> {
         );
         Navigator.pop(context, true);
       } else {
-        _showAlert('Could not save', data['error'] ?? 'Something went wrong.');
+        _showAlert('Could not save', res.errorOr('Something went wrong.'));
       }
     } catch (err) {
-      _showAlert('Network error', 'Could not reach the server.');
+      if (mounted) _showAlert('Network error', 'Could not reach the server.');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
