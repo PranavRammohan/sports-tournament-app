@@ -17,6 +17,7 @@ import '../constants/sports.dart';
 import 'add_sport_screen.dart';
 import 'edit_profile_screen.dart';
 import 'onboarding_screen.dart';
+import 'blocked_players_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -500,6 +501,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       title: const Text('Privacy Policy'),
                       trailing: Icon(Icons.open_in_new, size: 16, color: subtleTextColor),
                       onTap: () => launchWebUrl(privacyPolicyUrl),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: cardColor,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: ListTile(
+                      leading: Icon(Icons.block_outlined, color: subtleTextColor),
+                      title: const Text('Blocked Players'),
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const BlockedPlayersScreen(),
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 10),

@@ -36,6 +36,8 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
   // Sports both players have a singles rating for — the only ones a
   // friendly-match challenge (singles-only for now) can offer.
   List<String> _sharedSports = [];
+  bool _isBlocked = false;
+  bool _blockActionInFlight = false;
 
   bool get _isOwnProfile =>
       _currentUserId != null && _currentUserId == widget.userId;
@@ -56,12 +58,14 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
       final userJson = (await SharedPreferences.getInstance()).getString(
         'user',
       );
+      if (!mounted) return;
       if (userJson != null) {
         _currentUserId = jsonDecode(userJson)['id'];
       }
 
       final res = await ApiClient.get('/sports/user/${widget.userId}');
 
+      if (!mounted) return;
       if (res.statusCode != 200) {
         setState(() => _error = res.errorOr('Could not load this profile.'));
         return;
@@ -100,18 +104,114 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
                 .where((s) => s['format'] == 'singles')
                 .map((s) => s['sport'] as String)
                 .toSet();
-            setState(() {
-              _sharedSports = mySports.intersection(theirSports).toList();
-            });
+            if (mounted) {
+              setState(() {
+                _sharedSports = mySports.intersection(theirSports).toList();
+              });
+            }
           }
         } catch (err) {
           // Same as above — the challenge button just won't show.
         }
+
+        try {
+          final blockedRes = await ApiClient.get('/blocks');
+          if (blockedRes.statusCode == 200 && mounted) {
+            final blocked = (blockedRes.data['blocked'] as List<dynamic>);
+            setState(() {
+              _isBlocked = blocked.any((b) => b['id'] == widget.userId);
+            });
+          }
+        } catch (err) {
+          // Block status just won't show if this fails — not worth
+          // blocking the rest of the profile over.
+        }
       }
     } catch (err) {
-      setState(() => _error = 'Could not reach the server.');
+      if (mounted) setState(() => _error = 'Could not reach the server.');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _toggleBlock() async {
+    if (_isBlocked) {
+      setState(() => _blockActionInFlight = true);
+      try {
+        final res = await ApiClient.delete('/blocks/${widget.userId}');
+        if (!mounted) return;
+        if (res.statusCode == 200) {
+          setState(() => _isBlocked = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${_user?['username'] ?? 'Player'} unblocked.')),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(res.errorOr('Could not unblock this player.')),
+              backgroundColor: AppColors.danger,
+            ),
+          );
+        }
+      } catch (err) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Network error.')));
+        }
+      } finally {
+        if (mounted) setState(() => _blockActionInFlight = false);
+      }
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Block this player?'),
+        content: Text(
+          '${_user?['username'] ?? 'This player'} won\'t be able to challenge you to a friendly match, and neither of you will show up in each other\'s player search. You can unblock them anytime.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Block', style: TextStyle(color: AppColors.danger)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _blockActionInFlight = true);
+    try {
+      final res = await ApiClient.post('/blocks', body: {'userId': widget.userId});
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        setState(() => _isBlocked = true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${_user?['username'] ?? 'Player'} blocked.')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not block this player.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Network error.')));
+      }
+    } finally {
+      if (mounted) setState(() => _blockActionInFlight = false);
     }
   }
 
@@ -177,7 +277,17 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_user?['username'] ?? 'Player')),
+      appBar: AppBar(
+        title: Text(_user?['username'] ?? 'Player'),
+        actions: [
+          if (!_isOwnProfile && !_loading)
+            IconButton(
+              icon: Icon(_isBlocked ? Icons.block : Icons.block_outlined),
+              tooltip: _isBlocked ? 'Unblock player' : 'Block player',
+              onPressed: _blockActionInFlight ? null : _toggleBlock,
+            ),
+        ],
+      ),
       body: _loading
           ? const SkeletonList()
           : _error != null
