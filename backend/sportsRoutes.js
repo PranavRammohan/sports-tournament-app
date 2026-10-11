@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('./db');
 const { escapeLikePattern } = require('./sql');
+const { getBlockedEitherWayIds } = require('./blocking');
 
 // Starting ratings per sport per skill level, matching each sport's real
 // practical rating range as used in this app.
@@ -46,6 +47,7 @@ const STARTING_RATINGS = {
 // GET /matches/head-to-head/:userId) already have no shared-league check, so a
 // search endpoint doesn't open anything that wasn't already reachable by id.
 router.get('/search', async (req, res) => {
+  const userId = req.userId;
   const { q, sport, format } = req.query;
 
   if (!q || q.trim().length < 2) {
@@ -54,6 +56,7 @@ router.get('/search', async (req, res) => {
 
   try {
     const likePattern = `%${escapeLikePattern(q.trim())}%`;
+    const blockedIds = await getBlockedEitherWayIds(pool, userId);
     // Only join user_sports (and so only surface a rating) when both sport
     // and format are given — a bare LEFT JOIN with optional filters would
     // return one row per sport/format a user has, and DISTINCT can't collapse
@@ -64,18 +67,18 @@ router.get('/search', async (req, res) => {
             `SELECT DISTINCT u.id, u.username, u.location, us.rating
              FROM users u
              LEFT JOIN user_sports us ON us.user_id = u.id AND us.sport = $2 AND us.format = $3
-             WHERE u.username ILIKE $1
+             WHERE u.username ILIKE $1 AND u.id != ALL($4::int[])
              ORDER BY u.username
              LIMIT 20`,
-            [likePattern, sport, format]
+            [likePattern, sport, format, blockedIds]
           )
         : await pool.query(
             `SELECT u.id, u.username, u.location, NULL AS rating
              FROM users u
-             WHERE u.username ILIKE $1
+             WHERE u.username ILIKE $1 AND u.id != ALL($2::int[])
              ORDER BY u.username
              LIMIT 20`,
-            [likePattern]
+            [likePattern, blockedIds]
           );
     res.status(200).json({ users: result.rows });
   } catch (err) {

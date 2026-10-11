@@ -9,6 +9,7 @@ const matchRoutes = require('./matchRoutes');
 const playoffRoutes = require('./playoffRoutes');
 const notificationRoutes = require('./notificationRoutes');
 const friendlyRoutes = require('./friendlyRoutes');
+const blockRoutes = require('./blockRoutes');
 const authMiddleware = require('./authMiddleware');
 
 const app = express();
@@ -45,5 +46,10 @@ app.use('/api/matches', authMiddleware, matchRoutes);
 app.use('/api/playoffs', authMiddleware, playoffRoutes);
 app.use('/api/notifications', authMiddleware, notificationRoutes);
 app.use('/api/friendlies', authMiddleware, friendlyRoutes);
+app.use('/api/blocks', authMiddleware, blockRoutes);
 
-app.listen(3000, () => console.log('Server running on port 3000'));
+// Render (and most PaaS hosts) assigns its own port via $PORT and expects
+// the app to bind to it — a hardcoded port can silently fail to receive
+// traffic in production. 3000 stays as the local-dev fallback only.
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

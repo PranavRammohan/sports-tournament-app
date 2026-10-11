@@ -13,9 +13,25 @@
 // just always 'singles' for now; doubles friendly-matchmaking needs its own
 // 4-player pairing flow, a natural v2.
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const pool = require('./db');
+const { RouteError } = pool;
 const { createNotification } = require('./notifications');
+const { getBlockedEitherWayIds, isBlockedEitherWay } = require('./blocking');
+
+// Unlike /api/auth (rate-limited in server.js because a stolen password or
+// reset code is cheap to brute-force), nothing else in this backend is
+// rate-limited — but unlimited challenge-sending is a direct harassment
+// vector on a stranger-matchmaking feature (spam one person with
+// challenges indefinitely), so this route gets its own scoped limiter.
+const challengeRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many challenges sent. Please try again later.' },
+});
 
 // Same small validators matchRoutes.js has — kept as a local copy per this
 // codebase's convention of duplicating small per-file helpers rather than
@@ -58,6 +74,7 @@ router.get('/nearby', async (req, res) => {
       return res.status(400).json({ error: "Add this sport to your profile first — you need a rating to find similarly-rated players." });
     }
     const myRating = myRatingResult.rows[0].rating;
+    const blockedIds = await getBlockedEitherWayIds(pool, userId);
 
     // city/area are optional — letting a traveling player search a
     // different city than their own home city is the whole point of these
@@ -68,9 +85,9 @@ router.get('/nearby', async (req, res) => {
       SELECT u.id, u.username, u.location, u.city, us.rating
       FROM users u
       JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = 'singles'
-      WHERE u.id != $2 AND u.deleted_at IS NULL
+      WHERE u.id != $2 AND u.deleted_at IS NULL AND u.id != ALL($3::int[])
     `;
-    const params = [sport, userId];
+    const params = [sport, userId, blockedIds];
 
     if (city) {
       params.push(city);
@@ -94,9 +111,15 @@ router.get('/nearby', async (req, res) => {
 });
 
 // ---------- SEND A FRIENDLY CHALLENGE ----------
-router.post('/challenge', async (req, res) => {
+router.post('/challenge', challengeRateLimiter, async (req, res) => {
   const userId = req.userId;
-  const { opponentId, sport, proposedTime, venue } = req.body;
+  const { sport, proposedTime, venue } = req.body;
+  // Coerced the same way leagueRoutes.js's partner-request guard
+  // (`parseInt(partnerId, 10) === userId`) coerces its id — without this,
+  // a numeric-string opponentId (e.g. from a client that JSON-encodes ids
+  // as strings) would silently slip past a strict `===` self-challenge
+  // check.
+  const opponentId = req.body.opponentId != null ? parseInt(req.body.opponentId, 10) : null;
 
   if (!opponentId || !sport) {
     return res.status(400).json({ error: 'Opponent and sport are required.' });
@@ -106,6 +129,10 @@ router.post('/challenge', async (req, res) => {
   }
 
   try {
+    if (await isBlockedEitherWay(pool, userId, opponentId)) {
+      return res.status(403).json({ error: "You can't challenge this player." });
+    }
+
     const sportsResult = await pool.query(
       `SELECT user_id FROM user_sports WHERE sport = $1 AND format = 'singles' AND user_id = ANY($2::int[])`,
       [sport, [userId, opponentId]]
@@ -113,6 +140,19 @@ router.post('/challenge', async (req, res) => {
     const idsWithSport = new Set(sportsResult.rows.map((r) => r.user_id));
     if (!idsWithSport.has(userId) || !idsWithSport.has(opponentId)) {
       return res.status(400).json({ error: 'Both players need this sport on their profile first.' });
+    }
+
+    // Anti-spam: reuse an already-pending challenge between the same pair
+    // for the same sport (in either direction) instead of stacking up
+    // duplicates every time the same two players tap "Challenge" again.
+    const existing = await pool.query(
+      `SELECT * FROM friendly_matches
+       WHERE sport = $1 AND status = 'pending'
+         AND ((player1_id = $2 AND player2_id = $3) OR (player1_id = $3 AND player2_id = $2))`,
+      [sport, userId, opponentId]
+    );
+    if (existing.rows.length > 0) {
+      return res.status(200).json({ challenge: existing.rows[0] });
     }
 
     const result = await pool.query(
@@ -171,36 +211,50 @@ router.post('/:id/respond', async (req, res) => {
   const { accept } = req.body;
 
   try {
-    const result = await pool.query('SELECT * FROM friendly_matches WHERE id = $1', [challengeId]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Challenge not found.' });
-    }
-    const challenge = result.rows[0];
+    let newStatus, player1Id;
 
-    if (challenge.player2_id !== userId) {
-      return res.status(403).json({ error: 'Only the challenged player can respond to this.' });
-    }
-    if (challenge.status !== 'pending') {
-      return res.status(400).json({ error: 'This challenge has already been responded to.' });
-    }
+    await pool.withTransaction(async (client) => {
+      // Locked for the transaction so two near-simultaneous responses (a
+      // double-tap, or accept-then-decline fired back to back) can't both
+      // pass the pending-status check below — same race the equivalent
+      // match-confirm routes close with FOR UPDATE (matchRoutes.js's
+      // /:id/confirm, playoffRoutes.js's /match/:matchId/confirm).
+      const result = await client.query('SELECT * FROM friendly_matches WHERE id = $1 FOR UPDATE', [challengeId]);
+      if (result.rows.length === 0) {
+        throw new RouteError(404, 'Challenge not found.');
+      }
+      const challenge = result.rows[0];
 
-    const newStatus = accept === true ? 'accepted' : 'declined';
-    await pool.query(
-      'UPDATE friendly_matches SET status = $1, updated_at = NOW() WHERE id = $2',
-      [newStatus, challengeId]
-    );
+      if (challenge.player2_id !== userId) {
+        throw new RouteError(403, 'Only the challenged player can respond to this.');
+      }
+      if (challenge.status !== 'pending') {
+        throw new RouteError(409, 'This challenge has already been responded to.');
+      }
 
-    await createNotification(pool, {
-      userId: challenge.player1_id,
-      type: 'friendly_response',
-      title: accept === true ? 'Friendly challenge accepted' : 'Friendly challenge declined',
-      body: accept === true
-        ? 'Your friendly match challenge was accepted — coordinate a time to play!'
-        : 'Your friendly match challenge was declined.',
+      newStatus = accept === true ? 'accepted' : 'declined';
+      player1Id = challenge.player1_id;
+
+      await client.query(
+        `UPDATE friendly_matches SET status = $1, updated_at = NOW() WHERE id = $2 AND status = 'pending'`,
+        [newStatus, challengeId]
+      );
+
+      await createNotification(client, {
+        userId: player1Id,
+        type: 'friendly_response',
+        title: accept === true ? 'Friendly challenge accepted' : 'Friendly challenge declined',
+        body: accept === true
+          ? 'Your friendly match challenge was accepted — coordinate a time to play!'
+          : 'Your friendly match challenge was declined.',
+      });
     });
 
     res.status(200).json({ message: `Challenge ${newStatus}.` });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Respond to friendly challenge error:', err);
     res.status(500).json({ error: 'Something went wrong responding to the challenge.' });
   }
@@ -227,35 +281,43 @@ router.post('/:id/report', async (req, res) => {
   }
 
   try {
-    const result = await pool.query('SELECT * FROM friendly_matches WHERE id = $1', [challengeId]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Friendly match not found.' });
-    }
-    const match = result.rows[0];
+    await pool.withTransaction(async (client) => {
+      // Locked for the transaction so two near-simultaneous reports (either
+      // player double-tapping Submit) can't both pass the accepted-status
+      // check and race to overwrite each other's result.
+      const result = await client.query('SELECT * FROM friendly_matches WHERE id = $1 FOR UPDATE', [challengeId]);
+      if (result.rows.length === 0) {
+        throw new RouteError(404, 'Friendly match not found.');
+      }
+      const match = result.rows[0];
 
-    if (match.player1_id !== userId && match.player2_id !== userId) {
-      return res.status(403).json({ error: 'Only the two players in this match can report a result.' });
-    }
-    if (match.status !== 'accepted') {
-      return res.status(400).json({ error: 'This match needs to be accepted before a result can be reported.' });
-    }
-    if (winnerId !== match.player1_id && winnerId !== match.player2_id) {
-      return res.status(400).json({ error: 'Winner must be one of the two players.' });
-    }
-    if (!winnerUnitsAreConsistent(winnerId === match.player1_id, player1Units, player2Units)) {
-      return res.status(400).json({ error: "The declared winner's score must be higher than the opponent's." });
-    }
+      if (match.player1_id !== userId && match.player2_id !== userId) {
+        throw new RouteError(403, 'Only the two players in this match can report a result.');
+      }
+      if (match.status !== 'accepted') {
+        throw new RouteError(409, 'This match needs to be accepted before a result can be reported.');
+      }
+      if (winnerId !== match.player1_id && winnerId !== match.player2_id) {
+        throw new RouteError(400, 'Winner must be one of the two players.');
+      }
+      if (!winnerUnitsAreConsistent(winnerId === match.player1_id, player1Units, player2Units)) {
+        throw new RouteError(400, "The declared winner's score must be higher than the opponent's.");
+      }
 
-    await pool.query(
-      `UPDATE friendly_matches
-       SET player1_units = $1, player2_units = $2, set_scores = $3, winner_id = $4,
-           reported_by = $5, status = 'completed', updated_at = NOW()
-       WHERE id = $6`,
-      [player1Units, player2Units, JSON.stringify(setScores || []), winnerId, userId, challengeId]
-    );
+      await client.query(
+        `UPDATE friendly_matches
+         SET player1_units = $1, player2_units = $2, set_scores = $3, winner_id = $4,
+             reported_by = $5, status = 'completed', updated_at = NOW()
+         WHERE id = $6 AND status = 'accepted'`,
+        [player1Units, player2Units, JSON.stringify(setScores || []), winnerId, userId, challengeId]
+      );
+    });
 
     res.status(200).json({ message: 'Result recorded.' });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Report friendly match error:', err);
     res.status(500).json({ error: 'Something went wrong recording the result.' });
   }
@@ -277,7 +339,7 @@ router.delete('/:id', async (req, res) => {
       return res.status(403).json({ error: 'Only the player who sent this challenge can cancel it.' });
     }
     if (challenge.status !== 'pending') {
-      return res.status(400).json({ error: 'Only a still-pending challenge can be cancelled.' });
+      return res.status(409).json({ error: 'Only a still-pending challenge can be cancelled.' });
     }
 
     await pool.query('DELETE FROM friendly_matches WHERE id = $1', [challengeId]);

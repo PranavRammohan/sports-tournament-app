@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('./db');
 const authMiddleware = require('./authMiddleware');
 const { sendPasswordResetEmail } = require('./email');
+const { createNotification } = require('./notifications');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const SALT_ROUNDS = 10;
@@ -455,6 +456,33 @@ router.delete('/account', authMiddleware, async (req, res) => {
          WHERE id = $3`,
         [`DELETED${userId}`, lockHash, userId]
       );
+
+      // A deleted user's open friendly-match challenges shouldn't linger —
+      // the other side would otherwise still be able to accept/report
+      // against an account that just anonymized itself. Cancel anything
+      // still pending/accepted and let the other player know.
+      const openFriendlies = await client.query(
+        `SELECT id, player1_id, player2_id FROM friendly_matches
+         WHERE (player1_id = $1 OR player2_id = $1) AND status IN ('pending', 'accepted')`,
+        [userId]
+      );
+      if (openFriendlies.rows.length > 0) {
+        await client.query(
+          `UPDATE friendly_matches SET status = 'cancelled', updated_at = NOW()
+           WHERE (player1_id = $1 OR player2_id = $1) AND status IN ('pending', 'accepted')`,
+          [userId]
+        );
+        for (const fm of openFriendlies.rows) {
+          const otherPlayerId = fm.player1_id === userId ? fm.player2_id : fm.player1_id;
+          await createNotification(client, {
+            userId: otherPlayerId,
+            type: 'friendly_response',
+            title: 'Friendly match cancelled',
+            body: 'A friendly match was cancelled because the other player deleted their account.',
+          });
+        }
+      }
+
       await client.query('DELETE FROM notifications WHERE user_id = $1', [userId]);
     });
 

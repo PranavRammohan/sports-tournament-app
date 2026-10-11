@@ -4259,20 +4259,33 @@ router.delete('/:id', async (req, res) => {
   const leagueId = req.params.id;
 
   try {
-    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
-    if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Tournament not found.' });
-    }
-    const league = leagueResult.rows[0];
+    await pool.withTransaction(async (client) => {
+      const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+      if (leagueResult.rows.length === 0) {
+        throw new RouteError(404, 'Tournament not found.');
+      }
+      const league = leagueResult.rows[0];
 
-    if (league.created_by !== userId) {
-      return res.status(403).json({ error: 'Only the tournament host can delete this league.' });
-    }
+      if (league.created_by !== userId) {
+        throw new RouteError(403, 'Only the tournament host can delete this league.');
+      }
 
-    await pool.query('DELETE FROM leagues WHERE id = $1', [leagueId]);
+      // Deleting the league cascades away every match row in it — reverse
+      // every confirmed match's rating/points effects first (same helpers
+      // regenerate-schedule uses, same reasoning: a host deleting a
+      // tournament by mistake shouldn't leave every participant's rating
+      // permanently corrupted with no record of why).
+      await reverseAllConfirmedMatchesForLeague(client, leagueId, league);
+      await reverseAllConfirmedPlayoffMatchesForLeague(client, leagueId, league);
+
+      await client.query('DELETE FROM leagues WHERE id = $1', [leagueId]);
+    });
 
     res.status(200).json({ message: 'Tournament deleted.' });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Delete league error:', err);
     res.status(500).json({ error: 'Something went wrong deleting the tournament.' });
   }
