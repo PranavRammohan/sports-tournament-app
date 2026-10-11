@@ -13,11 +13,17 @@ import '../main.dart';
 /// Shows the challenge dialog and returns `{sport, proposedTime, venue}` if
 /// the user submitted it, or null if they cancelled. `proposedTime` is an
 /// ISO-8601 string or null; `venue` is a trimmed string or null.
+///
+/// `description` overrides the default "doesn't affect rating" blurb —
+/// used by ladder_screen.dart, where a challenge affects ladder position
+/// even though (like a friendly match) it never touches user_sports.rating,
+/// so the default copy would be misleading as-is.
 Future<Map<String, dynamic>?> showFriendlyChallengeDialog(
   BuildContext context, {
   required String opponentName,
   required List<String> sportOptions,
   String? presetSport,
+  String? description,
 }) {
   return showDialog<Map<String, dynamic>>(
     context: context,
@@ -25,6 +31,7 @@ Future<Map<String, dynamic>?> showFriendlyChallengeDialog(
       opponentName: opponentName,
       sportOptions: sportOptions,
       presetSport: presetSport,
+      description: description,
     ),
   );
 }
@@ -33,11 +40,13 @@ class _FriendlyChallengeDialog extends StatefulWidget {
   final String opponentName;
   final List<String> sportOptions;
   final String? presetSport;
+  final String? description;
 
   const _FriendlyChallengeDialog({
     required this.opponentName,
     required this.sportOptions,
     this.presetSport,
+    this.description,
   });
 
   @override
@@ -123,9 +132,10 @@ class _FriendlyChallengeDialogState extends State<_FriendlyChallengeDialog> {
                   style: const TextStyle(color: AppColors.danger, fontSize: 13),
                 ),
               ),
-            const Text(
-              'A friendly match doesn\'t affect either player\'s rating or record.',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+            Text(
+              widget.description ??
+                  'A friendly match doesn\'t affect either player\'s rating or record.',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
             ),
             const SizedBox(height: 14),
             if (widget.presetSport == null)

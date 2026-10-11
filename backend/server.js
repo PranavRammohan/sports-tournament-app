@@ -10,6 +10,7 @@ const playoffRoutes = require('./playoffRoutes');
 const notificationRoutes = require('./notificationRoutes');
 const friendlyRoutes = require('./friendlyRoutes');
 const blockRoutes = require('./blockRoutes');
+const ladderRoutes = require('./ladderRoutes');
 const authMiddleware = require('./authMiddleware');
 
 const app = express();
@@ -47,6 +48,7 @@ app.use('/api/playoffs', authMiddleware, playoffRoutes);
 app.use('/api/notifications', authMiddleware, notificationRoutes);
 app.use('/api/friendlies', authMiddleware, friendlyRoutes);
 app.use('/api/blocks', authMiddleware, blockRoutes);
+app.use('/api/ladder', authMiddleware, ladderRoutes);
 
 // Render (and most PaaS hosts) assigns its own port via $PORT and expects
 // the app to bind to it — a hardcoded port can silently fail to receive

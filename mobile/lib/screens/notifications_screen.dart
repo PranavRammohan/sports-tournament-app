@@ -95,9 +95,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           builder: (_) => LeagueDetailScreen(leagueId: n['league_id']),
         ),
       );
-    } else if (n['type'] == 'friendly_challenge' || n['type'] == 'friendly_response') {
-      // Friendly challenges have no league to link back to — the Pending
-      // tab is where accepting/declining/reporting them actually happens.
+    } else if (n['type'] == 'friendly_challenge' ||
+        n['type'] == 'friendly_response' ||
+        n['type'] == 'ladder_challenge' ||
+        n['type'] == 'ladder_response' ||
+        n['type'] == 'ladder_report' ||
+        n['type'] == 'ladder_confirmed') {
+      // Friendly/ladder challenges have no league to link back to — the
+      // Pending tab is where accepting/declining/reporting/confirming them
+      // actually happens.
       Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => const PendingMatchesScreen()),

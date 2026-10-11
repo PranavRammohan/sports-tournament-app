@@ -43,6 +43,18 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
   List<dynamic> _friendlyAccepted = [];
   final Set<dynamic> _friendlyActingIds = {};
 
+  // Ladder challenges — another separate table/endpoint (see
+  // backend/ladderRoutes.js). Unlike a friendly match, a ladder result
+  // needs the other player to confirm before positions move, so there are
+  // two extra buckets: a report awaiting MY confirmation, and one awaiting
+  // the other player's.
+  List<dynamic> _ladderIncoming = [];
+  List<dynamic> _ladderOutgoing = [];
+  List<dynamic> _ladderAccepted = [];
+  List<dynamic> _ladderAwaitingMyConfirmation = [];
+  List<dynamic> _ladderAwaitingTheirConfirmation = [];
+  final Set<dynamic> _ladderActingIds = {};
+
   @override
   void initState() {
     super.initState();
@@ -88,6 +100,21 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
       } catch (err) {
         // Friendly challenges are a secondary section — don't let a failure
         // here block the tournament-matches list from loading.
+      }
+
+      try {
+        final ladderRes = await ApiClient.get('/ladder/challenges/pending');
+        if (ladderRes.statusCode == 200 && mounted) {
+          setState(() {
+            _ladderIncoming = ladderRes.data['incoming'];
+            _ladderOutgoing = ladderRes.data['outgoing'];
+            _ladderAccepted = ladderRes.data['accepted'];
+            _ladderAwaitingMyConfirmation = ladderRes.data['awaitingMyConfirmation'];
+            _ladderAwaitingTheirConfirmation = ladderRes.data['awaitingTheirConfirmation'];
+          });
+        }
+      } catch (err) {
+        // Same as friendly challenges — a secondary section.
       }
     } catch (err) {
       if (mounted) setState(() => _error = 'Could not reach the server.');
@@ -332,6 +359,223 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     }
   }
 
+  Future<void> _respondLadder(dynamic c, bool accept) async {
+    HapticFeedback.lightImpact();
+    setState(() => _ladderActingIds.add(c['id']));
+    try {
+      final res = await ApiClient.post(
+        '/ladder/${c['id']}/respond',
+        body: {'accept': accept},
+      );
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(accept ? 'Challenge accepted!' : 'Challenge declined.'),
+            backgroundColor: accept ? AppColors.success : AppColors.warning,
+          ),
+        );
+        _loadMatches();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not respond to the challenge.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _ladderActingIds.remove(c['id']));
+    }
+  }
+
+  Future<void> _cancelLadder(dynamic c) async {
+    HapticFeedback.lightImpact();
+    setState(() => _ladderActingIds.add(c['id']));
+    try {
+      final res = await ApiClient.delete('/ladder/${c['id']}');
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Challenge cancelled.'),
+            backgroundColor: AppColors.warning,
+          ),
+        );
+        _loadMatches();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not cancel the challenge.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _ladderActingIds.remove(c['id']));
+    }
+  }
+
+  Future<void> _reportLadder(dynamic c) async {
+    final isChallenger = c['challenger_id'] == _currentUserId;
+    final myName = isChallenger ? c['challenger_username'] : c['defender_username'];
+    final opponentName = isChallenger ? c['defender_username'] : c['challenger_username'];
+
+    final result = await showDialog<Map<String, int>>(
+      context: context,
+      builder: (ctx) => _FriendlyScoreDialog(
+        myName: myName,
+        opponentName: opponentName,
+      ),
+    );
+    if (result == null) return;
+
+    final myUnits = result['me']!;
+    final opponentUnits = result['opponent']!;
+    // player1Units/player2Units always mean challenger/defender on this
+    // backend, regardless of who's reporting — see ladderRoutes.js.
+    final player1Units = isChallenger ? myUnits : opponentUnits;
+    final player2Units = isChallenger ? opponentUnits : myUnits;
+    final iWon = myUnits > opponentUnits;
+    final winnerId = iWon
+        ? _currentUserId
+        : (isChallenger ? c['defender_id'] : c['challenger_id']);
+
+    HapticFeedback.lightImpact();
+    setState(() => _ladderActingIds.add(c['id']));
+    try {
+      final res = await ApiClient.post(
+        '/ladder/${c['id']}/report',
+        body: {
+          'player1Units': player1Units,
+          'player2Units': player2Units,
+          'setScores': [],
+          'winnerId': winnerId,
+        },
+      );
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Result reported — waiting for the other player to confirm.'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadMatches();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not record the result.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _ladderActingIds.remove(c['id']));
+    }
+  }
+
+  Future<void> _confirmLadder(dynamic c) async {
+    HapticFeedback.lightImpact();
+    setState(() => _ladderActingIds.add(c['id']));
+    try {
+      final res = await ApiClient.post('/ladder/${c['id']}/confirm');
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Result confirmed — the ladder has been updated.'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadMatches();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not confirm the result.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _ladderActingIds.remove(c['id']));
+    }
+  }
+
+  Future<void> _disputeLadder(dynamic c) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: const Text('Dispute this result?'),
+        content: const Text(
+          'This clears the reported score so either player can report it again once you agree.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Dispute', style: TextStyle(color: AppColors.danger)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    HapticFeedback.mediumImpact();
+    setState(() => _ladderActingIds.add(c['id']));
+    try {
+      final res = await ApiClient.post('/ladder/${c['id']}/reject-report');
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Result disputed.'),
+            backgroundColor: AppColors.warning,
+          ),
+        );
+        _loadMatches();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not dispute the result.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
+    } finally {
+      if (mounted) setState(() => _ladderActingIds.remove(c['id']));
+    }
+  }
+
   String _formatSport(String sport) => sport
       .split('_')
       .map((w) => w[0].toUpperCase() + w.substring(1))
@@ -500,6 +744,154 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
     );
   }
 
+  Widget _buildLadderSection(
+    Color cardColor,
+    bool isDark,
+    Color primaryTextColor,
+    Color subtleTextColor,
+  ) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.primaryLight.withValues(alpha: 0.4)),
+        boxShadow: AppShadows.card(isDark),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.format_list_numbered, size: 18, color: AppColors.primaryLight),
+              const SizedBox(width: 6),
+              Text(
+                'Ladder Challenges',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: primaryTextColor,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ..._ladderIncoming.map((c) {
+            final isActing = _ladderActingIds.contains(c['id']);
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${c['challenger_username']} challenged you · ${_formatSport(c['sport'])} (${c['city']})',
+                      style: TextStyle(fontSize: 13, color: primaryTextColor),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.check_circle, color: AppColors.success),
+                    tooltip: 'Accept',
+                    onPressed: isActing ? null : () => _respondLadder(c, true),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.cancel, color: AppColors.danger),
+                    tooltip: 'Decline',
+                    onPressed: isActing ? null : () => _respondLadder(c, false),
+                  ),
+                ],
+              ),
+            );
+          }),
+          ..._ladderOutgoing.map((c) {
+            final isActing = _ladderActingIds.contains(c['id']);
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Waiting on ${c['defender_username']} · ${_formatSport(c['sport'])}',
+                      style: TextStyle(fontSize: 13, color: subtleTextColor),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: isActing ? null : () => _cancelLadder(c),
+                    child: const Text('Cancel'),
+                  ),
+                ],
+              ),
+            );
+          }),
+          ..._ladderAccepted.map((c) {
+            final isActing = _ladderActingIds.contains(c['id']);
+            final isChallenger = c['challenger_id'] == _currentUserId;
+            final opponentName =
+                isChallenger ? c['defender_username'] : c['challenger_username'];
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'vs $opponentName · ${_formatSport(c['sport'])} — accepted',
+                      style: TextStyle(fontSize: 13, color: primaryTextColor),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: isActing ? null : () => _reportLadder(c),
+                    child: const Text('Report Score'),
+                  ),
+                ],
+              ),
+            );
+          }),
+          ..._ladderAwaitingMyConfirmation.map((c) {
+            final isActing = _ladderActingIds.contains(c['id']);
+            final isChallenger = c['challenger_id'] == _currentUserId;
+            final opponentName =
+                isChallenger ? c['defender_username'] : c['challenger_username'];
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '$opponentName reported a score · ${_formatSport(c['sport'])} — confirm it?',
+                      style: TextStyle(fontSize: 13, color: primaryTextColor),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.check_circle, color: AppColors.success),
+                    tooltip: 'Confirm',
+                    onPressed: isActing ? null : () => _confirmLadder(c),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.flag, color: AppColors.danger),
+                    tooltip: 'Dispute',
+                    onPressed: isActing ? null : () => _disputeLadder(c),
+                  ),
+                ],
+              ),
+            );
+          }),
+          ..._ladderAwaitingTheirConfirmation.map((c) {
+            final isChallenger = c['challenger_id'] == _currentUserId;
+            final opponentName =
+                isChallenger ? c['defender_username'] : c['challenger_username'];
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                'Waiting for $opponentName to confirm your report · ${_formatSport(c['sport'])}',
+                style: TextStyle(fontSize: 13, color: subtleTextColor),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -536,6 +928,17 @@ class _PendingMatchesScreenState extends State<PendingMatchesScreen> {
                     _friendlyOutgoing.isNotEmpty ||
                     _friendlyAccepted.isNotEmpty)
                   _buildFriendlySection(
+                    cardColor,
+                    isDark,
+                    primaryTextColor,
+                    subtleTextColor,
+                  ),
+                if (_ladderIncoming.isNotEmpty ||
+                    _ladderOutgoing.isNotEmpty ||
+                    _ladderAccepted.isNotEmpty ||
+                    _ladderAwaitingMyConfirmation.isNotEmpty ||
+                    _ladderAwaitingTheirConfirmation.isNotEmpty)
+                  _buildLadderSection(
                     cardColor,
                     isDark,
                     primaryTextColor,

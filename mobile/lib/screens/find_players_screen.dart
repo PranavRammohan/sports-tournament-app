@@ -19,6 +19,7 @@ import '../widgets/friendly_challenge_dialog.dart';
 import '../constants/cities.dart';
 import '../constants/areas.dart';
 import 'player_profile_screen.dart';
+import 'ladder_screen.dart';
 
 const List<String> _findPlayersSports = [
   'badminton',
@@ -41,8 +42,9 @@ class _FindPlayersScreenState extends State<FindPlayersScreen> {
   String? _error;
   Timer? _debounce;
 
-  // 'name' = the original username search; 'rating' = the new similar-rating
-  // discovery mode backing friendly-match challenges.
+  // 'name' = the original username search; 'rating' = the similar-rating
+  // discovery mode backing friendly-match challenges; 'ladder' = the
+  // standalone per-city ladder (see ladder_screen.dart).
   String _mode = 'name';
   String? _ratingSport;
   List<dynamic> _nearbyResults = [];
@@ -236,25 +238,35 @@ class _FindPlayersScreenState extends State<FindPlayersScreen> {
                     onTap: () => setState(() => _mode = 'rating'),
                   ),
                 ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _ModeChip(
+                    label: 'Ladder',
+                    selected: _mode == 'ladder',
+                    onTap: () => setState(() => _mode = 'ladder'),
+                  ),
+                ),
               ],
             ),
           ),
           Expanded(
-            child: _mode == 'name'
-                ? _buildNameSearch(
-                    cardColor,
-                    borderColor,
-                    titleColor,
-                    subtitleColor,
-                    isDark,
-                  )
-                : _buildRatingSearch(
-                    cardColor,
-                    borderColor,
-                    titleColor,
-                    subtitleColor,
-                    isDark,
-                  ),
+            child: switch (_mode) {
+              'name' => _buildNameSearch(
+                  cardColor,
+                  borderColor,
+                  titleColor,
+                  subtitleColor,
+                  isDark,
+                ),
+              'ladder' => const LadderView(),
+              _ => _buildRatingSearch(
+                  cardColor,
+                  borderColor,
+                  titleColor,
+                  subtitleColor,
+                  isDark,
+                ),
+            },
           ),
         ],
       ),
