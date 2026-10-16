@@ -25,3 +25,10 @@ const String baseApiUrl = String.fromEnvironment(
 // --dart-define=API_URL override used for local testing).
 String get privacyPolicyUrl =>
     '${baseApiUrl.replaceFirst(RegExp(r'/api/?$'), '')}/privacy.html';
+
+// Crash reporting — same optional, fail-soft posture as the backend's
+// SENTRY_DSN (see errorReporting.js): empty by default, so a plain
+// `flutter run`/`flutter build` works with no setup and simply doesn't
+// report anything. Pass your own DSN at build time to turn it on:
+//   flutter build apk --dart-define=SENTRY_DSN=https://...@sentry.io/...
+const String sentryDsn = String.fromEnvironment('SENTRY_DSN', defaultValue: '');

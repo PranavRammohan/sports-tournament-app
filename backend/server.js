@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const { initErrorReporting, Sentry } = require('./errorReporting');
 const authRoutes = require('./authRoutes');
 const sportsRoutes = require('./sportsRoutes');
 const leagueRoutes = require('./leagueRoutes');
@@ -12,6 +13,8 @@ const friendlyRoutes = require('./friendlyRoutes');
 const blockRoutes = require('./blockRoutes');
 const ladderRoutes = require('./ladderRoutes');
 const authMiddleware = require('./authMiddleware');
+
+initErrorReporting();
 
 const app = express();
 app.use(cors());
@@ -49,6 +52,14 @@ app.use('/api/notifications', authMiddleware, notificationRoutes);
 app.use('/api/friendlies', authMiddleware, friendlyRoutes);
 app.use('/api/blocks', authMiddleware, blockRoutes);
 app.use('/api/ladder', authMiddleware, ladderRoutes);
+
+// Safety net for anything that escapes a route's own try/catch (a thrown
+// error in middleware, or a route that forgot one) — the console.error
+// wrap in errorReporting.js is what actually covers the routes' own
+// already-handled errors; this is just the remaining gap.
+if (process.env.SENTRY_DSN) {
+  Sentry.setupExpressErrorHandler(app);
+}
 
 // Render (and most PaaS hosts) assigns its own port via $PORT and expects
 // the app to bind to it — a hardcoded port can silently fail to receive

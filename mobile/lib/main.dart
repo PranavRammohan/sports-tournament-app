@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 import 'screens/login_screen.dart';
 import 'screens/signup_screen.dart';
 import 'screens/select_sports_screen.dart';
 import 'screens/main_shell.dart';
 import 'screens/onboarding_screen.dart';
 import 'deep_links.dart';
+import 'config.dart';
 
 class AppColors {
   // Brand black, sampled from the logo's own background — used for the
@@ -85,15 +87,32 @@ Future<bool> _hasSeenOnboarding() async {
   return prefs.getBool('hasSeenOnboarding') ?? false;
 }
 
+// Crash reporting — see config.dart's sentryDsn for the fail-soft, optional
+// posture (empty DSN = SentryFlutter.init below just doesn't send anything,
+// no setup required for a plain `flutter run`). SentryFlutter.init wraps the
+// whole app, not just a try/catch in main(), because that's what actually
+// wires up FlutterError.onError and PlatformDispatcher.onError for us —
+// framework-level and uncaught-async errors a manual try/catch here would
+// never see.
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await _loadSavedThemeMode();
-  final seenOnboarding = await _hasSeenOnboarding();
-  runApp(PlayMySetApp(initialRoute: seenOnboarding ? '/login' : '/onboarding'));
-  // Fire-and-forget: not awaited in main() so app startup isn't blocked on
-  // it, and it needs navigatorKey.currentState to exist (i.e. runApp to
-  // have run) before it can navigate anywhere anyway.
-  DeepLinkService.init();
+  await SentryFlutter.init(
+    (options) {
+      options.dsn = sentryDsn;
+      options.tracesSampleRate = sentryDsn.isEmpty ? 0 : 0.2;
+    },
+    appRunner: () async {
+      await _loadSavedThemeMode();
+      final seenOnboarding = await _hasSeenOnboarding();
+      runApp(
+        PlayMySetApp(initialRoute: seenOnboarding ? '/login' : '/onboarding'),
+      );
+      // Fire-and-forget: not awaited so app startup isn't blocked on it,
+      // and it needs navigatorKey.currentState to exist (i.e. runApp to
+      // have run) before it can navigate anywhere anyway.
+      DeepLinkService.init();
+    },
+  );
 }
 
 class PlayMySetApp extends StatelessWidget {
