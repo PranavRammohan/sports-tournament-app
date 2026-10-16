@@ -41,7 +41,11 @@ android {
         applicationId = "com.playmyset.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Pinned above Flutter's own default (24) — sentry_flutter requires
+        // API 26 (Android 8.0+). Drops Android 7.0/7.1, a small and shrinking
+        // slice of the install base by now; most apps have already made the
+        // same call.
+        minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
