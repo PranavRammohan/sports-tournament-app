@@ -12,6 +12,7 @@ const notificationRoutes = require('./notificationRoutes');
 const friendlyRoutes = require('./friendlyRoutes');
 const blockRoutes = require('./blockRoutes');
 const ladderRoutes = require('./ladderRoutes');
+const reportRoutes = require('./reportRoutes');
 const authMiddleware = require('./authMiddleware');
 
 initErrorReporting();
@@ -43,6 +44,21 @@ const authRateLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many attempts. Please try again later.' },
 });
+// Everything else behind authMiddleware had zero rate limiting until now —
+// fine while this app's whole user base is a handful of trusted people,
+// a real gap once it's public (scraping, abuse, a surprise DB bill).
+// Generous enough not to interfere with normal usage (e.g. the unread-
+// notification-count poll on every bottom-nav tab switch) while still
+// capping anything that isn't.
+const generalApiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please slow down and try again shortly.' },
+});
+app.use('/api', generalApiLimiter);
+
 app.use('/api/auth', authRateLimiter, authRoutes);
 app.use('/api/sports', authMiddleware, sportsRoutes);
 app.use('/api/leagues', authMiddleware, leagueRoutes);
@@ -52,6 +68,7 @@ app.use('/api/notifications', authMiddleware, notificationRoutes);
 app.use('/api/friendlies', authMiddleware, friendlyRoutes);
 app.use('/api/blocks', authMiddleware, blockRoutes);
 app.use('/api/ladder', authMiddleware, ladderRoutes);
+app.use('/api/reports', authMiddleware, reportRoutes);
 
 // Safety net for anything that escapes a route's own try/catch (a thrown
 // error in middleware, or a route that forgot one) — the console.error

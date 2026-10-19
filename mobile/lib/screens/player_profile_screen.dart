@@ -15,6 +15,7 @@ import '../widgets/rating_sparkline.dart';
 import '../widgets/win_rate_bar.dart';
 import '../widgets/recent_form_strip.dart';
 import '../widgets/friendly_challenge_dialog.dart';
+import '../widgets/report_player_dialog.dart';
 
 class PlayerProfileScreen extends StatefulWidget {
   final int userId;
@@ -134,37 +135,75 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
     }
   }
 
-  Future<void> _toggleBlock() async {
-    if (_isBlocked) {
-      setState(() => _blockActionInFlight = true);
-      try {
-        final res = await ApiClient.delete('/blocks/${widget.userId}');
-        if (!mounted) return;
-        if (res.statusCode == 200) {
-          setState(() => _isBlocked = false);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('${_user?['username'] ?? 'Player'} unblocked.')),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(res.errorOr('Could not unblock this player.')),
-              backgroundColor: AppColors.danger,
-            ),
-          );
-        }
-      } catch (err) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('Network error.')));
-        }
-      } finally {
-        if (mounted) setState(() => _blockActionInFlight = false);
+  Future<void> _unblockPlayer() async {
+    setState(() => _blockActionInFlight = true);
+    try {
+      final res = await ApiClient.delete('/blocks/${widget.userId}');
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        setState(() => _isBlocked = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${_user?['username'] ?? 'Player'} unblocked.')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not unblock this player.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
       }
-      return;
+    } catch (err) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Network error.')));
+      }
+    } finally {
+      if (mounted) setState(() => _blockActionInFlight = false);
     }
+  }
 
+  // Shared by the explicit "Block" menu action (confirm dialog below) and
+  // the report dialog's "also block this player" checkbox — doesn't show
+  // its own confirmation, since each caller already provides one (a
+  // dedicated confirm dialog, or the report dialog itself).
+  Future<bool> _blockPlayer({bool showSnackbar = true}) async {
+    setState(() => _blockActionInFlight = true);
+    try {
+      final res = await ApiClient.post('/blocks', body: {'userId': widget.userId});
+      if (!mounted) return false;
+      if (res.statusCode == 200) {
+        setState(() => _isBlocked = true);
+        if (showSnackbar) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${_user?['username'] ?? 'Player'} blocked.')),
+          );
+        }
+        return true;
+      }
+      if (showSnackbar) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.errorOr('Could not block this player.')),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+      return false;
+    } catch (err) {
+      if (mounted && showSnackbar) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Network error.')));
+      }
+      return false;
+    } finally {
+      if (mounted) setState(() => _blockActionInFlight = false);
+    }
+  }
+
+  Future<void> _confirmBlock() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -186,32 +225,50 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
       ),
     );
     if (confirmed != true || !mounted) return;
+    await _blockPlayer();
+  }
 
-    setState(() => _blockActionInFlight = true);
+  Future<void> _reportPlayer() async {
+    final result = await showReportPlayerDialog(
+      context,
+      playerName: _user?['username'] ?? 'this player',
+    );
+    if (result == null || !mounted) return;
+
     try {
-      final res = await ApiClient.post('/blocks', body: {'userId': widget.userId});
+      final res = await ApiClient.post(
+        '/reports',
+        body: {
+          'reportedUserId': widget.userId,
+          'reason': result['reason'],
+          'details': result['details'],
+        },
+      );
       if (!mounted) return;
-      if (res.statusCode == 200) {
-        setState(() => _isBlocked = true);
+      if (res.statusCode == 201) {
+        if (result['alsoBlock'] == true && !_isBlocked) {
+          await _blockPlayer(showSnackbar: false);
+        }
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${_user?['username'] ?? 'Player'} blocked.')),
+          const SnackBar(
+            content: Text('Report submitted. Thanks for letting us know.'),
+            backgroundColor: AppColors.success,
+          ),
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(res.errorOr('Could not block this player.')),
+            content: Text(res.errorOr('Could not submit the report.')),
             backgroundColor: AppColors.danger,
           ),
         );
       }
     } catch (err) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Network error.')));
-      }
-    } finally {
-      if (mounted) setState(() => _blockActionInFlight = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Network error.')));
     }
   }
 
@@ -281,11 +338,52 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
         title: Text(_user?['username'] ?? 'Player'),
         actions: [
           if (!_isOwnProfile && !_loading)
-            IconButton(
-              icon: Icon(_isBlocked ? Icons.block : Icons.block_outlined),
-              tooltip: _isBlocked ? 'Unblock player' : 'Block player',
-              onPressed: _blockActionInFlight ? null : _toggleBlock,
-            ),
+            _blockActionInFlight
+                ? const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: SizedBox(
+                      height: 18,
+                      width: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                : PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert),
+                    onSelected: (value) {
+                      if (value == 'report') {
+                        _reportPlayer();
+                      } else if (_isBlocked) {
+                        _unblockPlayer();
+                      } else {
+                        _confirmBlock();
+                      }
+                    },
+                    itemBuilder: (ctx) => [
+                      PopupMenuItem(
+                        value: _isBlocked ? 'unblock' : 'block',
+                        child: Row(
+                          children: [
+                            Icon(
+                              _isBlocked ? Icons.block : Icons.block_outlined,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 10),
+                            Text(_isBlocked ? 'Unblock player' : 'Block player'),
+                          ],
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'report',
+                        child: Row(
+                          children: [
+                            Icon(Icons.flag_outlined, size: 18),
+                            SizedBox(width: 10),
+                            Text('Report player'),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
         ],
       ),
       body: _loading

@@ -33,6 +33,29 @@ function generateJoinCode() {
   return code;
 }
 
+// Previously every join-code call site did a check-then-use SELECT before
+// inserting/updating — racy under concurrent requests, since two requests
+// can both pass the check before either commits, and there was no DB-level
+// constraint backing it up either. leagues.join_code now has a real UNIQUE
+// constraint (migration_join_code_unique.sql); this is the retry wrapper
+// that makes that constraint actually usable instead of just surfacing a
+// raw 500 on the rare real collision. `attemptFn(code)` should perform the
+// real INSERT/UPDATE using the generated code and return its result —
+// thrown errors other than a unique-violation on join_code propagate as-is.
+async function withUniqueJoinCode(attemptFn) {
+  const MAX_ATTEMPTS = 5;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const code = generateJoinCode();
+    try {
+      return await attemptFn(code);
+    } catch (err) {
+      const isJoinCodeCollision = err.code === '23505' && err.constraint === 'leagues_join_code_key';
+      if (!isJoinCodeCollision || attempt === MAX_ATTEMPTS) throw err;
+      // Otherwise loop and try again with a freshly generated code.
+    }
+  }
+}
+
 function isPowerOfTwo(n) {
   return n > 0 && (n & (n - 1)) === 0;
 }
@@ -239,42 +262,37 @@ router.post('/create', async (req, res) => {
   }
 
   try {
-    let joinCode = null;
-    if (isPrivate === true) {
-      let unique = false;
-      while (!unique) {
-        joinCode = generateJoinCode();
-        const existing = await pool.query('SELECT id FROM leagues WHERE join_code = $1', [joinCode]);
-        if (existing.rows.length === 0) unique = true;
-      }
-    }
+    const insertLeague = async (joinCode) => {
+      const result = await pool.query(
+        `INSERT INTO leagues (name, sport, area, city, season_start, season_end, created_by, format, gender_category,
+                              schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
+                              min_rating, max_rating, registration_start, registration_end, partner_mode,
+                              points_enabled, points_win, points_loss, max_players)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+         RETURNING id, name, sport, area, city, season_start, season_end, format, gender_category, created_by,
+                   schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
+                   min_rating, max_rating, registration_start, registration_end, partner_mode,
+                   points_enabled, points_win, points_loss, max_players`,
+        [
+          name, sport, area, city, seasonStart, seasonEnd, userId, format, genderCategory,
+          finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null,
+          hostEntersScores === true, isPrivate === true, joinCode,
+          academyName && academyName.trim().length > 0 ? academyName.trim() : null,
+          minRating != null ? parseFloat(minRating) : null,
+          maxRating != null ? parseFloat(maxRating) : null,
+          registrationStart || null,
+          registrationEnd || null,
+          format === 'doubles' ? finalPartnerMode : 'host_auto',
+          finalPointsEnabled, finalPointsEnabled ? finalPointsWin : 0, finalPointsEnabled ? finalPointsLoss : 0,
+          maxPlayers != null ? maxPlayers : null,
+        ]
+      );
+      return result.rows[0];
+    };
 
-    const result = await pool.query(
-      `INSERT INTO leagues (name, sport, area, city, season_start, season_end, created_by, format, gender_category,
-                            schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
-                            min_rating, max_rating, registration_start, registration_end, partner_mode,
-                            points_enabled, points_win, points_loss, max_players)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
-       RETURNING id, name, sport, area, city, season_start, season_end, format, gender_category, created_by,
-                 schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
-                 min_rating, max_rating, registration_start, registration_end, partner_mode,
-                 points_enabled, points_win, points_loss, max_players`,
-      [
-        name, sport, area, city, seasonStart, seasonEnd, userId, format, genderCategory,
-        finalScheduleType, finalScheduleType === 'matches_per_player' ? matchesPerPlayer : null,
-        hostEntersScores === true, isPrivate === true, joinCode,
-        academyName && academyName.trim().length > 0 ? academyName.trim() : null,
-        minRating != null ? parseFloat(minRating) : null,
-        maxRating != null ? parseFloat(maxRating) : null,
-        registrationStart || null,
-        registrationEnd || null,
-        format === 'doubles' ? finalPartnerMode : 'host_auto',
-        finalPointsEnabled, finalPointsEnabled ? finalPointsWin : 0, finalPointsEnabled ? finalPointsLoss : 0,
-        maxPlayers != null ? maxPlayers : null,
-      ]
-    );
-
-    const league = result.rows[0];
+    const league = isPrivate === true
+      ? await withUniqueJoinCode(insertLeague)
+      : await insertLeague(null);
 
     if (hostPlays !== false) {
       await pool.query(
@@ -2599,66 +2617,73 @@ router.post('/:id/leave', async (req, res) => {
   const leagueId = req.params.id;
 
   try {
-    const league = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
-    if (league.rows.length === 0) {
-      return res.status(404).json({ error: 'Tournament not found.' });
-    }
-    if (league.rows[0].created_by === userId) {
-      return res.status(400).json({ error: 'As the host, you cannot leave — you can delete the tournament instead.' });
-    }
+    await pool.withTransaction(async (client) => {
+      const league = await client.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+      if (league.rows.length === 0) {
+        throw new RouteError(404, 'Tournament not found.');
+      }
+      if (league.rows[0].created_by === userId) {
+        throw new RouteError(400, 'As the host, you cannot leave — you can delete the tournament instead.');
+      }
 
-    const memberResult = await pool.query(
-      'SELECT * FROM league_members WHERE league_id = $1 AND user_id = $2',
-      [leagueId, userId]
-    );
-    if (memberResult.rows.length === 0) {
-      return res.status(404).json({ error: "You aren't a member of this league." });
-    }
-    const partnerId = memberResult.rows[0].partner_id;
-
-    // Same fixture cleanup as host-initiated removal (DELETE /:id/members/:userId
-    // below) — without this, every fixture already generated still lists the
-    // player who left: they'd still show up in the schedule, could still
-    // report a result into it, and ratings/points would apply against
-    // someone no longer in the league.
-    await pool.query(
-      `DELETE FROM matches
-       WHERE league_id = $1 AND status IN ('pending', 'rejected')
-         AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)`,
-      [leagueId, userId]
-    );
-    await pool.query(
-      `DELETE FROM scheduled_matches
-       WHERE league_id = $1
-         AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)
-         AND id NOT IN (
-           SELECT scheduled_match_id FROM matches WHERE scheduled_match_id IS NOT NULL AND status = 'confirmed'
-         )`,
-      [leagueId, userId]
-    );
-    await pool.query(
-      `DELETE FROM playoff_matches
-       WHERE league_id = $1 AND status != 'confirmed'
-         AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)`,
-      [leagueId, userId]
-    );
-    await pool.query(
-      `DELETE FROM group_members
-       WHERE user_id = $1 AND group_id IN (SELECT id FROM league_groups WHERE league_id = $2)`,
-      [userId, leagueId]
-    );
-    await pool.query('DELETE FROM league_members WHERE league_id = $1 AND user_id = $2', [leagueId, userId]);
-
-    if (partnerId) {
-      await pool.query(
-        `UPDATE league_members SET partner_id = NULL, partner_status = NULL
-         WHERE league_id = $1 AND user_id = $2`,
-        [leagueId, partnerId]
+      const memberResult = await client.query(
+        'SELECT * FROM league_members WHERE league_id = $1 AND user_id = $2',
+        [leagueId, userId]
       );
-    }
+      if (memberResult.rows.length === 0) {
+        throw new RouteError(404, "You aren't a member of this league.");
+      }
+      const partnerId = memberResult.rows[0].partner_id;
+
+      // Same fixture cleanup as host-initiated removal (DELETE /:id/members/:userId
+      // below) — without this, every fixture already generated still lists the
+      // player who left: they'd still show up in the schedule, could still
+      // report a result into it, and ratings/points would apply against
+      // someone no longer in the league. All one transaction now — a failure
+      // partway through previously could leave some of these deleted and
+      // others not.
+      await client.query(
+        `DELETE FROM matches
+         WHERE league_id = $1 AND status IN ('pending', 'rejected')
+           AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)`,
+        [leagueId, userId]
+      );
+      await client.query(
+        `DELETE FROM scheduled_matches
+         WHERE league_id = $1
+           AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)
+           AND id NOT IN (
+             SELECT scheduled_match_id FROM matches WHERE scheduled_match_id IS NOT NULL AND status = 'confirmed'
+           )`,
+        [leagueId, userId]
+      );
+      await client.query(
+        `DELETE FROM playoff_matches
+         WHERE league_id = $1 AND status != 'confirmed'
+           AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)`,
+        [leagueId, userId]
+      );
+      await client.query(
+        `DELETE FROM group_members
+         WHERE user_id = $1 AND group_id IN (SELECT id FROM league_groups WHERE league_id = $2)`,
+        [userId, leagueId]
+      );
+      await client.query('DELETE FROM league_members WHERE league_id = $1 AND user_id = $2', [leagueId, userId]);
+
+      if (partnerId) {
+        await client.query(
+          `UPDATE league_members SET partner_id = NULL, partner_status = NULL
+           WHERE league_id = $1 AND user_id = $2`,
+          [leagueId, partnerId]
+        );
+      }
+    });
 
     res.status(200).json({ message: 'You left the tournament.' });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Leave league error:', err);
     res.status(500).json({ error: 'Something went wrong leaving the tournament.' });
   }
@@ -2671,83 +2696,88 @@ router.delete('/:id/members/:userId', async (req, res) => {
   const targetUserId = parseInt(req.params.userId, 10);
 
   try {
-    const leagueResult = await pool.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
-    if (leagueResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Tournament not found.' });
-    }
-    const league = leagueResult.rows[0];
+    await pool.withTransaction(async (client) => {
+      const leagueResult = await client.query('SELECT * FROM leagues WHERE id = $1', [leagueId]);
+      if (leagueResult.rows.length === 0) {
+        throw new RouteError(404, 'Tournament not found.');
+      }
+      const league = leagueResult.rows[0];
 
-    if (!(await isLeagueAdmin(pool, league, hostId))) {
-      return res.status(403).json({ error: 'Only the tournament host or a co-host can remove players.' });
-    }
-    if (targetUserId === hostId) {
-      return res.status(400).json({ error: 'You cannot remove yourself. Delete the tournament instead if needed.' });
-    }
+      if (!(await isLeagueAdmin(client, league, hostId))) {
+        throw new RouteError(403, 'Only the tournament host or a co-host can remove players.');
+      }
+      if (targetUserId === hostId) {
+        throw new RouteError(400, 'You cannot remove yourself. Delete the tournament instead if needed.');
+      }
 
-    const memberCheck = await pool.query(
-      'SELECT * FROM league_members WHERE league_id = $1 AND user_id = $2',
-      [leagueId, targetUserId]
-    );
-    if (memberCheck.rows.length === 0) {
-      return res.status(404).json({ error: 'This player is not a member of this tournament.' });
-    }
-    // A co-host can remove regular players, but not another co-host — only
-    // the primary host can do that, same reasoning as why co-host status
-    // itself can only be granted/revoked by the primary host.
-    if (memberCheck.rows[0].is_co_host && league.created_by !== hostId) {
-      return res.status(403).json({ error: 'Only the tournament host can remove a co-host.' });
-    }
-    const partnerId = memberCheck.rows[0].partner_id;
-
-    await pool.query(
-      `DELETE FROM matches
-       WHERE league_id = $1 AND status IN ('pending', 'rejected')
-         AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)`,
-      [leagueId, targetUserId]
-    );
-    await pool.query(
-      `DELETE FROM scheduled_matches
-       WHERE league_id = $1
-         AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)
-         AND id NOT IN (
-           SELECT scheduled_match_id FROM matches WHERE scheduled_match_id IS NOT NULL AND status = 'confirmed'
-         )`,
-      [leagueId, targetUserId]
-    );
-    await pool.query(
-      `DELETE FROM playoff_matches
-       WHERE league_id = $1 AND status != 'confirmed'
-         AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)`,
-      [leagueId, targetUserId]
-    );
-    await pool.query(
-      `DELETE FROM group_members
-       WHERE user_id = $1 AND group_id IN (SELECT id FROM league_groups WHERE league_id = $2)`,
-      [targetUserId, leagueId]
-    );
-
-    await pool.query(
-      'DELETE FROM league_members WHERE league_id = $1 AND user_id = $2',
-      [leagueId, targetUserId]
-    );
-
-    if (partnerId) {
-      await pool.query(
-        `UPDATE league_members SET partner_id = NULL, partner_status = NULL
-         WHERE league_id = $1 AND user_id = $2`,
-        [leagueId, partnerId]
+      const memberCheck = await client.query(
+        'SELECT * FROM league_members WHERE league_id = $1 AND user_id = $2',
+        [leagueId, targetUserId]
       );
-    }
+      if (memberCheck.rows.length === 0) {
+        throw new RouteError(404, 'This player is not a member of this tournament.');
+      }
+      // A co-host can remove regular players, but not another co-host — only
+      // the primary host can do that, same reasoning as why co-host status
+      // itself can only be granted/revoked by the primary host.
+      if (memberCheck.rows[0].is_co_host && league.created_by !== hostId) {
+        throw new RouteError(403, 'Only the tournament host can remove a co-host.');
+      }
+      const partnerId = memberCheck.rows[0].partner_id;
 
-    await recordAudit(pool, {
-      leagueId,
-      actorId: hostId,
-      action: 'remove_player',
-      summary: `Removed player #${targetUserId} from the league.`,
+      await client.query(
+        `DELETE FROM matches
+         WHERE league_id = $1 AND status IN ('pending', 'rejected')
+           AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)`,
+        [leagueId, targetUserId]
+      );
+      await client.query(
+        `DELETE FROM scheduled_matches
+         WHERE league_id = $1
+           AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)
+           AND id NOT IN (
+             SELECT scheduled_match_id FROM matches WHERE scheduled_match_id IS NOT NULL AND status = 'confirmed'
+           )`,
+        [leagueId, targetUserId]
+      );
+      await client.query(
+        `DELETE FROM playoff_matches
+         WHERE league_id = $1 AND status != 'confirmed'
+           AND (player1_id = $2 OR player2_id = $2 OR player1_partner_id = $2 OR player2_partner_id = $2)`,
+        [leagueId, targetUserId]
+      );
+      await client.query(
+        `DELETE FROM group_members
+         WHERE user_id = $1 AND group_id IN (SELECT id FROM league_groups WHERE league_id = $2)`,
+        [targetUserId, leagueId]
+      );
+
+      await client.query(
+        'DELETE FROM league_members WHERE league_id = $1 AND user_id = $2',
+        [leagueId, targetUserId]
+      );
+
+      if (partnerId) {
+        await client.query(
+          `UPDATE league_members SET partner_id = NULL, partner_status = NULL
+           WHERE league_id = $1 AND user_id = $2`,
+          [leagueId, partnerId]
+        );
+      }
+
+      await recordAudit(client, {
+        leagueId,
+        actorId: hostId,
+        action: 'remove_player',
+        summary: `Removed player #${targetUserId} from the league.`,
+      });
     });
 
     res.status(200).json({ message: 'Player removed from tournament.' });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Remove player error:', err);
     res.status(500).json({ error: 'Something went wrong removing the player.' });
   }
@@ -3047,15 +3077,8 @@ router.post('/:id/generate-schedule', async (req, res) => {
     }
 
     if (league.schedule_type === 'knockout') {
-      return generateKnockoutBracket(req, res, league);
-    }
-
-    const existing = await pool.query(
-      'SELECT id FROM scheduled_matches WHERE league_id = $1 LIMIT 1',
-      [leagueId]
-    );
-    if (existing.rows.length > 0) {
-      return res.status(409).json({ error: 'Schedule has already been generated for this tournament. Use Regenerate to make a new one.' });
+      const result = await generateKnockoutBracket(league);
+      return res.status(201).json(result);
     }
 
     const membersResult = await pool.query(
@@ -3108,52 +3131,146 @@ router.post('/:id/generate-schedule', async (req, res) => {
       throw buildErr;
     }
 
-    for (const m of scheduledMatches) {
-      await pool.query(
-        `INSERT INTO scheduled_matches
-          (league_id, tier_number, player1_id, player1_partner_id, player2_id, player2_partner_id)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [leagueId, m.tierNumber, m.player1Id, m.player1PartnerId, m.player2Id, m.player2PartnerId]
+    // The "already generated" check and the insert loop are one atomic
+    // unit now — previously sequential pool.query calls, so a double-
+    // submit (impatient double-tap, slow connection) could pass the check
+    // twice before either insert loop finished and generate two schedules.
+    await pool.withTransaction(async (client) => {
+      const existing = await client.query(
+        'SELECT id FROM scheduled_matches WHERE league_id = $1 LIMIT 1',
+        [leagueId]
       );
-    }
+      if (existing.rows.length > 0) {
+        throw new RouteError(409, 'Schedule has already been generated for this tournament. Use Regenerate to make a new one.');
+      }
+
+      for (const m of scheduledMatches) {
+        await client.query(
+          `INSERT INTO scheduled_matches
+            (league_id, tier_number, player1_id, player1_partner_id, player2_id, player2_partner_id)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [leagueId, m.tierNumber, m.player1Id, m.player1PartnerId, m.player2Id, m.player2PartnerId]
+        );
+      }
+    });
 
     res.status(201).json({ message: 'Schedule generated.', matchCount: scheduledMatches.length });
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Generate schedule error:', err);
     res.status(500).json({ error: 'Something went wrong generating the schedule.' });
   }
 });
 
-async function generateKnockoutBracket(req, res, league) {
+// Takes just `league` (not req/res — it never used req, and now builds its
+// own response payload for the caller to send) and wraps itself in its own
+// transaction, so its "already generated" check and the full insert
+// sequence are one atomic unit — previously plain sequential pool.query
+// calls, raceable the same way /generate-schedule's was. Callers
+// (POST /:id/generate-schedule and /regenerate-schedule's knockout
+// outcome) stay in charge of when this runs relative to their own work;
+// regenerate-schedule in particular deliberately calls this AFTER its own
+// wipe-and-rebuild transaction commits, so a wipe always lands cleanly
+// even if bracket generation itself then fails — see that route's comment.
+async function generateKnockoutBracket(league) {
   const leagueId = league.id;
 
-  const existing = await pool.query('SELECT id FROM playoff_matches WHERE league_id = $1 LIMIT 1', [leagueId]);
-  if (existing.rows.length > 0) {
-    return res.status(409).json({ error: 'A bracket has already been generated for this tournament.' });
-  }
-
-  const membersResult = await pool.query(
-    `SELECT u.id, u.username, u.gender, us.rating, lm.partner_id, lm.partner_status
-     FROM league_members lm
-     JOIN users u ON u.id = lm.user_id
-     JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
-     WHERE lm.league_id = $3
-     ORDER BY us.rating DESC`,
-    [league.sport, league.format, leagueId]
-  );
-  const members = membersResult.rows;
-
-  if (league.format === 'singles') {
-    if (members.length < 2) {
-      return res.status(400).json({
-        error: `Knockout leagues need at least 2 players. Currently has ${members.length}.`,
-      });
+  return pool.withTransaction(async (client) => {
+    const existing = await client.query('SELECT id FROM playoff_matches WHERE league_id = $1 LIMIT 1', [leagueId]);
+    if (existing.rows.length > 0) {
+      throw new RouteError(409, 'A bracket has already been generated for this tournament.');
     }
 
-    // Doesn't need to be a power of two — the bracket is built one size up
-    // when it isn't, and the gap becomes byes (see playoffRoutes.js's
-    // POST /:leagueId/generate, which uses the identical approach).
-    const realCount = members.length;
+    const membersResult = await client.query(
+      `SELECT u.id, u.username, u.gender, us.rating, lm.partner_id, lm.partner_status
+       FROM league_members lm
+       JOIN users u ON u.id = lm.user_id
+       JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+       WHERE lm.league_id = $3
+       ORDER BY us.rating DESC`,
+      [league.sport, league.format, leagueId]
+    );
+    const members = membersResult.rows;
+
+    if (league.format === 'singles') {
+      if (members.length < 2) {
+        throw new RouteError(400, `Knockout leagues need at least 2 players. Currently has ${members.length}.`);
+      }
+
+      // Doesn't need to be a power of two — the bracket is built one size up
+      // when it isn't, and the gap becomes byes (see playoffRoutes.js's
+      // POST /:leagueId/generate, which uses the identical approach).
+      const realCount = members.length;
+      const bracketSize = nextPowerOfTwo(realCount);
+      const seedOrder = generateSeedOrder(bracketSize);
+      const totalRounds = Math.log2(bracketSize);
+      const byeMatches = [];
+
+      for (let i = 0; i < seedOrder.length; i += 2) {
+        const seedA = seedOrder[i];
+        const seedB = seedOrder[i + 1];
+        const position = i / 2 + 1;
+        const playerA = seedA <= realCount ? members[seedA - 1] : null;
+        const playerB = seedB <= realCount ? members[seedB - 1] : null;
+
+        if (playerA && playerB) {
+          await client.query(
+            `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, player2_id, status)
+             VALUES ($1, 1, $2, $3, $4, 'ready')`,
+            [leagueId, position, playerA.id, playerB.id]
+          );
+        } else if (playerA || playerB) {
+          const byePlayer = playerA || playerB;
+          const byeMatch = await client.query(
+            `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, winner_id, status)
+             VALUES ($1, 1, $2, $3, $3, 'bye') RETURNING *`,
+            [leagueId, position, byePlayer.id]
+          );
+          byeMatches.push(byeMatch.rows[0]);
+        } else {
+          throw new RouteError(500, 'Unexpected bracket seeding error.');
+        }
+      }
+
+      for (let round = 2; round <= totalRounds; round++) {
+        const matchesInRound = bracketSize / Math.pow(2, round);
+        for (let pos = 1; pos <= matchesInRound; pos++) {
+          await client.query(
+            `INSERT INTO playoff_matches (league_id, round_number, position, status)
+             VALUES ($1, $2, $3, 'pending')`,
+            [leagueId, round, pos]
+          );
+        }
+      }
+
+      for (const byeMatch of byeMatches) {
+        await advanceWinner(client, byeMatch);
+      }
+
+      return { message: 'Bracket generated.', matchCount: seedOrder.length / 2 };
+    }
+
+    // Doubles: resolve teams first, then bracket them exactly like singles
+    // but with each "seed" being a team (player + partner).
+    let teams;
+    try {
+      teams = resolveDoublesTeams(league, members);
+    } catch (buildErr) {
+      if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT' || buildErr.code === 'UNEVEN_GENDER_SPLIT') {
+        throw new RouteError(400, buildErr.message);
+      }
+      throw buildErr;
+    }
+
+    teams.sort((a, b) => b.avgRating - a.avgRating);
+
+    if (teams.length < 2) {
+      throw new RouteError(400, `Knockout doubles leagues need at least 2 teams. Currently has ${teams.length} team(s) — ${members.length} player(s).`);
+    }
+
+    const realCount = teams.length;
     const bracketSize = nextPowerOfTwo(realCount);
     const seedOrder = generateSeedOrder(bracketSize);
     const totalRounds = Math.log2(bracketSize);
@@ -3163,21 +3280,23 @@ async function generateKnockoutBracket(req, res, league) {
       const seedA = seedOrder[i];
       const seedB = seedOrder[i + 1];
       const position = i / 2 + 1;
-      const playerA = seedA <= realCount ? members[seedA - 1] : null;
-      const playerB = seedB <= realCount ? members[seedB - 1] : null;
+      const teamA = seedA <= realCount ? teams[seedA - 1] : null;
+      const teamB = seedB <= realCount ? teams[seedB - 1] : null;
 
-      if (playerA && playerB) {
-        await pool.query(
-          `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, player2_id, status)
-           VALUES ($1, 1, $2, $3, $4, 'ready')`,
-          [leagueId, position, playerA.id, playerB.id]
+      if (teamA && teamB) {
+        await client.query(
+          `INSERT INTO playoff_matches
+            (league_id, round_number, position, player1_id, player1_partner_id, player2_id, player2_partner_id, status)
+           VALUES ($1, 1, $2, $3, $4, $5, $6, 'ready')`,
+          [leagueId, position, teamA.player1.id, teamA.player2.id, teamB.player1.id, teamB.player2.id]
         );
-      } else if (playerA || playerB) {
-        const byePlayer = playerA || playerB;
-        const byeMatch = await pool.query(
-          `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, winner_id, status)
-           VALUES ($1, 1, $2, $3, $3, 'bye') RETURNING *`,
-          [leagueId, position, byePlayer.id]
+      } else if (teamA || teamB) {
+        const byeTeam = teamA || teamB;
+        const byeMatch = await client.query(
+          `INSERT INTO playoff_matches
+            (league_id, round_number, position, player1_id, player1_partner_id, winner_id, status)
+           VALUES ($1, 1, $2, $3, $4, $3, 'bye') RETURNING *`,
+          [leagueId, position, byeTeam.player1.id, byeTeam.player2.id]
         );
         byeMatches.push(byeMatch.rows[0]);
       } else {
@@ -3188,7 +3307,7 @@ async function generateKnockoutBracket(req, res, league) {
     for (let round = 2; round <= totalRounds; round++) {
       const matchesInRound = bracketSize / Math.pow(2, round);
       for (let pos = 1; pos <= matchesInRound; pos++) {
-        await pool.query(
+        await client.query(
           `INSERT INTO playoff_matches (league_id, round_number, position, status)
            VALUES ($1, $2, $3, 'pending')`,
           [leagueId, round, pos]
@@ -3197,82 +3316,11 @@ async function generateKnockoutBracket(req, res, league) {
     }
 
     for (const byeMatch of byeMatches) {
-      await advanceWinner(pool, byeMatch);
+      await advanceWinner(client, byeMatch);
     }
 
-    return res.status(201).json({ message: 'Bracket generated.', matchCount: seedOrder.length / 2 });
-  }
-
-  // Doubles: resolve teams first, then bracket them exactly like singles but
-  // with each "seed" being a team (player + partner).
-  let teams;
-  try {
-    teams = resolveDoublesTeams(league, members);
-  } catch (buildErr) {
-    if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT' || buildErr.code === 'UNEVEN_GENDER_SPLIT') {
-      return res.status(400).json({ error: buildErr.message });
-    }
-    throw buildErr;
-  }
-
-  teams.sort((a, b) => b.avgRating - a.avgRating);
-
-  if (teams.length < 2) {
-    return res.status(400).json({
-      error: `Knockout doubles leagues need at least 2 teams. Currently has ${teams.length} team(s) — ${members.length} player(s).`,
-    });
-  }
-
-  const realCount = teams.length;
-  const bracketSize = nextPowerOfTwo(realCount);
-  const seedOrder = generateSeedOrder(bracketSize);
-  const totalRounds = Math.log2(bracketSize);
-  const byeMatches = [];
-
-  for (let i = 0; i < seedOrder.length; i += 2) {
-    const seedA = seedOrder[i];
-    const seedB = seedOrder[i + 1];
-    const position = i / 2 + 1;
-    const teamA = seedA <= realCount ? teams[seedA - 1] : null;
-    const teamB = seedB <= realCount ? teams[seedB - 1] : null;
-
-    if (teamA && teamB) {
-      await pool.query(
-        `INSERT INTO playoff_matches
-          (league_id, round_number, position, player1_id, player1_partner_id, player2_id, player2_partner_id, status)
-         VALUES ($1, 1, $2, $3, $4, $5, $6, 'ready')`,
-        [leagueId, position, teamA.player1.id, teamA.player2.id, teamB.player1.id, teamB.player2.id]
-      );
-    } else if (teamA || teamB) {
-      const byeTeam = teamA || teamB;
-      const byeMatch = await pool.query(
-        `INSERT INTO playoff_matches
-          (league_id, round_number, position, player1_id, player1_partner_id, winner_id, status)
-         VALUES ($1, 1, $2, $3, $4, $3, 'bye') RETURNING *`,
-        [leagueId, position, byeTeam.player1.id, byeTeam.player2.id]
-      );
-      byeMatches.push(byeMatch.rows[0]);
-    } else {
-      throw new RouteError(500, 'Unexpected bracket seeding error.');
-    }
-  }
-
-  for (let round = 2; round <= totalRounds; round++) {
-    const matchesInRound = bracketSize / Math.pow(2, round);
-    for (let pos = 1; pos <= matchesInRound; pos++) {
-      await pool.query(
-        `INSERT INTO playoff_matches (league_id, round_number, position, status)
-         VALUES ($1, $2, $3, 'pending')`,
-        [leagueId, round, pos]
-      );
-    }
-  }
-
-  for (const byeMatch of byeMatches) {
-    await advanceWinner(pool, byeMatch);
-  }
-
-  res.status(201).json({ message: 'Bracket generated.', matchCount: seedOrder.length / 2 });
+    return { message: 'Bracket generated.', matchCount: seedOrder.length / 2 };
+  });
 }
 
 // ---------- ADD A MANUAL MATCH (custom format, host only) ----------
@@ -3645,7 +3693,8 @@ router.post('/:id/regenerate-schedule', async (req, res) => {
       return res.status(200).json({ message: 'Schedule cleared and previous match history reversed. Add matches manually.', matchCount: 0 });
     }
     if (outcome === 'knockout') {
-      return generateKnockoutBracket(req, res, refreshedLeague);
+      const result = await generateKnockoutBracket(refreshedLeague);
+      return res.status(201).json(result);
     }
 
     res.status(201).json({ message: 'Schedule regenerated. All previous match history and rating changes for this tournament have been reversed.', matchCount: scheduledMatches.length });
@@ -4439,17 +4488,16 @@ router.put('/:id', async (req, res) => {
       params.push(hostEntersScores === true);
     }
 
+    // joinCodeParamIndex tracks where in `params` the generated code landed
+    // (if this update includes one) so the retry loop around the final
+    // UPDATE below can swap in a fresh code on a collision, without
+    // rebuilding the whole dynamic field list.
+    let joinCodeParamIndex = null;
     if (isPrivate !== undefined) {
       if (isPrivate === true && !league.join_code) {
-        let joinCode;
-        let unique = false;
-        while (!unique) {
-          joinCode = generateJoinCode();
-          const existing = await pool.query('SELECT id FROM leagues WHERE join_code = $1', [joinCode]);
-          if (existing.rows.length === 0) unique = true;
-        }
         updates.push(`is_private = $${idx++}`); params.push(true);
-        updates.push(`join_code = $${idx++}`); params.push(joinCode);
+        updates.push(`join_code = $${idx++}`); params.push(generateJoinCode());
+        joinCodeParamIndex = params.length - 1;
       } else {
         updates.push(`is_private = $${idx++}`); params.push(isPrivate === true);
       }
@@ -4515,10 +4563,20 @@ router.put('/:id', async (req, res) => {
     }
 
     params.push(leagueId);
-    const result = await pool.query(
-      `UPDATE leagues SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`,
-      params
-    );
+    const updateSql = `UPDATE leagues SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`;
+
+    let result;
+    const MAX_JOIN_CODE_ATTEMPTS = 5;
+    for (let attempt = 1; attempt <= MAX_JOIN_CODE_ATTEMPTS; attempt++) {
+      try {
+        result = await pool.query(updateSql, params);
+        break;
+      } catch (err) {
+        const isJoinCodeCollision = err.code === '23505' && err.constraint === 'leagues_join_code_key';
+        if (!isJoinCodeCollision || joinCodeParamIndex == null || attempt === MAX_JOIN_CODE_ATTEMPTS) throw err;
+        params[joinCodeParamIndex] = generateJoinCode();
+      }
+    }
 
     res.status(200).json({ league: result.rows[0] });
   } catch (err) {
@@ -4554,31 +4612,48 @@ router.post('/:id/clone', async (req, res) => {
     }
 
     const newLeague = await pool.withTransaction(async (client) => {
-      let joinCode = null;
-      if (league.is_private) {
-        let unique = false;
-        while (!unique) {
-          joinCode = generateJoinCode();
-          const existing = await client.query('SELECT id FROM leagues WHERE join_code = $1', [joinCode]);
-          if (existing.rows.length === 0) unique = true;
-        }
-      }
+      const insertWithCode = async (joinCode) => {
+        const insertResult = await client.query(
+          `INSERT INTO leagues (name, sport, area, city, season_start, season_end, created_by, format, gender_category,
+                                schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
+                                min_rating, max_rating, registration_start, registration_end, partner_mode,
+                                points_enabled, points_win, points_loss, max_players)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULL, NULL, $18, $19, $20, $21, $22)
+           RETURNING *`,
+          [
+            name, league.sport, league.area, league.city, seasonStart, seasonEnd, userId, league.format, league.gender_category,
+            league.schedule_type, league.matches_per_player, league.host_enters_scores, league.is_private, joinCode,
+            league.academy_name, league.min_rating, league.max_rating, league.partner_mode,
+            league.points_enabled, league.points_win, league.points_loss, league.max_players,
+          ]
+        );
+        return insertResult.rows[0];
+      };
 
-      const insertResult = await client.query(
-        `INSERT INTO leagues (name, sport, area, city, season_start, season_end, created_by, format, gender_category,
-                              schedule_type, matches_per_player, host_enters_scores, is_private, join_code, academy_name,
-                              min_rating, max_rating, registration_start, registration_end, partner_mode,
-                              points_enabled, points_win, points_loss, max_players)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULL, NULL, $18, $19, $20, $21, $22)
-         RETURNING *`,
-        [
-          name, league.sport, league.area, league.city, seasonStart, seasonEnd, userId, league.format, league.gender_category,
-          league.schedule_type, league.matches_per_player, league.host_enters_scores, league.is_private, joinCode,
-          league.academy_name, league.min_rating, league.max_rating, league.partner_mode,
-          league.points_enabled, league.points_win, league.points_loss, league.max_players,
-        ]
-      );
-      const cloned = insertResult.rows[0];
+      let cloned;
+      if (league.is_private) {
+        // Already inside a transaction — a failed statement aborts the
+        // whole transaction block in Postgres, not just itself, so a plain
+        // catch-and-retry (fine for the other two join-code call sites,
+        // which each run as their own implicit transaction) would leave
+        // this client unusable after the first collision. A SAVEPOINT
+        // scopes the rollback to just the failed attempt.
+        const MAX_ATTEMPTS = 5;
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+          const joinCode = generateJoinCode();
+          await client.query('SAVEPOINT join_code_attempt');
+          try {
+            cloned = await insertWithCode(joinCode);
+            break;
+          } catch (err) {
+            await client.query('ROLLBACK TO SAVEPOINT join_code_attempt');
+            const isJoinCodeCollision = err.code === '23505' && err.constraint === 'leagues_join_code_key';
+            if (!isJoinCodeCollision || attempt === MAX_ATTEMPTS) throw err;
+          }
+        }
+      } else {
+        cloned = await insertWithCode(null);
+      }
 
       // Roster copy is opt-in — points/wins/losses live on league_members and
       // are correctly left behind (a fresh row has no points), but pairing

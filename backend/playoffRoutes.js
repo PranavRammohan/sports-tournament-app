@@ -494,11 +494,6 @@ router.post('/:leagueId/generate', async (req, res) => {
       return res.status(400).json({ error: 'This tournament has been marked completed and is now read-only.' });
     }
 
-    const existing = await pool.query('SELECT id FROM playoff_matches WHERE league_id = $1 LIMIT 1', [leagueId]);
-    if (existing.rows.length > 0) {
-      return res.status(409).json({ error: 'A bracket has already been started for this tournament.' });
-    }
-
     // Warn (rather than block outright) if the regular season still has
     // unplayed fixtures — the host might have a good reason to start early
     // (forfeits, time constraints), so this is a confirm-to-override rather
@@ -521,27 +516,127 @@ router.post('/:leagueId/generate', async (req, res) => {
       }
     }
 
-    if (league.format === 'singles') {
-      const standingsResult = await pool.query(
-        `SELECT u.id, us.rating, lm.points
+    // The "already started" check and every insert below are one atomic
+    // unit now — previously sequential pool.query calls, raceable the same
+    // way leagueRoutes.js's generation paths were (a double-submit could
+    // pass the check twice before either insert sequence finished).
+    const result = await pool.withTransaction(async (client) => {
+      const existing = await client.query('SELECT id FROM playoff_matches WHERE league_id = $1 LIMIT 1', [leagueId]);
+      if (existing.rows.length > 0) {
+        throw new RouteError(409, 'A bracket has already been started for this tournament.');
+      }
+
+      if (league.format === 'singles') {
+        const standingsResult = await client.query(
+          `SELECT u.id, us.rating, lm.points
+           FROM league_members lm
+           JOIN users u ON u.id = lm.user_id
+           JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
+           WHERE lm.league_id = $3
+           ORDER BY lm.points DESC, us.rating DESC
+           LIMIT $4`,
+          [league.sport, league.format, leagueId, qualifierCount]
+        );
+        const qualifiers = standingsResult.rows;
+
+        if (qualifiers.length < qualifierCount) {
+          throw new RouteError(400, `Need at least ${qualifierCount} players in the leaderboard to start this bracket size.`);
+        }
+
+        // qualifierCount is the real number of entrants, which needn't be a
+        // power of two — the bracket itself is built at the next power of two
+        // up, and any seed beyond qualifierCount is a bye: whichever real
+        // entrant it's paired against advances immediately, no match played.
+        const bracketSize = nextPowerOfTwo(qualifierCount);
+        const seedOrder = generateSeedOrder(bracketSize);
+        const totalRounds = Math.log2(bracketSize);
+        const byeMatches = [];
+
+        for (let i = 0; i < seedOrder.length; i += 2) {
+          const seedA = seedOrder[i];
+          const seedB = seedOrder[i + 1];
+          const position = i / 2 + 1;
+          const playerA = seedA <= qualifierCount ? qualifiers[seedA - 1] : null;
+          const playerB = seedB <= qualifierCount ? qualifiers[seedB - 1] : null;
+
+          if (playerA && playerB) {
+            await client.query(
+              `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, player2_id, status)
+               VALUES ($1, 1, $2, $3, $4, 'ready')`,
+              [leagueId, position, playerA.id, playerB.id]
+            );
+          } else if (playerA || playerB) {
+            const byePlayer = playerA || playerB;
+            const byeMatch = await client.query(
+              `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, winner_id, status)
+               VALUES ($1, 1, $2, $3, $3, 'bye') RETURNING *`,
+              [leagueId, position, byePlayer.id]
+            );
+            byeMatches.push(byeMatch.rows[0]);
+          } else {
+            // Mathematically shouldn't happen — bracketSize is always < 2x
+            // qualifierCount, so byes can never outnumber pairs. Fail loudly
+            // rather than silently leave a broken round 1.
+            throw new RouteError(500, 'Unexpected bracket seeding error.');
+          }
+        }
+
+        for (let round = 2; round <= totalRounds; round++) {
+          const matchesInRound = bracketSize / Math.pow(2, round);
+          for (let pos = 1; pos <= matchesInRound; pos++) {
+            await client.query(
+              `INSERT INTO playoff_matches (league_id, round_number, position, status)
+               VALUES ($1, $2, $3, 'pending')`,
+              [leagueId, round, pos]
+            );
+          }
+        }
+
+        // Round 2+ rows now exist, so byes can advance their lone player into
+        // them right away — the match they're paired against was never real,
+        // so there's nothing to wait on.
+        for (const byeMatch of byeMatches) {
+          await advanceWinner(client, byeMatch);
+        }
+
+        return { message: 'Bracket generated.' };
+      }
+
+      // Doubles: qualifierCount = number of TEAMS.
+      const membersResult = await client.query(
+        `SELECT u.id, u.username, u.gender, us.rating, lm.partner_id, lm.partner_status, lm.points
          FROM league_members lm
          JOIN users u ON u.id = lm.user_id
          JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
          WHERE lm.league_id = $3
-         ORDER BY lm.points DESC, us.rating DESC
-         LIMIT $4`,
-        [league.sport, league.format, leagueId, qualifierCount]
+         ORDER BY lm.points DESC, us.rating DESC`,
+        [league.sport, league.format, leagueId]
       );
-      const qualifiers = standingsResult.rows;
+      const members = membersResult.rows;
 
-      if (qualifiers.length < qualifierCount) {
-        return res.status(400).json({ error: `Need at least ${qualifierCount} players in the leaderboard to start this bracket size.` });
+      let teams;
+      try {
+        teams = resolveDoublesTeams(league, members);
+      } catch (buildErr) {
+        if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT' || buildErr.code === 'UNEVEN_GENDER_SPLIT') {
+          throw new RouteError(400, buildErr.message);
+        }
+        throw buildErr;
       }
 
-      // qualifierCount is the real number of entrants, which needn't be a
-      // power of two — the bracket itself is built at the next power of two
-      // up, and any seed beyond qualifierCount is a bye: whichever real
-      // entrant it's paired against advances immediately, no match played.
+      // Seed by combined tournament points earned this season, not raw
+      // rating — rating only breaks ties between equally-performing teams.
+      teams.sort((a, b) => {
+        const pointsDiff = b.totalPoints - a.totalPoints;
+        if (pointsDiff !== 0) return pointsDiff;
+        return b.avgRating - a.avgRating;
+      });
+
+      if (teams.length < qualifierCount) {
+        throw new RouteError(400, `Need at least ${qualifierCount} teams to start this bracket size. Currently have ${teams.length} team(s) from ${members.length} player(s).`);
+      }
+      const qualifierTeams = teams.slice(0, qualifierCount);
+
       const bracketSize = nextPowerOfTwo(qualifierCount);
       const seedOrder = generateSeedOrder(bracketSize);
       const totalRounds = Math.log2(bracketSize);
@@ -551,27 +646,26 @@ router.post('/:leagueId/generate', async (req, res) => {
         const seedA = seedOrder[i];
         const seedB = seedOrder[i + 1];
         const position = i / 2 + 1;
-        const playerA = seedA <= qualifierCount ? qualifiers[seedA - 1] : null;
-        const playerB = seedB <= qualifierCount ? qualifiers[seedB - 1] : null;
+        const teamA = seedA <= qualifierCount ? qualifierTeams[seedA - 1] : null;
+        const teamB = seedB <= qualifierCount ? qualifierTeams[seedB - 1] : null;
 
-        if (playerA && playerB) {
-          await pool.query(
-            `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, player2_id, status)
-             VALUES ($1, 1, $2, $3, $4, 'ready')`,
-            [leagueId, position, playerA.id, playerB.id]
+        if (teamA && teamB) {
+          await client.query(
+            `INSERT INTO playoff_matches
+              (league_id, round_number, position, player1_id, player1_partner_id, player2_id, player2_partner_id, status)
+             VALUES ($1, 1, $2, $3, $4, $5, $6, 'ready')`,
+            [leagueId, position, teamA.player1.id, teamA.player2.id, teamB.player1.id, teamB.player2.id]
           );
-        } else if (playerA || playerB) {
-          const byePlayer = playerA || playerB;
-          const byeMatch = await pool.query(
-            `INSERT INTO playoff_matches (league_id, round_number, position, player1_id, winner_id, status)
-             VALUES ($1, 1, $2, $3, $3, 'bye') RETURNING *`,
-            [leagueId, position, byePlayer.id]
+        } else if (teamA || teamB) {
+          const byeTeam = teamA || teamB;
+          const byeMatch = await client.query(
+            `INSERT INTO playoff_matches
+              (league_id, round_number, position, player1_id, player1_partner_id, winner_id, status)
+             VALUES ($1, 1, $2, $3, $4, $3, 'bye') RETURNING *`,
+            [leagueId, position, byeTeam.player1.id, byeTeam.player2.id]
           );
           byeMatches.push(byeMatch.rows[0]);
         } else {
-          // Mathematically shouldn't happen — bracketSize is always < 2x
-          // qualifierCount, so byes can never outnumber pairs. Fail loudly
-          // rather than silently leave a broken round 1.
           throw new RouteError(500, 'Unexpected bracket seeding error.');
         }
       }
@@ -579,7 +673,7 @@ router.post('/:leagueId/generate', async (req, res) => {
       for (let round = 2; round <= totalRounds; round++) {
         const matchesInRound = bracketSize / Math.pow(2, round);
         for (let pos = 1; pos <= matchesInRound; pos++) {
-          await pool.query(
+          await client.query(
             `INSERT INTO playoff_matches (league_id, round_number, position, status)
              VALUES ($1, $2, $3, 'pending')`,
             [leagueId, round, pos]
@@ -587,101 +681,18 @@ router.post('/:leagueId/generate', async (req, res) => {
         }
       }
 
-      // Round 2+ rows now exist, so byes can advance their lone player into
-      // them right away — the match they're paired against was never real,
-      // so there's nothing to wait on.
       for (const byeMatch of byeMatches) {
-        await advanceWinner(pool, byeMatch);
+        await advanceWinner(client, byeMatch);
       }
 
-      return res.status(201).json({ message: 'Bracket generated.' });
-    }
-
-    // Doubles: qualifierCount = number of TEAMS.
-    const membersResult = await pool.query(
-      `SELECT u.id, u.username, u.gender, us.rating, lm.partner_id, lm.partner_status, lm.points
-       FROM league_members lm
-       JOIN users u ON u.id = lm.user_id
-       JOIN user_sports us ON us.user_id = u.id AND us.sport = $1 AND us.format = $2
-       WHERE lm.league_id = $3
-       ORDER BY lm.points DESC, us.rating DESC`,
-      [league.sport, league.format, leagueId]
-    );
-    const members = membersResult.rows;
-
-    let teams;
-    try {
-      teams = resolveDoublesTeams(league, members);
-    } catch (buildErr) {
-      if (buildErr.code === 'UNPAIRED_MEMBERS' || buildErr.code === 'ODD_MEMBER_COUNT' || buildErr.code === 'UNEVEN_GENDER_SPLIT') {
-        return res.status(400).json({ error: buildErr.message });
-      }
-      throw buildErr;
-    }
-
-    // Seed by combined tournament points earned this season, not raw
-    // rating — rating only breaks ties between equally-performing teams.
-    teams.sort((a, b) => {
-      const pointsDiff = b.totalPoints - a.totalPoints;
-      if (pointsDiff !== 0) return pointsDiff;
-      return b.avgRating - a.avgRating;
+      return { message: 'Bracket generated.' };
     });
 
-    if (teams.length < qualifierCount) {
-      return res.status(400).json({ error: `Need at least ${qualifierCount} teams to start this bracket size. Currently have ${teams.length} team(s) from ${members.length} player(s).` });
-    }
-    const qualifierTeams = teams.slice(0, qualifierCount);
-
-    const bracketSize = nextPowerOfTwo(qualifierCount);
-    const seedOrder = generateSeedOrder(bracketSize);
-    const totalRounds = Math.log2(bracketSize);
-    const byeMatches = [];
-
-    for (let i = 0; i < seedOrder.length; i += 2) {
-      const seedA = seedOrder[i];
-      const seedB = seedOrder[i + 1];
-      const position = i / 2 + 1;
-      const teamA = seedA <= qualifierCount ? qualifierTeams[seedA - 1] : null;
-      const teamB = seedB <= qualifierCount ? qualifierTeams[seedB - 1] : null;
-
-      if (teamA && teamB) {
-        await pool.query(
-          `INSERT INTO playoff_matches
-            (league_id, round_number, position, player1_id, player1_partner_id, player2_id, player2_partner_id, status)
-           VALUES ($1, 1, $2, $3, $4, $5, $6, 'ready')`,
-          [leagueId, position, teamA.player1.id, teamA.player2.id, teamB.player1.id, teamB.player2.id]
-        );
-      } else if (teamA || teamB) {
-        const byeTeam = teamA || teamB;
-        const byeMatch = await pool.query(
-          `INSERT INTO playoff_matches
-            (league_id, round_number, position, player1_id, player1_partner_id, winner_id, status)
-           VALUES ($1, 1, $2, $3, $4, $3, 'bye') RETURNING *`,
-          [leagueId, position, byeTeam.player1.id, byeTeam.player2.id]
-        );
-        byeMatches.push(byeMatch.rows[0]);
-      } else {
-        throw new RouteError(500, 'Unexpected bracket seeding error.');
-      }
-    }
-
-    for (let round = 2; round <= totalRounds; round++) {
-      const matchesInRound = bracketSize / Math.pow(2, round);
-      for (let pos = 1; pos <= matchesInRound; pos++) {
-        await pool.query(
-          `INSERT INTO playoff_matches (league_id, round_number, position, status)
-           VALUES ($1, $2, $3, 'pending')`,
-          [leagueId, round, pos]
-        );
-      }
-    }
-
-    for (const byeMatch of byeMatches) {
-      await advanceWinner(pool, byeMatch);
-    }
-
-    res.status(201).json({ message: 'Bracket generated.' });
+    res.status(201).json(result);
   } catch (err) {
+    if (err instanceof RouteError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     console.error('Generate playoffs error:', err);
     res.status(500).json({ error: 'Something went wrong generating the bracket.' });
   }
