@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'screens/login_screen.dart';
 import 'screens/signup_screen.dart';
 import 'screens/select_sports_screen.dart';
 import 'screens/main_shell.dart';
 import 'screens/onboarding_screen.dart';
 import 'deep_links.dart';
+import 'push_notifications.dart';
 import 'config.dart';
 
 class AppColors {
@@ -76,6 +78,11 @@ final ValueNotifier<ThemeMode> themeModeNotifier = ValueNotifier(
 // own — it isn't called from a widget, just from screens' network code.
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
+// Lets push_notifications.dart refresh the unread-notification badge when a
+// push arrives while the app is foregrounded, without a BuildContext of
+// its own — same reasoning as navigatorKey above.
+final GlobalKey<MainShellState> mainShellKey = GlobalKey<MainShellState>();
+
 Future<void> _loadSavedThemeMode() async {
   final prefs = await SharedPreferences.getInstance();
   final isDark = prefs.getBool('darkMode') ?? false;
@@ -96,6 +103,18 @@ Future<bool> _hasSeenOnboarding() async {
 // never see.
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Firebase config (google-services.json) doesn't exist in a fresh
+  // checkout — see android/app/build.gradle.kts's hasGoogleServices gate —
+  // so this throws until it's added. Caught here rather than letting it
+  // crash startup; push notifications just stay inactive until then, same
+  // fail-soft posture as the backend's own FCM_SERVICE_ACCOUNT_JSON check.
+  var firebaseAvailable = false;
+  try {
+    await Firebase.initializeApp();
+    firebaseAvailable = true;
+  } catch (err) {
+    // Not configured — push notifications are optional, nothing to do.
+  }
   await SentryFlutter.init(
     (options) {
       options.dsn = sentryDsn;
@@ -111,6 +130,7 @@ void main() async {
       // and it needs navigatorKey.currentState to exist (i.e. runApp to
       // have run) before it can navigate anywhere anyway.
       DeepLinkService.init();
+      if (firebaseAvailable) PushNotificationService.init();
     },
   );
 }
@@ -136,7 +156,7 @@ class PlayMySetApp extends StatelessWidget {
             '/login': (context) => const LoginScreen(),
             '/signup': (context) => const SignupScreen(),
             '/select-sports': (context) => const SelectSportsScreen(),
-            '/home': (context) => const MainShell(),
+            '/home': (context) => MainShell(key: mainShellKey),
           },
           debugShowCheckedModeBanner: false,
         );

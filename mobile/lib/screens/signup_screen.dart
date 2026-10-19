@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:typed_data';
 import '../main.dart';
 import '../api_client.dart';
+import '../push_notifications.dart';
 import '../utils.dart';
 import '../constants/areas.dart';
 import '../constants/cities.dart';
@@ -106,6 +107,7 @@ class _SignupScreenState extends State<SignupScreen> {
 
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/select-sports');
+      PushNotificationService.registerDeviceToken();
     } catch (err) {
       if (mounted) {
         _showAlert(

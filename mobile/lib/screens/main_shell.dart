@@ -11,10 +11,14 @@ class MainShell extends StatefulWidget {
   const MainShell({super.key});
 
   @override
-  State<MainShell> createState() => _MainShellState();
+  State<MainShell> createState() => MainShellState();
 }
 
-class _MainShellState extends State<MainShell> {
+// Public (not the usual private _MainShellState) so push_notifications.dart
+// can reach _loadUnreadNotifCount via mainShellKey when a push arrives
+// while the app is foregrounded — the same GlobalKey pattern main.dart
+// already uses for navigatorKey.
+class MainShellState extends State<MainShell> {
   int _index = 0;
   int _pendingCount = 0;
   int _unreadNotifCount = 0;
@@ -56,6 +60,8 @@ class _MainShellState extends State<MainShell> {
       // fail silently
     }
   }
+
+  void refreshUnreadCount() => _loadUnreadNotifCount();
 
   Future<void> _loadUnreadNotifCount() async {
     try {

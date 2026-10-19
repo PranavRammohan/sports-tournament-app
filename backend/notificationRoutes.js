@@ -75,4 +75,22 @@ router.patch('/read-all', async (req, res) => {
   }
 });
 
+// ---------- REGISTER/REFRESH DEVICE PUSH TOKEN ----------
+router.post('/device-token', async (req, res) => {
+  const userId = req.userId;
+  const { token } = req.body;
+
+  if (!token || typeof token !== 'string') {
+    return res.status(400).json({ error: 'A device token is required.' });
+  }
+
+  try {
+    await pool.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [token, userId]);
+    res.status(200).json({ message: 'Device token registered.' });
+  } catch (err) {
+    console.error('Register device token error:', err);
+    res.status(500).json({ error: 'Something went wrong registering your device.' });
+  }
+});
+
 module.exports = router;

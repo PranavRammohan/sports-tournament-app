@@ -27,6 +27,16 @@ if (hasReleaseSigning) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
+// Firebase Cloud Messaging (push notifications), read from
+// android/app/google-services.json (gitignored — see android/.gitignore —
+// since it's project-specific Firebase config). That file doesn't exist in
+// a fresh checkout, so the plugin below is applied conditionally: the app
+// keeps building and running with push simply inactive until the file is
+// added, same fail-soft posture as the release-signing gate above. Get
+// yours from the Firebase console (Project Settings -> your Android app,
+// package name com.playmyset.app) and drop it at this exact path.
+val hasGoogleServices = file("google-services.json").exists()
+
 android {
     namespace = "com.playmyset.app"
     compileSdk = flutter.compileSdkVersion
@@ -85,4 +95,8 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+if (hasGoogleServices) {
+    apply(plugin = "com.google.gms.google-services")
 }

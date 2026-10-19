@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../api_client.dart';
 import '../deep_links.dart';
+import '../push_notifications.dart';
 import '../validators.dart';
 import 'forgot_password_screen.dart';
 
@@ -49,6 +50,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/home');
       DeepLinkService.consumePendingIfAny();
+      PushNotificationService.registerDeviceToken();
     } catch (err) {
       if (mounted) {
         _showAlert(
