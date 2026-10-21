@@ -84,6 +84,9 @@ router.post('/device-token', async (req, res) => {
     return res.status(400).json({ error: 'A device token is required.' });
   }
 
+  // #debug — temporary, see the matching comment on /device-token/status below.
+  console.log(`[debug] device-token register: userId=${userId} length=${token.length} start="${token.slice(0, 15)}" end="${token.slice(-15)}"`);
+
   try {
     await pool.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [token, userId]);
     res.status(200).json({ message: 'Device token registered.' });
