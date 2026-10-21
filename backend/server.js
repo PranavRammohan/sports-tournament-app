@@ -18,6 +18,17 @@ const authMiddleware = require('./authMiddleware');
 initErrorReporting();
 
 const app = express();
+
+// Render (like most PaaS hosts) puts the app behind one reverse-proxy hop,
+// which sets X-Forwarded-For. Without telling Express to trust exactly that
+// one hop, express-rate-limit can't safely resolve the real client IP from
+// that header and — in its current major version — throws a hard
+// validation error instead of just warning, crashing the request with a
+// generic 500 rather than applying the rate limit. `1` (not `true`) trusts
+// only the first hop, since trusting the whole forwarded chain would let a
+// client spoof its own X-Forwarded-For and dodge the rate limit entirely.
+app.set('trust proxy', 1);
+
 app.use(cors());
 
 // Static, public policy pages — served at the same hosted URL as the API
