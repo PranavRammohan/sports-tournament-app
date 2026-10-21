@@ -17,15 +17,20 @@
 // posture as email.js/createNotification, so a push failure or missing
 // config never blocks the action that triggered the notification.
 
-const admin = require('firebase-admin');
+// firebase-admin v12+ restructured its API into submodules — the old
+// namespaced form (admin.credential.cert, admin.messaging(app)) silently
+// doesn't exist on the root import anymore, so this uses the modular
+// imports instead (see firebase-admin/app and firebase-admin/messaging).
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getMessaging } = require('firebase-admin/messaging');
 
 let app = null;
 const serviceAccountJson = process.env.FCM_SERVICE_ACCOUNT_JSON;
 
 if (serviceAccountJson) {
   try {
-    app = admin.initializeApp({
-      credential: admin.credential.cert(JSON.parse(serviceAccountJson)),
+    app = initializeApp({
+      credential: cert(JSON.parse(serviceAccountJson)),
     });
   } catch (err) {
     console.error('Failed to initialize firebase-admin — push notifications disabled:', err);
@@ -38,7 +43,7 @@ async function sendPushNotification({ token, title, body, data = {} }) {
   if (!app || !token) return false;
 
   try {
-    await admin.messaging(app).send({
+    await getMessaging(app).send({
       token,
       notification: { title, body },
       data: Object.fromEntries(
