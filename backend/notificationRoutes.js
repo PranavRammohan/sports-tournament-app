@@ -93,4 +93,23 @@ router.post('/device-token', async (req, res) => {
   }
 });
 
+// ---------- TEMP DIAGNOSTIC: is a device token on file? (#debug) ----------
+// Only exists to debug the initial push-notification rollout without
+// needing direct DB/log access — reveals nothing beyond a boolean and the
+// token's last 6 characters. Remove once push is confirmed working.
+router.get('/device-token/status', async (req, res) => {
+  const userId = req.userId;
+  try {
+    const result = await pool.query('SELECT fcm_token FROM users WHERE id = $1', [userId]);
+    const token = result.rows[0]?.fcm_token;
+    res.status(200).json({
+      hasToken: !!token,
+      tokenSuffix: token ? token.slice(-6) : null,
+    });
+  } catch (err) {
+    console.error('Device token status error:', err);
+    res.status(500).json({ error: 'Something went wrong checking device token status.' });
+  }
+});
+
 module.exports = router;
