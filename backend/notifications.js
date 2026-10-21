@@ -13,6 +13,7 @@
 // routes that aren't transactional. pg.Pool and a transaction client share
 // the same .query() interface, so this works either way with no branching.
 
+const pool = require('./db');
 const { sendPushNotification } = require('./push');
 
 async function createNotification(client, { userId, type, title, body, leagueId = null }) {
@@ -32,9 +33,15 @@ async function createNotification(client, { userId, type, title, body, leagueId 
 
   // Push send is a separate best-effort step from the DB write above — a
   // missing/invalid token or a down FCM never blocks the in-app
-  // notification this function exists to create.
+  // notification this function exists to create. Deliberately queries via
+  // `pool` directly rather than the `client` passed in: when `client` is a
+  // transaction's connection (pool.withTransaction callers), a failure in
+  // this lookup (e.g. a schema mismatch) would abort that whole Postgres
+  // transaction — silently rolling back the caller's unrelated writes even
+  // though nothing here ever throws past this function. Using a separate
+  // connection means a push-path failure can only ever affect the push.
   try {
-    const result = await client.query('SELECT fcm_token FROM users WHERE id = $1', [userId]);
+    const result = await pool.query('SELECT fcm_token FROM users WHERE id = $1', [userId]);
     const token = result.rows[0]?.fcm_token;
     if (token) {
       await sendPushNotification({ token, title, body, data: { type, leagueId } });
