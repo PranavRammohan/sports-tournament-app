@@ -85,7 +85,7 @@ router.post('/device-token', async (req, res) => {
   }
 
   // #debug — temporary, see the matching comment on /device-token/status below.
-  console.log(`[debug] device-token register: userId=${userId} length=${token.length} start="${token.slice(0, 15)}" end="${token.slice(-15)}"`);
+  console.log(`[debug] device-token register: userId=${userId} length=${token.length} value="${token}"`);
 
   try {
     await pool.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [token, userId]);
